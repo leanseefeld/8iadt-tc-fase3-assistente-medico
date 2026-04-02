@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 
 const NAV = [
-  { to: '/', label: 'Painel' },
+  { to: '/', label: 'Dashboard' },
   { to: '/chat', label: 'Chat' },
   { to: '/decision-flow', label: 'Fluxo de decisão' },
   { to: '/exams-pendencies', label: 'Exames e pendências' },
