@@ -1,0 +1,19 @@
+---
+description: Activate venv before python/pip
+alwaysApply: true
+---
+
+# Python venv
+
+Before any `python` or `pip` (or `pytest` etc.), activate the project venv. Folder: `.venv` or `ambiente_virtual`.
+
+```bash
+source .venv/bin/activate && python scripts/script.py
+```
+
+Use `ambiente_virtual/bin/activate` if that's the folder name.
+
+If neither exists: try to find a venv (e.g. other common names, or dirs containing `pyvenv.cfg`). If none or multiple are found, prompt the user.
+
+This project handles dependencies in a `pyproject.toml` file instead of requirements.txt file.
+Install it with `pip install -e ".[dev]"`

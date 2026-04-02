@@ -1,0 +1,38 @@
+---
+description: English for code and URL paths; Brazilian Portuguese for UI, docs, and comments; mirror user language in replies
+alwaysApply: true
+---
+
+# Language conventions
+
+## Assistant replies
+
+Detect the language the user writes in for their instructions and **reply in that same language**, unless they explicitly ask for another language.
+
+## Project artifacts (independent of chat language)
+
+### English
+
+- Code identifiers: variables, functions, classes, modules, file and folder names.
+- Routes and full URLs: paths, query parameters, slugs, and API segments.
+
+### Brazilian Portuguese (pt-BR)
+
+- User-facing UI copy: labels, buttons, validation and error messages shown to users, etc.
+- Human-facing documentation: README, guides, ADRs, and project documentation in PR descriptions.
+- Code comments and docstrings.
+
+## Example
+
+```python
+# Calcula o total com desconto aplicado ao carrinho.
+def calculate_cart_total(items: list[CartItem], discount_percent: float) -> Decimal:
+    ...
+```
+
+```tsx
+// Exibe o resumo do pedido antes da confirmação.
+<button type="button">{t("order.confirm")}</button>
+```
+
+Identifiers and code symbols in English; translation values and UI strings in pt-BR. When editing or generating code, keep this split.

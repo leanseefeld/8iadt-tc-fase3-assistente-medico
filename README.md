@@ -1,0 +1,1 @@
+Assistente Médico combinando LLM fine-tuned + RAG em uma interface Streamlit para auxílio em consultas e acompanhamento de pacientes.

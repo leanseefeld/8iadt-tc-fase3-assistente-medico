@@ -1,0 +1,1 @@
+Detalhar aqui o processo de coleta e tratamento de dados, modelo fundacional escolhido, pipeline de fine tuning e como executar.

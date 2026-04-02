@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+/lib/
+/lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+ambiente_virtual/
+
+# Testing / typing / lint
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Node / frontend (when present)
+node_modules/
+.npm
+.pnpm-store/
+*.tsbuildinfo
+.next/
+out/
+.nuxt/
+.svelte-kit/
+.vite/
+
+# OS & editors
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+
+# ML / large artifacts (optional local data)
+wandb/
+mlruns/
+*.pt
+*.pth
+*.ckpt
+*.bin
