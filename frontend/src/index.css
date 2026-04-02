@@ -1,0 +1,17 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-surface: #f8fafc;
+  --color-surface-elevated: #ffffff;
+  --color-border-subtle: #e2e8f0;
+  --color-accent: #0d9488;
+  --color-accent-muted: #ccfbf1;
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-[var(--color-surface)] text-slate-800 antialiased;
+    font-family: var(--font-sans);
+  }
+}
