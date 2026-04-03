@@ -55,8 +55,8 @@ docker build --build-arg VITE_API_BASE_URL=https://api.exemplo.com -t assistente
 
 - `src/layouts/AppLayout.tsx` — shell (sidebar + barra + conteúdo)
 - `src/components/` — barra superior, busca, alertas, badge de internação
-- `src/api/mockApi.ts` — atraso simulado e dados fictícios
-- `src/lib/checkInStatus.ts` — regra de 12 horas para o indicador
+- `src/api/clinicalApi.ts` — fachada da API (memória por padrão; HTTP com `VITE_CLINICAL_API_HTTP=true`)
+- `src/api/clinicalApi.memory.ts` — implementação in-memory + atrasos simulados
 
 ## Scripts npm
 

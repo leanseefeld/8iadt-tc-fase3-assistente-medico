@@ -1,11 +1,18 @@
-export type AlertSeverity = 'info' | 'warning' | 'critical';
+/** DTO alinhado a API_ASSUMPTIONS.md */
 
-export interface ClinicalAlert {
+export type AlertSeverity = 'critical' | 'moderate' | 'info';
+
+export type AlertCategory = 'exam' | 'medication' | 'clinical' | 'system';
+
+export type AlertTeam = 'doctors' | 'nursing' | 'pharmacy' | 'all';
+
+export interface Alert {
   id: string;
   patientId: string;
-  title: string;
   severity: AlertSeverity;
-  /** ISO 8601 */
-  createdAt: string;
+  category: AlertCategory;
   message: string;
+  team: AlertTeam;
+  createdAt: string;
+  resolved: boolean;
 }
