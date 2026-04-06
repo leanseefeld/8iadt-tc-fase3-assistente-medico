@@ -71,3 +71,8 @@ mlruns/
 *.pth
 *.ckpt
 *.bin
+
+# LLM pipeline: tudo sob llm/data é gerado localmente (downloaders + estágios RAG).
+# raw/: PDFs PCDT, CSV/XLSX/ZIP Einstein; manifests/: *.jsonl, *.json;
+# processed/, chunks/: extração e fragmentação (pipeline-rag); sft/samples/: amostras SFT.
+llm/data/
