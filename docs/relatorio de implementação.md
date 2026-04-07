@@ -43,4 +43,11 @@ Embora os exames desta base tenham sido solicitados no contexto de diagnóstico 
 
 ## Pipeline de extração e preparo de documentos
 
-Foi criado um utilitário em `llm/` para baixar os PCDTs automaticamente
+Foi criado um utilitário em `/llm` para baixar os PCDTs automaticamente. Este utilitário se comporta como um módulo isolado para esta finalidade e após instalado (consulte [llm/README.md](../llm/README.md) para instruções), pode ser executado via linha de comando com:
+
+```sh
+download-pcdt # para os PDFs com os PCDTs da CONITEC/SUS
+download-clinical-exams # para baixar ou extrair os exames para COVID do Albert Einstein
+```
+
+O dataset COVID requer aceite de termos e por isso um navegador é aberto automaticamente para que o usuário preencha os dados e faça o aceite. Do contrário, o utilitário também pode ser executado com o argumento `--zip caminho/do/dataset.zip` para usar um arquivo previamente baixado.
