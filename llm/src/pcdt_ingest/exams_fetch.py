@@ -9,7 +9,14 @@ import zipfile
 from pathlib import Path
 
 from pcdt_ingest.manifest import now_iso, write_json, write_jsonl
-from pcdt_ingest.paths import data_root, ensure_data_dirs
+from pcdt_ingest.paths import (
+    DIR_MANIFESTS,
+    DIR_RAW_CLINICAL_EXAMS,
+    MANIFEST_CLINICAL_EXAMS_INDEX,
+    MANIFEST_CLINICAL_EXAMS_RUN,
+    data_root,
+    ensure_data_dirs,
+)
 
 DEFAULT_HANDLE_URL = (
     "https://repositoriodatasharingfapesp.uspdigital.usp.br/handle/item/98"
@@ -27,7 +34,7 @@ def extract_and_catalog(
 
     zip_data = zip_path.read_bytes()
     zip_sha = hashlib.sha256(zip_data).hexdigest()
-    zip_rel = Path("raw/clinical_exams") / zip_path.name
+    zip_rel = DIR_RAW_CLINICAL_EXAMS / zip_path.name
     rows.append(
         {
             "id": hashlib.sha256(str(zip_rel).encode()).hexdigest()[:16],
@@ -37,7 +44,7 @@ def extract_and_catalog(
             "fetched_at": ts,
             "bytes": len(zip_data),
             "sha256": zip_sha,
-            "relative_path": str(zip_rel).replace("\\", "/"),
+            "relative_path": zip_rel.as_posix(),
             "status": "ok",
         }
     )
@@ -50,7 +57,7 @@ def extract_and_catalog(
             extracted = target_dir / info.filename
             file_data = extracted.read_bytes()
             sha = hashlib.sha256(file_data).hexdigest()
-            rel = Path("raw/clinical_exams") / info.filename
+            rel = DIR_RAW_CLINICAL_EXAMS / info.filename
             rows.append(
                 {
                     "id": hashlib.sha256(str(rel).encode()).hexdigest()[:16],
@@ -60,7 +67,7 @@ def extract_and_catalog(
                     "fetched_at": ts,
                     "bytes": info.file_size,
                     "sha256": sha,
-                    "relative_path": str(rel).replace("\\", "/"),
+                    "relative_path": rel.as_posix(),
                     "status": "ok",
                 }
             )
@@ -69,10 +76,10 @@ def extract_and_catalog(
 
 
 def _write_manifests(rows: list[dict], handle_url: str) -> None:
-    manifests_dir = data_root() / "manifests"
-    write_jsonl(manifests_dir / "clinical_exams_index.jsonl", rows)
+    manifests_dir = data_root() / DIR_MANIFESTS
+    write_jsonl(manifests_dir / MANIFEST_CLINICAL_EXAMS_INDEX, rows)
     write_json(
-        manifests_dir / "clinical_exams_run.json",
+        manifests_dir / MANIFEST_CLINICAL_EXAMS_RUN,
         {
             "run_at": now_iso(),
             "handle_url": handle_url,
@@ -102,7 +109,7 @@ def download_einstein_via_browser(
         ) from None
 
     base = ensure_data_dirs()
-    raw_dir = base / "raw" / "clinical_exams"
+    raw_dir = base / DIR_RAW_CLINICAL_EXAMS
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=False)
@@ -150,7 +157,7 @@ def ingest_local_zip(
         raise FileNotFoundError(f"Arquivo não encontrado: {zip_path}")
 
     base = ensure_data_dirs()
-    raw_dir = base / "raw" / "clinical_exams"
+    raw_dir = base / DIR_RAW_CLINICAL_EXAMS
 
     rows = extract_and_catalog(zip_path, raw_dir, handle_url)
     _write_manifests(rows, handle_url)

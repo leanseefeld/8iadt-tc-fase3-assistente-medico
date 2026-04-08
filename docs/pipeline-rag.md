@@ -6,7 +6,7 @@ Este documento descreve uma linha de implementação sugerida após a ingestão 
 
 | Etapa | Abordagem sugerida |
 |--------|---------------------|
-| Crawl / PDF / manifestos PCDT | **LangGraph** + **httpx** (+ **Playwright** opcional para JS). Não usar **sklearn `Pipeline`** como orquestrador principal: ele é para `fit`/`transform` em matrizes de features. |
+| Listagem / PDF / manifestos PCDT | **httpx** + **BeautifulSoup**: uma página de listagem CONITEC, tabela PCDT, `download-pcdt`. Não usar **sklearn `Pipeline`** como orquestrador principal: ele é para `fit`/`transform` em matrizes de features. |
 | Download Einstein (CSV/XLSX dentro de ZIP) | **Playwright** (headed, para aceite de termos) ou download manual + flag `--zip`. Extração e catalogação via `zipfile` stdlib. |
 | Limpeza e junção Einstein (CSV/XLSX) | **pandas** (ou Polars): dicionário, `ID_PACIENTE`, separador `\|`. Ver [datasource_albert-einstein.md](../../datasource_albert-einstein.md). |
 | Modelo supervisionado clássico em cima de features tabulares | Aí sim **sklearn `Pipeline`** (imputação, encoding, escalonamento, classificador/regressor). |

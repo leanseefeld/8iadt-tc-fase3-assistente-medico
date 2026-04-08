@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Where code is generated or changed, review long methods (50+ lines) and make it more intuitive to read, either by adding inline comments to break sections, or using existing helper methods and standard APIs.

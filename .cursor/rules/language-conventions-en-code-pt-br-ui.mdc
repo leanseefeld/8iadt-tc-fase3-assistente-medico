@@ -1,5 +1,5 @@
 ---
-description: English for code and URL paths; Brazilian Portuguese for UI, docs, and comments; mirror user language in replies
+description: English for code and URL paths; Brazilian Portuguese for UI, docs, and comments; mirror user language in replies and plans
 alwaysApply: true
 ---
 
@@ -7,7 +7,7 @@ alwaysApply: true
 
 ## Assistant replies
 
-Detect the language the user writes in for their instructions and **reply in that same language**, unless they explicitly ask for another language.
+Detect the language the user writes in for their instructions and **reply in that same language**, unless they explicitly ask for another language. Plans should also respect the initial language.
 
 ## Project artifacts (independent of chat language)
 

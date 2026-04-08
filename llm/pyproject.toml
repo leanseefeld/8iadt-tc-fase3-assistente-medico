@@ -5,16 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "assistente-medico-llm"
 version = "0.1.0"
-description = "Ingestão CONITEC PCDT (LangGraph) e dados tabulares (Einstein) para RAG."
+description = "Ingestão CONITEC PCDT (listagem em tabela) e dados tabulares (Einstein) para RAG."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.12",
     "httpx>=0.27",
-    "langchain-core>=0.3",
-    "langgraph>=0.2",
     "lxml>=5.0",
-    "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]

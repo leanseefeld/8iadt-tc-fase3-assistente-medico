@@ -51,3 +51,5 @@ download-clinical-exams # para baixar ou extrair os exames para COVID do Albert 
 ```
 
 O dataset COVID requer aceite de termos e por isso um navegador é aberto automaticamente para que o usuário preencha os dados e faça o aceite. Do contrário, o utilitário também pode ser executado com o argumento `--zip caminho/do/dataset.zip` para usar um arquivo previamente baixado.
+
+O download automático dos datasets resulta em sua indexação via arquivos `jsonl`, contendo nome original, texto, URL, data do acesso e (para PCDTs) Portaria de origem e data de publicação.

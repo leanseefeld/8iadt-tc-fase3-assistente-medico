@@ -2,8 +2,8 @@
 
 Este diretório contém o pacote Python **assistente-medico-llm**, com:
 
-- **PCDT (CONITEC)**: grafo **LangGraph** que descobre links em `gov.br`, baixa PDFs para `llm/data/raw/pcdt/` e grava manifestos em `llm/data/manifests/`.
-- **Exames (Einstein / USP)**: script que baixa artefatos listados para [Dados COVID Hospital Israelita Albert Einstein](https://repositoriodatasharingfapesp.uspdigital.usp.br/handle/item/98) para `llm/data/raw/clinical_exams/` para exemplos de exames clínicos.
+- **PCDT (CONITEC)**: script `download-pcdt` que lê a **tabela** da página oficial de listagem PCDT, baixa cada documento ligado na segunda coluna e grava PDFs em `llm/data/raw/pcdt/` e manifestos em `llm/data/manifests/` (`pcdt_index.jsonl`, `pcdt_run.json`). Uma única URL HTTP (sem crawl nem navegador headless para este fluxo).
+- **Exames (Einstein / USP)**: script que obtém artefatos do [Dados COVID Hospital Israelita Albert Einstein](https://repositoriodatasharingfapesp.uspdigital.usp.br/handle/item/98) em `llm/data/raw/clinical_exams/` para exemplos de exames clínicos.
 
 ## Instalação
 
@@ -13,7 +13,7 @@ Na raiz do repositório (com venv ativado):
 cd llm && pip install -e ".[dev]"
 ```
 
-Opcional (HTML via browser):
+Opcional (somente para **download-clinical-exams** com navegador):
 
 ```bash
 pip install -e ".[playwright]"
@@ -23,16 +23,16 @@ playwright install chromium
 ## Uso
 
 ```bash
-download-pcdt --max-pages 40 --max-files 200
-download-pcdt --playwright   # se o site exigir JS (logs no stderr; `networkidle` pode demorar)
-download-pcdt --quiet          # menos mensagens
+download-pcdt --max-files 200
+download-pcdt --quiet
+```
 
-# Por padrão o crawl segue a **árvore da listagem PCDT** e os PDFs aceitos incluem qualquer link **com ``/conitec/``** no path (ex.: ``/midias/…``), marcadores PCDT no URL ou PDFs em ``saude.gov.br``. Use `--all-conitec-pdfs` para aceitar também outros PDFs `gov.br` encontrados no crawl amplo.
+Manifestos PCDT: `llm/data/manifests/pcdt_index.jsonl`, `llm/data/manifests/pcdt_run.json`.
+
+```bash
 download-clinical-exams              # abre navegador para aceite de termos (requer playwright)
 download-clinical-exams --zip FILE   # extrai ZIP já baixado manualmente
 ```
-
-Manifestos: `llm/data/manifests/pcdt_index.jsonl`, `download_run.json`, `clinical_exams_index.jsonl`.
 
 ### Einstein (USP)
 
