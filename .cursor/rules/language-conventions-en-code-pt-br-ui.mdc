@@ -15,6 +15,7 @@ Detect the language the user writes in for their instructions and **reply in tha
 
 - Code identifiers: variables, functions, classes, modules, file and folder names.
 - Routes and full URLs: paths, query parameters, slugs, and API segments.
+- Plans: plans generated for agent implementation should respect conversation language.
 
 ### Brazilian Portuguese (pt-BR)
 

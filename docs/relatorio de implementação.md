@@ -43,13 +43,26 @@ Embora os exames desta base tenham sido solicitados no contexto de diagnóstico 
 
 ## Pipeline de extração e preparo de documentos
 
-Foi criado um utilitário em `/llm` para baixar os PCDTs automaticamente. Este utilitário se comporta como um módulo isolado para esta finalidade e após instalado (consulte [llm/README.md](../llm/README.md) para instruções), pode ser executado via linha de comando com:
+Foi criado um utilitário em `/llm` para baixar e converter os PCDTs automaticamente. Este utilitário se comporta como um módulo isolado para as diferentes fases da pipeline.
+Seus componentes e modo de usar são descritos no em [llm/README.md](../llm/README.md).
+
+### Download dos datasets
 
 ```sh
 download-pcdt # para os PDFs com os PCDTs da CONITEC/SUS
 download-clinical-exams # para baixar ou extrair os exames para COVID do Albert Einstein
 ```
 
-O dataset COVID requer aceite de termos e por isso um navegador é aberto automaticamente para que o usuário preencha os dados e faça o aceite. Do contrário, o utilitário também pode ser executado com o argumento `--zip caminho/do/dataset.zip` para usar um arquivo previamente baixado.
+Estes utilitários carregam os datasets diretamente da internet, salvando para a pasta `llm/data/raw`.
 
-O download automático dos datasets resulta em sua indexação via arquivos `jsonl`, contendo nome original, texto, URL, data do acesso e (para PCDTs) Portaria de origem e data de publicação.
+Para os PCDTs, o HTML da página é carregado em Python e seletores CSS (ou operações equivalentes) são usados para selecionar os link do documento e seus títulos (primeiro `<table>` de conteúdo da página).
+
+O dataset COVID requer aceite de termos e por isso um navegador é aberto automaticamente para que o usuário preencha os dados e faça o aceite. Do contrário, o utilitário também pode ser executado com o argumento `--zip caminho/do/dataset.zip` para usar o arquivo zip do dataset previamente baixado.
+
+Para ambos os datasets, um arquivo `.jsonl` é criado em `llm/data/manifests` contendo URL de origem, SHA do arquivo baixado, nome salvo localmente, data de acesso e descrição da fonte (publicação e data).
+
+### Conversão para Markdown
+
+```sh
+generate-pcd-markdown
+```

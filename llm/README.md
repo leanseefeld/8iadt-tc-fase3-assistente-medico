@@ -10,13 +10,12 @@ Este diretório contém o pacote Python **assistente-medico-llm**, com:
 Na raiz do repositório (com venv ativado):
 
 ```bash
-cd llm && pip install -e ".[dev]"
+cd llm && pip install -e .
 ```
 
-Opcional (somente para **download-clinical-exams** com navegador):
+Para usar o download Einstein com navegador (Playwright), instale também o Chromium:
 
 ```bash
-pip install -e ".[playwright]"
 playwright install chromium
 ```
 
@@ -29,6 +28,26 @@ download-pcdt --quiet
 
 Manifestos PCDT: `llm/data/manifests/pcdt_index.jsonl`, `llm/data/manifests/pcdt_run.json`.
 
+### Extração Markdown (PCDT)
+
+Converte cada PDF em `llm/data/raw/pcdt/` para um **sidecar JSONL** por documento: `llm/data/processed/pcdt/<nome>.pages.jsonl` (uma linha JSON por página, campos `page` e `markdown`). Esse ficheiro é a fonte por página para um passo futuro de chunking (`page_range`).
+
+```bash
+extract-pcdt-markdown
+extract-pcdt-markdown --max-files 5
+extract-pcdt-markdown --only-manifest
+extract-pcdt-markdown --force
+extract-pcdt-markdown --workers 4   # vários PDFs em paralelo (uma thread por ficheiro)
+```
+
+O ficheiro **Markdown combinado** (`processed/pcdt/<nome>.md`, todas as páginas em sequência) **só** é gerado se usar a flag:
+
+```bash
+extract-pcdt-markdown --with-combined-md
+```
+
+Manifesto desta extração: `llm/data/manifests/pcdt_md_extract.jsonl` (uma linha por PDF processado, com caminhos relativos a `llm/data/`, `wrote_combined_md`, `status`, etc.).
+
 ```bash
 download-clinical-exams              # abre navegador para aceite de termos (requer playwright)
 download-clinical-exams --zip FILE   # extrai ZIP já baixado manualmente
@@ -40,14 +59,7 @@ O repositório exige **aceite de termos** (nome, e-mail e concordância) antes d
 
 #### Opção A — download automático (Playwright)
 
-Requer a dependência opcional `playwright`:
-
-```bash
-pip install -e ".[playwright]"
-playwright install chromium
-```
-
-Depois basta executar:
+Com `pip install -e .` e `playwright install chromium`:
 
 ```bash
 download-clinical-exams

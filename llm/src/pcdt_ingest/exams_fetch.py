@@ -105,7 +105,7 @@ def download_einstein_via_browser(
     except ImportError:
         raise RuntimeError(
             "Playwright não está instalado. Execute:\n"
-            '  pip install -e ".[playwright]" && playwright install chromium'
+            "  pip install -e . && playwright install chromium"
         ) from None
 
     base = ensure_data_dirs()
