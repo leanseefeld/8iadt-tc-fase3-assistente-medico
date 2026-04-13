@@ -94,3 +94,25 @@ Em primeiro momento, é possível perceber que uma estratégia melhor é necess�
 Há também problemas em formatação de tabelas, especialmente quando a tabela é continuada em outra página.
 
 Há conteúdo potencialmente redundante (como página inicial de cada documento, como declaração do órgão regulador - Ministério da Saúde) e referências que talvez não possamos usar adequadamente para fundamentar as respostas pois exigiria identificar suas chamadas no corpus e correlacionar com sua declaração na seção de referências do documento (geralmente ao fim).
+
+### Embeddings em Vectorstore/Chroma
+
+```
+sh
+build-vectorstore
+```
+
+Aqui os chunks da etapa anterior são convertidos em embeddings com `OllamaEmbeddings` usando `nomic-embed-text`.
+
+Durante os testes, alguns chunks excederam o limite de contexto deste modelo de embedding (8.192 tokens) e então o limite de chunk (`_CHUNK_TOKENS` em [chunks.py](../llm/src/pcdt_ingest/chunk.py)) foi reduzido de 800 para 400.
+A mensagem de erro do Ollama não indicava o limite suportado ou quantos tokens seriam necessários para comportar o chunk que ocasionou o erro, e inspecionando o chunk culpado, não ficou evidente uma diferença significativa na quantidade de palavras.
+Isso evidencia o desalinhamento entre a estimativa de tokens do módulo `chunks.py` em relação ao processo de tokenização com `nomic` usando linguagem complexa da medicina em Português Brasileiro.
+
+**Recomendação:** substituir o motor de embedding por um que lide melhor com o vocabulário utilizado nos PCDTs.
+
+Foi criado também um script para fazer a consulta dos documentos ingeridos: [example_vectorstore_rag_query.py](../llm/scripts/example_vectorstore_rag_query.py).
+
+É necessário ter ingerido pelo menos um documento com o comando `build-vectorstore` para fazer o teste.
+Neste script é feito uma busca simples, onde a query é convertida diretamente em embeddings e feito a busca no espaço vetorial. Isso resultou em chunks importantes não sendo retornados, mesmo com um k=10.
+
+Na implementação real, é indicado aplicar uma otimização de consulta, que identique os documentos relevantes de antemão e inclua cabeçalhos do metadata (hoje, apenas o conteúdo textual do chunk é consultado).
