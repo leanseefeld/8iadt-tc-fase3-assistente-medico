@@ -48,12 +48,26 @@ extract-pcdt-markdown --with-combined-md
 
 Manifesto desta extração: `llm/data/manifests/pcdt_md_extract.jsonl` (uma linha por PDF processado, com caminhos relativos a `llm/data/`, `wrote_combined_md`, `status`, etc.).
 
+### Fragmentação de chunks (PCDT)
+
+Após existir `processed/pcdt/<nome>.pages.jsonl`, gera `chunks/pcdt/<nome>.chunks.jsonl` (uma linha por chunk: `text` + `metadata` com `source_stem`, `source_pdf`, `section`, `header_1`/`header_2`, `page_start`/`page_end`, `chunk_index`, etc.). Usa LangChain (`MarkdownHeaderTextSplitter` + `RecursiveCharacterTextSplitter`).
+
+```bash
+chunk-pcdt
+chunk-pcdt --max-files 10
+chunk-pcdt --only-manifest
+chunk-pcdt --force
+chunk-pcdt --workers 4
+```
+
+Manifesto: `llm/data/manifests/pcdt_chunk_index.jsonl`.
+
+### Einstein (USP)
+
 ```bash
 download-clinical-exams              # abre navegador para aceite de termos (requer playwright)
 download-clinical-exams --zip FILE   # extrai ZIP já baixado manualmente
 ```
-
-### Einstein (USP)
 
 O repositório exige **aceite de termos** (nome, e-mail e concordância) antes de liberar o download. Há duas opções:
 

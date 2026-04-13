@@ -29,6 +29,7 @@ MANIFEST_PCDT_RUN = "pcdt_run.json"
 MANIFEST_CLINICAL_EXAMS_INDEX = "clinical_exams_index.jsonl"
 MANIFEST_CLINICAL_EXAMS_RUN = "clinical_exams_run.json"
 MANIFEST_PCDT_MD_EXTRACT = "pcdt_md_extract.jsonl"
+MANIFEST_PCDT_CHUNK = "pcdt_chunk_index.jsonl"
 
 
 def find_repo_root() -> Path:

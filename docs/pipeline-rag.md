@@ -16,7 +16,7 @@ Este documento descreve uma linha de implementação sugerida após a ingestão 
 
 1. **Extrair**: PDF → sidecar JSONL por página (`processed/pcdt/<nome>.pages.jsonl`, comando `extract-pcdt-markdown`); Markdown combinado opcional com `--with-combined-md`.
 2. **Limpar**: normalizar espaços, remover cabeçalhos/rodapés repetidos; idioma `pt-BR` na metadata.
-3. **Fragmentar**: janelas com sobreposição ou chunking hierárquico; metadata: `doc_id`, `page`, `title`, `source_url`.
+3. **Fragmentar**: `chunk-pcdt` gera `chunks/pcdt/<nome>.chunks.jsonl` a partir dos sidecars; metadata inclui seção (`section`, `header_*`), `page_start`/`page_end`, `chunk_index` (ver plano de chunking).
 4. **Embeddings**: lotes com o modelo de embedding escolhido.
 5. **Recuperação**: busca híbrida (BM25 + denso) costuma funcionar bem em documentos longos normativos.
 

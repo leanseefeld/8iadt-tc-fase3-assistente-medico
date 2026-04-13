@@ -64,5 +64,21 @@ Para ambos os datasets, um arquivo `.jsonl` é criado em `llm/data/manifests` co
 ### Conversão para Markdown
 
 ```sh
-generate-pcd-markdown
+extract-pcdt-markdown
 ```
+
+Através deste utilitário, usamos a lib `pymupdf4llm` para gerar conteúdo Markdown a partir dos PCDTs. Cada documento resulta em um `.pages.jsonl` em `llm/data/processed/pcdt` contendo a página original e seu conteúdo convertido para Markdown. Se executado com `--with-combined-md`, gera também um arquivo .md com todas as páginas concatenadas.
+
+Um novo manifesto é gerado (`llm/data/manifests/pcdt_md_extract.jsonl`) para rastrear erros e permitir processar apenas novos documentos.
+
+Nenhum tratamento adicional foi implementado para os documentos. O objetivo é entender como os documentos são gerados antes de implementar melhorias.
+
+### Geração de chunks
+
+```sh
+chunk-pcdt
+```
+
+A geração de tokens usa `MarkdownHeaderTextSplitter` e `RecursiveCharacterTextSplitter` (quando se excede a estimativa de 800 tokens) para geração de chunks a partir dos arquivos gerados na etapa anterior. Há tratamento para indexar a seção e cabeçalhos prévios onde o conteúdo extraído aparece.
+
+O resultado da execução são arquivos `.jsonl` para cada documento inicial, que são salvos em `llm/data/chunks`, e um novo `manifests/pcdt_chunk_index.jsonl` com um registro para cada documento PCDT.

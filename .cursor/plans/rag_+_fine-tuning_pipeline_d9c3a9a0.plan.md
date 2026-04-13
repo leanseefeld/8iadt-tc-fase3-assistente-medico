@@ -1,15 +1,15 @@
 ---
 name: RAG + Fine-Tuning Pipeline
-overview: Build a complete RAG pipeline + SFT fine-tuning workflow for the medical assistant, covering PDF extraction, chunking, local embeddings, vector store ingestion, LangChain RAG agent, and QLoRA fine-tuning of Gemma 4 4B from the 132 PCDT PDFs already in `llm/data/raw/pcdt/`.
+overview: "Master roadmap: PCDT extraction is implemented (JSONL sidecars + CLI). Remaining work — chunking from sidecars, optional [rag] deps for LangChain/Chroma/embeddings, RAG chain, SFT + QLoRA fine-tuning — is described below."
 todos:
   - id: deps
-    content: Add [rag] and [finetune] optional dependency groups to llm/pyproject.toml
+    content: "Add LangChain/Chroma/finetune deps when implementing embed+RAG+SFT (optional [rag]/[finetune] groups or extend main deps — see Part Dependencies)"
     status: pending
   - id: extract
-    content: "Implement llm/src/pcdt_ingest/extract.py: PDF → clean markdown with pymupdf4llm"
-    status: pending
+    content: "DONE — extract.py + extract-pcdt-markdown (sidecar *.pages.jsonl, optional combined .md)"
+    status: completed
   - id: chunk
-    content: "Implement llm/src/pcdt_ingest/chunk.py: two-pass MarkdownHeader + RecursiveCharacter splitter"
+    content: "Implement pcdt_ingest/chunk.py — see .cursor/plans/pcdt_chunking_implementation.plan.md"
     status: pending
   - id: embed
     content: "Implement llm/src/pcdt_ingest/embed.py: bulk Chroma ingestion with nomic-embed-text via OllamaEmbeddings"
@@ -18,7 +18,7 @@ todos:
     content: "Implement llm/src/pcdt_ingest/rag.py: LangChain LCEL RAG chain with ChatOllama + Chroma retriever"
     status: pending
   - id: sft
-    content: "Implement llm/src/pcdt_ingest/sft.py: synthetic Q&A pair generation from PDF chunks for SFT dataset"
+    content: "Implement llm/src/pcdt_ingest/sft.py: synthetic Q&A pair generation from chunks for SFT dataset"
     status: pending
   - id: finetune
     content: Document and implement QLoRA fine-tuning script using Unsloth on HuggingFace Gemma weights → GGUF export → Ollama import
@@ -28,42 +28,44 @@ isProject: false
 
 # RAG + Fine-Tuning Strategy for Assistente Médico
 
-## Context
+## Context (updated)
 
-- 132 PCDT PDFs are already at `llm/data/raw/pcdt/`
-- `gemma4:e4b-it-q4_K_M` is running locally in Ollama
-- The `llm/` package has directory stubs (`chunks/pcdt`, `processed/pcdt`, `sft/samples`) but no code filling them yet
-- `llm/pyproject.toml` has no RAG or ML training dependencies yet
+- 132 PCDT PDFs live at `llm/data/raw/pcdt/` (via `download-pcdt`).
+- **`gemma4:e4b-it-q4_K_M`** runs locally in Ollama.
+- **Extraction is implemented** (see § Part 1 below): per-PDF **sidecar** `processed/pcdt/<stem>.pages.jsonl` (one JSON line per page: `page`, `markdown`), optional combined `*.md` via `--with-combined-md`, CLI **`extract-pcdt-markdown`**, run manifest `manifests/pcdt_md_extract.jsonl`, parallelism via **`--workers`**, incremental/skip logic.
+- **`llm/pyproject.toml`** uses a **single** `[project.dependencies]` list (no optional groups today): core ingest stack includes `pymupdf4llm`, Playwright, pandas, pytest, **ruff** (dev linter folded into main install per “flatten deps” decision). **`pip install -e .`** from `llm/` installs everything listed there.
+- **Still open**: chunking → embeddings → Chroma → RAG → SFT → QLoRA as in the sections below.
 
 ---
 
-## Part 1 — PDF Extraction & Chunking
+## Part 1 — PDF Extraction (done) & Chunking (next)
 
-### Library choice: `pymupdf4llm`
+### Extraction — implemented
 
-PyMuPDF renders PDFs to markdown (preserving headings, tables, lists), which is far better for PCDTs than raw text extraction from `pypdf` or `pdfplumber`. PCDTs have structured sections (Diagnóstico, Tratamento, Posologia) that map well to markdown headers.
+- **Library**: `pymupdf4llm` with **`page_chunks=True`** → list of per-page dicts (`text` + `metadata.page_number`).
+- **Artifacts** (under `llm/data/processed/pcdt/`):
+  - **Always**: `{stem}.pages.jsonl` — canonical **page-level** markdown for downstream **`page_range`** metadata.
+  - **Optional**: `{stem}.md` — full concatenation for human review, only if CLI **`--with-combined-md`**.
+- **CLI**: `extract-pcdt-markdown` — flags include `--with-combined-md`, `--force`, `--max-files`, `--only-manifest`, `--workers`, `--quiet` (see [`llm/README.md`](../../llm/README.md)).
+- **Cleaning**: `clean_markdown()` per page (conservative footer/page-noise stripping).
 
-```python
-import pymupdf4llm
-md_text = pymupdf4llm.to_markdown("path/to/pcdt.pdf")
-```
+### Chunking strategy (unchanged intent, input clarified)
 
-### Chunking strategy: two-pass splitter
+PCDTs are long (~30–80 pages). Use a **two-pass** approach in `llm/src/pcdt_ingest/chunk.py`:
 
-PCDTs are long (~30-80 pages) with dense clinical sections. Use a two-pass approach in `llm/src/pcdt_ingest/chunk.py`:
+1. **First pass** — `MarkdownHeaderTextSplitter` on the **stitched document** built from `*.pages.jsonl` (preserve page order), splitting on `##` / `###` → metadata such as `section`, `source`.
+2. **Second pass** — `RecursiveCharacterTextSplitter` (e.g. chunk_size≈800 tokens, overlap≈150) within each section so chunks fit the retriever/LLM.
 
-1. **First pass** — `MarkdownHeaderTextSplitter` splits on `##` and `###` headers → preserves clinical section context in each chunk's metadata (e.g. `{"section": "Tratamento", "source": "pcdt-artrite.pdf"}`)
-2. **Second pass** — `RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)` on each section to limit token length
+**Page provenance**: while splitting, map character spans back to **page numbers** using the known per-page boundaries from the sidecar so each chunk gets **`page_range`** (or `page_start` / `page_end`), not only section title.
 
-800 tokens is a practical sweet spot: fits within Gemma 4's context, contains enough clinical detail, and avoids retrieval noise from over-large chunks.
+**Detailed implementation plan**: [`.cursor/plans/pcdt_chunking_implementation.plan.md`](pcdt_chunking_implementation.plan.md).
 
-### New module: `llm/src/pcdt_ingest/extract.py`
+### Modules
 
-Responsible for: `pdf → clean markdown` (strip footers/headers, page numbers via regex).
-
-### New module: `llm/src/pcdt_ingest/chunk.py`
-
-Responsible for: `markdown → List[Document]` with metadata (`source`, `section`, `page_range`).
+| Module | Status | Role |
+|--------|--------|------|
+| [`llm/src/pcdt_ingest/extract.py`](../../llm/src/pcdt_ingest/extract.py) | **Done** | PDF → `*.pages.jsonl` (+ optional `*.md`) |
+| `llm/src/pcdt_ingest/chunk.py` | **Todo** | Sidecar JSONL → `List[Document]` / exported chunks + metadata |
 
 ---
 
@@ -97,7 +99,7 @@ Pull the model once: `ollama pull nomic-embed-text`
 | LangChain integration | `langchain-chroma` (official) | `langchain-qdrant` (official) | `langchain-community` |
 | Docs quality (2026) | Excellent | Excellent | Minimal |
 
-**Choose Chroma** for this project: simpler, in-process (no background process), and `langchain-chroma` is a first-party integration. With 132 PDFs (~5k-15k chunks), Chroma handles it trivially.
+**Choose Chroma** for this project: simpler, in-process (no background process), and `langchain-chroma` is a first-party integration. With 132 PDFs (~5k–15k chunks), Chroma handles it trivially.
 
 **Switch to Qdrant** if you want production-grade filtering (e.g. filter by CID-10, disease, year) or plan to scale to larger corpora.
 
@@ -197,7 +199,8 @@ Requires accepting Google's license at [huggingface.co/google/gemma-3-4b-it](htt
 **2. Build SFT dataset from PDFs**
 
 New module `llm/src/pcdt_ingest/sft.py`:
-- Extract chunk text → generate Q&A pairs using the Ollama model itself as a "teacher"
+
+- Consume **chunk** text (from Part 1 chunking) → generate Q&A pairs using the Ollama model as a "teacher"
 - Prompt: *"Dado este trecho de protocolo clínico, gere 3 pares pergunta/resposta médica em português"*
 - Output format: JSONL with `{"prompt": "...", "completion": "..."}` at `llm/data/sft/samples/`
 - This is the "self-play" / synthetic data approach — no manual labeling needed
@@ -245,14 +248,15 @@ ollama create gemma3-pcdt:latest -f Modelfile
 
 ---
 
-## Dependency additions to `llm/pyproject.toml`
+## Dependency strategy for RAG / fine-tune stages
 
-Two new optional groups:
+**Today**: `llm/pyproject.toml` lists **runtime + ingest + dev tools** in a single `[project.dependencies]` (including `pymupdf4llm`, Playwright, pandas, pytest, ruff).
+
+**When implementing Parts 2–5**, add something like:
 
 ```toml
 [project.optional-dependencies]
 rag = [
-    "pymupdf4llm>=0.0.17",
     "langchain>=0.3",
     "langchain-core>=0.3",
     "langchain-ollama>=0.2",
@@ -270,7 +274,7 @@ finetune = [
 ]
 ```
 
-Install: `pip install -e ".[rag]"` or `pip install -e ".[finetune]"`
+Install examples: `pip install -e ".[rag]"` and/or `pip install -e ".[finetune]"` **or** merge these into main `dependencies` if the project prefers a single flat install for CI (same tradeoff as the current base stack).
 
 ---
 
@@ -278,16 +282,20 @@ Install: `pip install -e ".[rag]"` or `pip install -e ".[finetune]"`
 
 ```
 llm/src/pcdt_ingest/
-├── extract.py      # PDF → markdown (new)
-├── chunk.py        # markdown → List[Document] (new)
-├── embed.py        # bulk Chroma ingestion (new)
-├── rag.py          # LangChain RAG chain (new)
-└── sft.py          # synthetic Q&A generation (new)
+├── extract.py      # PDF → *.pages.jsonl (+ optional *.md) [DONE]
+├── cli_extract.py  # extract-pcdt-markdown [DONE]
+├── chunk.py        # *.pages.jsonl → chunks + metadata [TODO]
+├── embed.py        # bulk Chroma ingestion [TODO]
+├── rag.py          # LangChain RAG chain [TODO]
+└── sft.py          # synthetic Q&A generation [TODO]
 ```
 
-New console scripts in `pyproject.toml`:
-- `build-vectorstore` → `pcdt_ingest.embed:main`
-- `generate-sft-data` → `pcdt_ingest.sft:main`
+**Console scripts** (existing / planned):
+
+- `extract-pcdt-markdown` → `pcdt_ingest.cli_extract:main` (**done**)
+- `build-vectorstore` → `pcdt_ingest.embed:main` (planned)
+- `generate-sft-data` → `pcdt_ingest.sft:main` (planned)
+- Optional: `chunk-pcdt` → `pcdt_ingest.chunk:main` (see chunking plan)
 
 ---
 
@@ -295,5 +303,6 @@ New console scripts in `pyproject.toml`:
 
 - **Re-embedding on restart**: Chroma persists to disk, but `OllamaEmbeddings` has no batching by default. For 10k+ chunks, use `add_documents` in batches of 100 to avoid OOM in Ollama's embedding server.
 - **GGUF fine-tune misconception**: Many tutorials claim you can fine-tune GGUF models via Ollama — you cannot. Always use HuggingFace weights for training.
-- **SFT dataset size**: 132 PDFs may yield ~1k-3k Q&A pairs after dedup. That's enough for style/format adaptation but not for deep knowledge acquisition — which is exactly why RAG is the right complementary approach.
-- **nomic-embed-text vs bge-m3**: `nomic-embed-text` was primarily trained on English. For PCDTs in Portuguese, `BAAI/bge-m3` may give meaningfully better recall. Worth running a quick retrieval evaluation on 20-30 hand-written queries before committing to the embedding model.
+- **SFT dataset size**: 132 PDFs may yield ~1k–3k Q&A pairs after dedup. That's enough for style/format adaptation but not for deep knowledge acquisition — which is exactly why RAG is the right complementary approach.
+- **nomic-embed-text vs bge-m3**: `nomic-embed-text` was primarily trained on English. For PCDTs in Portuguese, `BAAI/bge-m3` may give meaningfully better recall. Worth running a quick retrieval evaluation on 20–30 hand-written queries before committing to the embedding model.
+- **Parallel extraction**: `extract-pcdt-markdown --workers N` uses threads; very high `N` can memory-pressure PyMuPDF — tune per machine.
