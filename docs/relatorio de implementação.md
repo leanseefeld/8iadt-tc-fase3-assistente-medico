@@ -82,3 +82,15 @@ chunk-pcdt
 A geração de tokens usa `MarkdownHeaderTextSplitter` e `RecursiveCharacterTextSplitter` (quando se excede a estimativa de 800 tokens) para geração de chunks a partir dos arquivos gerados na etapa anterior. Há tratamento para indexar a seção e cabeçalhos prévios onde o conteúdo extraído aparece.
 
 O resultado da execução são arquivos `.jsonl` para cada documento inicial, que são salvos em `llm/data/chunks`, e um novo `manifests/pcdt_chunk_index.jsonl` com um registro para cada documento PCDT.
+
+Um visualizador de chunks foi implementado para facilitar a exploração dos resultados deste processo e realizar ajustes no algoritmo.
+
+```sh
+view-pcdt-chunks
+```
+![Preview do visualizador de chunks](./assets/Screenshot%202026-04-12%20at%2022.07.53.png)
+
+Em primeiro momento, é possível perceber que uma estratégia melhor é necessária para capturar corretamente os cabeçalhos e seções relevantes.
+Há também problemas em formatação de tabelas, especialmente quando a tabela é continuada em outra página.
+
+Há conteúdo potencialmente redundante (como página inicial de cada documento, como declaração do órgão regulador - Ministério da Saúde) e referências que talvez não possamos usar adequadamente para fundamentar as respostas pois exigiria identificar suas chamadas no corpus e correlacionar com sua declaração na seção de referências do documento (geralmente ao fim).

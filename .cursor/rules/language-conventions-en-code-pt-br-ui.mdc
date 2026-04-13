@@ -3,6 +3,8 @@ description: English for code and URL paths; Brazilian Portuguese for UI, docs, 
 alwaysApply: true
 ---
 
+Ensure you reason about this rule before generating any responses and documents so that this rule is always respected and the correct language for each output is determined.
+
 # Language conventions
 
 ## Assistant replies
@@ -37,3 +39,5 @@ def calculate_cart_total(items: list[CartItem], discount_percent: float) -> Deci
 ```
 
 Identifiers and code symbols in English; translation values and UI strings in pt-BR. When editing or generating code, keep this split.
+
+Avoid European Portuguese ("secção", "ficheiro", "autocarro", "eléctrico").

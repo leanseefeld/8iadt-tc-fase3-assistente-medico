@@ -27,6 +27,7 @@ download-pcdt = "pcdt_ingest.cli_pcdt:main"
 download-clinical-exams = "pcdt_ingest.cli_exams:main"
 extract-pcdt-markdown = "pcdt_ingest.cli_extract:main"
 chunk-pcdt = "pcdt_ingest.cli_chunk:main"
+view-pcdt-chunks = "pcdt_ingest.cli_view_pcdt_chunks:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

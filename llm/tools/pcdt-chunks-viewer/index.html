@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Visualizador de chunks PCDT</title>
+    <!--
+      Servidor HTTP necessário (fetch não funciona com file://).
+      A raiz HTTP deve ser a pasta llm/ (manifestos e dados em llm/data/).
+      Manual: cd llm && python -m http.server 8765
+      Depois: http://127.0.0.1:8765/tools/pcdt-chunks-viewer/index.html
+      Preferível: view-pcdt-chunks após pip install -e . em llm/
+    -->
+    <style>
+      :root {
+        --bg: #0f1419;
+        --surface: #1a2332;
+        --border: #2d3a4d;
+        --text: #e6edf3;
+        --muted: #8b9cb3;
+        --accent: #58a6ff;
+        --error: #f85149;
+        --ok: #3fb950;
+        --skip: #d29922;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        line-height: 1.38;
+        min-height: 100vh;
+      }
+      header.page-header {
+        padding: 0.45rem 0.75rem;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+      header.page-header h1 {
+        margin: 0 0 0.15rem;
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+      header.page-header p {
+        margin: 0;
+        font-size: 0.78rem;
+        color: var(--muted);
+        line-height: 1.3;
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(260px, 320px) 1fr;
+        gap: 0;
+        min-height: calc(100vh - 3.1rem);
+      }
+      @media (max-width: 900px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+      .panel {
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 3.1rem);
+      }
+      @media (max-width: 900px) {
+        .panel {
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+          max-height: none;
+        }
+      }
+      .stats {
+        padding: 0.4rem 0.65rem;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        font-size: 0.72rem;
+      }
+      .stats dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.08rem 0.55rem;
+      }
+      .stats dt {
+        color: var(--muted);
+      }
+      .stats dd {
+        margin: 0;
+      }
+      .search-wrap {
+        padding: 0.4rem 0.65rem;
+      }
+      .search-wrap label {
+        display: block;
+        font-size: 0.68rem;
+        color: var(--muted);
+        margin-bottom: 0.2rem;
+      }
+      .search-wrap input[type="search"] {
+        width: 100%;
+        padding: 0.32rem 0.45rem;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 0.78rem;
+      }
+      .doc-list {
+        flex: 1;
+        overflow: auto;
+        padding: 0 0.4rem 0.45rem;
+      }
+      .doc-list ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .doc-list li button {
+        width: 100%;
+        text-align: left;
+        padding: 0.32rem 0.45rem;
+        margin-bottom: 2px;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+        font-size: 0.75rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 0.35rem;
+      }
+      .doc-list li button:hover {
+        background: var(--surface);
+      }
+      .doc-list li button.is-active {
+        border-color: var(--accent);
+        background: rgba(88, 166, 255, 0.08);
+      }
+      .stem {
+        word-break: break-all;
+        flex: 1;
+      }
+      .badge {
+        flex-shrink: 0;
+        font-size: 0.58rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        padding: 0.08rem 0.28rem;
+        border-radius: 3px;
+      }
+      .badge-ok {
+        background: rgba(63, 185, 80, 0.2);
+        color: var(--ok);
+      }
+      .badge-skipped {
+        background: rgba(210, 153, 34, 0.2);
+        color: var(--skip);
+      }
+      .badge-error {
+        background: rgba(248, 81, 73, 0.2);
+        color: var(--error);
+      }
+      .detail {
+        overflow: auto;
+        padding: 0.45rem 0.65rem 0.85rem;
+      }
+      .doc-head {
+        margin-bottom: 0.45rem;
+        padding-bottom: 0.45rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .doc-head h2 {
+        margin: 0 0 0.25rem;
+        font-size: 0.88rem;
+        word-break: break-all;
+        line-height: 1.25;
+      }
+      .meta-grid {
+        display: grid;
+        gap: 0.18rem;
+        font-size: 0.78rem;
+      }
+      .meta-grid div span:first-child {
+        color: var(--muted);
+        margin-right: 0.35rem;
+      }
+      .error-banner {
+        background: rgba(248, 81, 73, 0.12);
+        border: 1px solid var(--error);
+        color: #ffb4b0;
+        padding: 0.45rem 0.55rem;
+        border-radius: 6px;
+        margin-top: 0.4rem;
+        font-size: 0.78rem;
+        line-height: 1.35;
+      }
+      .chunk-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.3rem 0.45rem;
+        margin-bottom: 0.4rem;
+        padding: 0.38rem 0.45rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      .chunk-toolbar button {
+        padding: 0.28rem 0.5rem;
+        border-radius: 5px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 0.72rem;
+      }
+      .chunk-toolbar button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .chunk-toolbar label {
+        font-size: 0.72rem;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
+      .chunk-toolbar input[type="number"] {
+        width: 4.25rem;
+        padding: 0.22rem 0.35rem;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font-size: 0.75rem;
+      }
+      .position-label {
+        font-size: 0.72rem;
+        color: var(--muted);
+        margin-left: auto;
+      }
+      /* Blocos do chunk: menos espaço vertical antes do texto principal. */
+      #chunkView section {
+        margin-bottom: 0.38rem;
+      }
+      #chunkView section h3 {
+        margin: 0 0 0.18rem;
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        font-weight: 600;
+        line-height: 1.2;
+      }
+      .chunk-wordcount {
+        margin: 0 0 0.18rem;
+        font-size: 0.68rem;
+        color: var(--muted);
+      }
+      .field-block {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 0.38rem 0.5rem;
+        font-size: 0.78rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.36;
+      }
+      .field-block--tight {
+        padding: 0.3rem 0.45rem;
+      }
+      .chunk-text {
+        max-height: min(52vh, 30rem);
+        overflow: auto;
+      }
+      dl.other-fields {
+        margin: 0;
+        display: grid;
+        grid-template-columns: minmax(7rem, auto) 1fr;
+        gap: 0.18rem 0.65rem;
+        font-size: 0.72rem;
+      }
+      dl.other-fields dt {
+        color: var(--muted);
+        margin: 0;
+      }
+      dl.other-fields dd {
+        margin: 0;
+        word-break: break-word;
+      }
+      .empty-state {
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+      a.pdf-link {
+        color: var(--accent);
+      }
+      .load-error {
+        color: var(--error);
+        font-size: 0.78rem;
+      }
+      .text-mode-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+        flex-wrap: wrap;
+        margin-left: 0.15rem;
+        padding-left: 0.45rem;
+        border-left: 1px solid var(--border);
+      }
+      .text-mode-label {
+        font-size: 0.68rem;
+        color: var(--muted);
+        margin-right: 0.1rem;
+      }
+      .text-mode-btn {
+        padding: 0.22rem 0.45rem;
+        font-size: 0.68rem;
+      }
+      .text-mode-btn.is-active {
+        border-color: var(--accent);
+        background: rgba(88, 166, 255, 0.12);
+        color: var(--text);
+      }
+      /* Conteúdo Markdown renderizado (sanitizado). */
+      .markdown-preview {
+        white-space: normal;
+      }
+      .markdown-preview > :first-child {
+        margin-top: 0;
+      }
+      .markdown-preview > :last-child {
+        margin-bottom: 0;
+      }
+      .markdown-preview p {
+        margin: 0.35em 0;
+      }
+      .markdown-preview h1,
+      .markdown-preview h2,
+      .markdown-preview h3,
+      .markdown-preview h4 {
+        margin: 0.5em 0 0.25em;
+        line-height: 1.25;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .markdown-preview h1 {
+        font-size: 1rem;
+      }
+      .markdown-preview h2 {
+        font-size: 0.95rem;
+      }
+      .markdown-preview h3,
+      .markdown-preview h4 {
+        font-size: 0.85rem;
+      }
+      .markdown-preview ul,
+      .markdown-preview ol {
+        margin: 0.35em 0;
+        padding-left: 1.25rem;
+      }
+      .markdown-preview li {
+        margin: 0.15em 0;
+      }
+      .markdown-preview code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.88em;
+        background: var(--bg);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+      }
+      .markdown-preview pre {
+        margin: 0.4em 0;
+        padding: 0.45rem 0.55rem;
+        overflow: auto;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        font-size: 0.76rem;
+        line-height: 1.4;
+      }
+      .markdown-preview pre code {
+        border: none;
+        padding: 0;
+        background: transparent;
+        font-size: inherit;
+      }
+      .markdown-preview a {
+        color: var(--accent);
+      }
+      .markdown-preview blockquote {
+        margin: 0.35em 0;
+        padding-left: 0.65rem;
+        border-left: 3px solid var(--border);
+        color: var(--muted);
+      }
+      .markdown-preview table {
+        border-collapse: collapse;
+        font-size: 0.76rem;
+        margin: 0.4em 0;
+      }
+      .markdown-preview th,
+      .markdown-preview td {
+        border: 1px solid var(--border);
+        padding: 0.2rem 0.4rem;
+      }
+      .chunk-text--raw {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.74rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>Visualizador de chunks PCDT</h1>
+      <p>Inspecione manifestos e fragmentos gerados a partir dos PCDT.</p>
+    </header>
+    <main>
+      <aside class="panel" aria-label="Documentos">
+        <div class="stats" id="statsPanel" aria-live="polite"></div>
+        <div class="search-wrap">
+          <label for="docFilter">Filtrar por nome (stem)</label>
+          <input
+            type="search"
+            id="docFilter"
+            autocomplete="off"
+            placeholder="Ex.: portaria, hiv…"
+          />
+        </div>
+        <nav class="doc-list" aria-label="Lista de documentos">
+          <ul id="docList"></ul>
+        </nav>
+      </aside>
+      <section class="detail" aria-label="Detalhe do documento">
+        <div id="detailEmpty" class="empty-state">
+          Selecione um documento na lista à esquerda.
+        </div>
+        <div id="detailContent" hidden></div>
+      </section>
+    </main>
+    <script
+      src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      (function () {
+        "use strict";
+
+        /** Prefixo para tudo sob llm/data/ (este HTML está em llm/tools/pcdt-chunks-viewer/). */
+        const DATA_URL_PREFIX = "../../data/";
+        const MANIFEST_URL = DATA_URL_PREFIX + "manifests/pcdt_chunk_index.jsonl";
+        const TEXT_VIEW_MODE_KEY = "pcdtChunkViewerTextMode";
+
+        /** @type {Array<Record<string, unknown>>} */
+        let manifestRows = [];
+        /** @type {Map<string, Array<{ text: string, metadata: Record<string, unknown> }>>} */
+        const chunksCache = new Map();
+
+        /** Instância lazy de markdown-it (evita recriar a cada chunk). */
+        let markdownItInstance = null;
+
+        function getTextViewMode() {
+          try {
+            const v = sessionStorage.getItem(TEXT_VIEW_MODE_KEY);
+            return v === "preview" ? "preview" : "raw";
+          } catch {
+            return "raw";
+          }
+        }
+
+        function setTextViewMode(mode) {
+          const m = mode === "preview" ? "preview" : "raw";
+          try {
+            sessionStorage.setItem(TEXT_VIEW_MODE_KEY, m);
+          } catch {
+            /* ignora quota / modo privado */
+          }
+        }
+
+        /** Instância única de markdown-it (CDN). */
+        function getMarkdownIt() {
+          if (markdownItInstance) return markdownItInstance;
+          if (typeof window.markdownit !== "function") return null;
+          markdownItInstance = window.markdownit({
+            html: false,
+            linkify: true,
+            breaks: true,
+          });
+          return markdownItInstance;
+        }
+
+        /**
+         * Corpo do texto do chunk: raw escapado ou HTML Markdown sanitizado.
+         */
+        function renderChunkTextBody(text) {
+          const mode = getTextViewMode();
+          const raw = String(text ?? "");
+          if (mode === "raw") {
+            return `<div class="field-block chunk-text chunk-text--raw">${escapeHtml(raw)}</div>`;
+          }
+          const md = getMarkdownIt();
+          if (!md || typeof window.DOMPurify === "undefined") {
+            return `<div class="field-block chunk-text chunk-text--raw">${escapeHtml(raw)}</div>
+              <p class="load-error">Pré-visualização indisponível (bibliotecas CDN).</p>`;
+          }
+          const unsafe = md.render(raw);
+          const safe = window.DOMPurify.sanitize(unsafe);
+          return `<div class="field-block chunk-text markdown-preview">${safe}</div>`;
+        }
+
+        let selectedStem = null;
+        /** @type {Array<{ text: string, metadata: Record<string, unknown> }> | null} */
+        let activeChunks = null;
+        /** Índice no array activeChunks (0..length-1). */
+        let activeChunkArrayIndex = 0;
+
+        const els = {
+          statsPanel: document.getElementById("statsPanel"),
+          docFilter: document.getElementById("docFilter"),
+          docList: document.getElementById("docList"),
+          detailEmpty: document.getElementById("detailEmpty"),
+          detailContent: document.getElementById("detailContent"),
+        };
+
+        function parseJsonl(text) {
+          const rows = [];
+          for (const line of text.split("\n")) {
+            const t = line.trim();
+            if (!t) continue;
+            rows.push(JSON.parse(t));
+          }
+          return rows;
+        }
+
+        function pdfHrefFromStem(stem) {
+          return DATA_URL_PREFIX + "raw/pcdt/" + encodeURIComponent(stem + ".pdf");
+        }
+
+        /** Monta URL a partir de caminho relativo a llm/data (ex.: raw/pcdt/x.pdf). */
+        function hrefFromDataRelative(rel) {
+          const clean = String(rel).replace(/^\/+/, "");
+          return DATA_URL_PREFIX + clean.split("/").map(encodeURIComponent).join("/");
+        }
+
+        function chunksFetchUrl(relativePath) {
+          return hrefFromDataRelative(relativePath);
+        }
+
+        function renderStats() {
+          const n = manifestRows.length;
+          const byStatus = { ok: 0, skipped: 0, error: 0 };
+          let sumOkChunks = 0;
+          for (const r of manifestRows) {
+            const s = r.status;
+            if (s === "ok" || s === "skipped" || s === "error") {
+              byStatus[s]++;
+            }
+            if (s === "ok" && typeof r.chunk_count === "number") {
+              sumOkChunks += r.chunk_count;
+            }
+          }
+          els.statsPanel.innerHTML = `
+            <dl>
+              <dt>Documentos</dt><dd>${n}</dd>
+              <dt>ok</dt><dd>${byStatus.ok}</dd>
+              <dt>skipped</dt><dd>${byStatus.skipped}</dd>
+              <dt>error</dt><dd>${byStatus.error}</dd>
+              <dt>Soma de chunks (manifest, ok)</dt><dd>${sumOkChunks}</dd>
+            </dl>
+          `;
+        }
+
+        function filterRows(query) {
+          const q = query.trim().toLowerCase();
+          if (!q) return manifestRows;
+          return manifestRows.filter((r) =>
+            String(r.source_stem || "")
+              .toLowerCase()
+              .includes(q)
+          );
+        }
+
+        function badgeClass(status) {
+          if (status === "ok") return "badge-ok";
+          if (status === "skipped") return "badge-skipped";
+          return "badge-error";
+        }
+
+        function renderDocList() {
+          const rows = filterRows(els.docFilter.value);
+          els.docList.innerHTML = rows
+            .map((r) => {
+              const stem = String(r.source_stem || "");
+              const st = String(r.status || "");
+              const active = stem === selectedStem ? " is-active" : "";
+              return `
+            <li>
+              <button type="button" class="${active}" data-stem="${escapeAttr(stem)}">
+                <span class="stem">${escapeHtml(stem)}</span>
+                <span class="badge ${badgeClass(st)}">${escapeHtml(st)}</span>
+              </button>
+            </li>`;
+            })
+            .join("");
+          els.docList.querySelectorAll("button[data-stem]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              selectDocument(btn.getAttribute("data-stem"));
+            });
+          });
+        }
+
+        function escapeHtml(s) {
+          return String(s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        }
+
+        function escapeAttr(s) {
+          return escapeHtml(s).replace(/'/g, "&#39;");
+        }
+
+        /**
+         * Contagem de palavras: separa por espaços em branco após trim;
+         * tokens vazios são ignorados.
+         */
+        function wordCount(text) {
+          const t = String(text ?? "").trim();
+          if (!t) return 0;
+          return t.split(/\s+/).filter(Boolean).length;
+        }
+
+        function formatMetadataValue(val) {
+          if (val === null || val === undefined) return "—";
+          if (Array.isArray(val)) {
+            return val.map((v) => formatMetadataValue(v)).join(", ");
+          }
+          if (typeof val === "object") {
+            return JSON.stringify(val);
+          }
+          return String(val);
+        }
+
+        const SHOWN_BEFORE_OTHERS = new Set(["header_1", "header_2", "section"]);
+
+        function renderChunk(chunk) {
+          const meta = chunk.metadata || {};
+          const h1 = meta.header_1;
+          const h2 = meta.header_2;
+          const sec = meta.section;
+          const text = chunk.text ?? "";
+
+          const otherKeys = Object.keys(meta).filter((k) => !SHOWN_BEFORE_OTHERS.has(k));
+          const othersHtml = otherKeys
+            .map((k) => {
+              const v = meta[k];
+              let dd;
+              if (k === "source_pdf" && typeof v === "string" && v.length > 0) {
+                const h = hrefFromDataRelative(v);
+                dd = `<a class="pdf-link" href="${escapeAttr(h)}" target="_blank" rel="noopener">${escapeHtml(v)}</a>`;
+              } else {
+                dd = escapeHtml(formatMetadataValue(v));
+              }
+              return `<dt>${escapeHtml(k)}</dt><dd>${dd}</dd>`;
+            })
+            .join("");
+
+          const wc = wordCount(text);
+          const textBodyHtml = renderChunkTextBody(text);
+
+          return `
+            <section>
+              <h3>Cabeçalho 1</h3>
+              <div class="field-block">${h1 != null && String(h1).trim() ? escapeHtml(String(h1)) : "—"}</div>
+            </section>
+            <section>
+              <h3>Cabeçalho 2</h3>
+              <div class="field-block">${h2 != null && String(h2).trim() ? escapeHtml(String(h2)) : "—"}</div>
+            </section>
+            <section>
+              <h3>Seção</h3>
+              <div class="field-block">${sec != null && String(sec).trim() ? escapeHtml(String(sec)) : "—"}</div>
+            </section>
+            <section>
+              <h3>Texto</h3>
+              <p class="chunk-wordcount">Palavras: ${wc}</p>
+              ${textBodyHtml}
+            </section>
+            ${
+              otherKeys.length
+                ? `<section>
+              <h3>Outros campos</h3>
+              <div class="field-block field-block--tight">
+                <dl class="other-fields">${othersHtml}</dl>
+              </div>
+            </section>`
+                : ""
+            }
+          `;
+        }
+
+        function findArrayIndexForChunkIndex(chunks, chunkIndexInput) {
+          const n = Number(chunkIndexInput);
+          if (!Number.isFinite(n)) return -1;
+          const byMeta = chunks.findIndex(
+            (c) => c.metadata && c.metadata.chunk_index === n
+          );
+          if (byMeta >= 0) return byMeta;
+          if (Number.isInteger(n) && n >= 0 && n < chunks.length) return n;
+          return -1;
+        }
+
+        function renderChunkPanel() {
+          const toolbar = document.getElementById("chunkToolbar");
+          const chunkView = document.getElementById("chunkView");
+          if (!activeChunks || activeChunks.length === 0) {
+            toolbar.innerHTML = "";
+            chunkView.innerHTML =
+              '<p class="empty-state">Nenhum chunk neste documento.</p>';
+            return;
+          }
+          const total = activeChunks.length;
+          const idx = Math.max(0, Math.min(activeChunkArrayIndex, total - 1));
+          activeChunkArrayIndex = idx;
+
+          const cur = activeChunks[idx];
+          const metaIdx =
+            cur.metadata && typeof cur.metadata.chunk_index === "number"
+              ? cur.metadata.chunk_index
+              : idx;
+
+          const prevDisabled = idx <= 0;
+          const nextDisabled = idx >= total - 1;
+          const tvMode = getTextViewMode();
+          const rawActive = tvMode === "raw" ? " is-active" : "";
+          const previewActive = tvMode === "preview" ? " is-active" : "";
+
+          toolbar.innerHTML = `
+            <button type="button" id="btnPrev" ${prevDisabled ? "disabled" : ""}
+              title="${prevDisabled ? "Primeiro chunk" : "Chunk anterior"}">Anterior</button>
+            <button type="button" id="btnNext" ${nextDisabled ? "disabled" : ""}
+              title="${nextDisabled ? "Último chunk" : "Próximo chunk"}">Próximo</button>
+            <label>Ir para chunk_index
+              <input type="number" id="jumpInput" step="1" value="${metaIdx}" />
+            </label>
+            <button type="button" id="btnJump">Ir</button>
+            <span class="position-label">Chunk ${idx + 1} / ${total}</span>
+            <span class="text-mode-group" role="group" aria-label="Modo de visualização do texto">
+              <span class="text-mode-label">Texto</span>
+              <button type="button" class="text-mode-btn${rawActive}" id="btnTextRaw" title="Texto original">Raw</button>
+              <button type="button" class="text-mode-btn${previewActive}" id="btnTextPreview" title="Markdown renderizado">Preview</button>
+            </span>
+          `;
+
+          chunkView.innerHTML = renderChunk(cur);
+
+          document.getElementById("btnPrev").addEventListener("click", () => {
+            activeChunkArrayIndex = idx - 1;
+            renderChunkPanel();
+          });
+          document.getElementById("btnNext").addEventListener("click", () => {
+            activeChunkArrayIndex = idx + 1;
+            renderChunkPanel();
+          });
+          document.getElementById("btnJump").addEventListener("click", () => {
+            const raw = document.getElementById("jumpInput").value;
+            const target = findArrayIndexForChunkIndex(activeChunks, raw);
+            if (target < 0) {
+              alert("Índice inválido: não existe chunk com esse chunk_index.");
+              return;
+            }
+            activeChunkArrayIndex = target;
+            renderChunkPanel();
+          });
+          document.getElementById("btnTextRaw").addEventListener("click", () => {
+            setTextViewMode("raw");
+            renderChunkPanel();
+          });
+          document.getElementById("btnTextPreview").addEventListener("click", () => {
+            setTextViewMode("preview");
+            renderChunkPanel();
+          });
+        }
+
+        async function loadChunksForRow(row) {
+          const rel = row.chunks_jsonl_relative_path;
+          const key = String(rel || "");
+          if (chunksCache.has(key)) {
+            return chunksCache.get(key);
+          }
+          const url = chunksFetchUrl(key);
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          const text = await res.text();
+          const parsed = parseJsonl(text).map((line) => ({
+            text: line.text != null ? String(line.text) : "",
+            metadata:
+              line.metadata && typeof line.metadata === "object"
+                ? line.metadata
+                : {},
+          }));
+          chunksCache.set(key, parsed);
+          return parsed;
+        }
+
+        async function selectDocument(stem) {
+          selectedStem = stem;
+          renderDocList();
+          const row = manifestRows.find((r) => r.source_stem === stem);
+          if (!row) return;
+
+          els.detailEmpty.hidden = true;
+          els.detailContent.hidden = false;
+          els.detailContent.innerHTML = "<p>Carregando…</p>";
+
+          const status = row.status;
+          const pdfHref = pdfHrefFromStem(stem);
+          const chunkedAt = row.chunked_at != null ? String(row.chunked_at) : "—";
+
+          let inner = `
+            <div class="doc-head">
+              <h2>${escapeHtml(stem)}</h2>
+              <div class="meta-grid">
+                <div><span>Estado:</span> ${escapeHtml(String(status))}</div>
+                <div><span>Chunks (manifest):</span> ${row.chunk_count != null ? row.chunk_count : "—"}</div>
+                <div><span>Fragmentado em:</span> ${escapeHtml(chunkedAt)}</div>
+                <div><span>PDF:</span> <a class="pdf-link" href="${escapeAttr(pdfHref)}" target="_blank" rel="noopener">Abrir PDF</a></div>
+              </div>
+          `;
+
+          if (status === "error") {
+            inner += `<div class="error-banner" role="alert"><strong>Erro:</strong> ${escapeHtml(String(row.error ?? "(sem mensagem)"))}</div>`;
+            inner += `</div><p class="empty-state">Não há chunks para mostrar.</p>`;
+            els.detailContent.innerHTML = inner;
+            activeChunks = null;
+            return;
+          }
+
+          inner += `</div>`;
+
+          try {
+            const chunks = await loadChunksForRow(row);
+            const lineCount = chunks.length;
+            if (status === "skipped") {
+              inner = `
+              <div class="doc-head">
+                <h2>${escapeHtml(stem)}</h2>
+                <div class="meta-grid">
+                  <div><span>Estado:</span> skipped (ficheiro existente, não regenerado)</div>
+                  <div><span>Chunks no ficheiro:</span> ${lineCount}</div>
+                  <div><span>Chunks (manifest):</span> ${row.chunk_count != null ? row.chunk_count : 0}</div>
+                  <div><span>Fragmentado em:</span> ${escapeHtml(chunkedAt)}</div>
+                  <div><span>PDF:</span> <a class="pdf-link" href="${escapeAttr(pdfHref)}" target="_blank" rel="noopener">Abrir PDF</a></div>
+                </div>
+              </div>`;
+            }
+
+            if (lineCount === 0) {
+              inner += `<p class="empty-state">Ficheiro de chunks vazio ou inexistente.</p>`;
+              els.detailContent.innerHTML = inner;
+              activeChunks = null;
+              return;
+            }
+
+            activeChunks = chunks;
+            activeChunkArrayIndex = 0;
+            inner += `
+              <div class="chunk-toolbar" id="chunkToolbar"></div>
+              <div id="chunkView"></div>
+            `;
+            els.detailContent.innerHTML = inner;
+            renderChunkPanel();
+          } catch (e) {
+            inner += `<p class="load-error">Não foi possível carregar os chunks: ${escapeHtml(String(e))}</p>`;
+            if (status === "skipped") {
+              inner += `<p class="empty-state">Para documentos skipped, o ficheiro pode estar ausente ou o caminho incorreto.</p>`;
+            }
+            els.detailContent.innerHTML = inner;
+            activeChunks = null;
+          }
+        }
+
+        async function init() {
+          try {
+            const res = await fetch(MANIFEST_URL);
+            if (!res.ok) throw new Error(`Manifesto: HTTP ${res.status}`);
+            const text = await res.text();
+            manifestRows = parseJsonl(text);
+            renderStats();
+            renderDocList();
+          } catch (e) {
+            els.statsPanel.innerHTML = `<p class="load-error">Falha ao carregar o manifesto. Sirva a pasta llm/ por HTTP (comando view-pcdt-chunks). ${escapeHtml(String(e))}</p>`;
+          }
+        }
+
+        els.docFilter.addEventListener("input", () => renderDocList());
+
+        init();
+      })();
+    </script>
+  </body>
+</html>

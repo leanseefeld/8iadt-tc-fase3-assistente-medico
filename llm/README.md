@@ -62,6 +62,19 @@ chunk-pcdt --workers 4
 
 Manifesto: `llm/data/manifests/pcdt_chunk_index.jsonl`.
 
+### Visualizador de chunks PCDT (browser)
+
+Interface HTML estática em [`tools/pcdt-chunks-viewer/index.html`](tools/pcdt-chunks-viewer/index.html) (lista documentos a partir de `pcdt_chunk_index.jsonl`, navegação por chunk, PDF, modo raw/preview Markdown). O código do visualizador fica **fora** de `llm/data/` para poder ser versionado no git.
+
+Após `pip install -e .`, suba um servidor HTTP na raiz do pacote **`llm/`** e abra o URL indicado:
+
+```bash
+view-pcdt-chunks
+# opcional: --port 8765 --bind 127.0.0.1
+```
+
+Alternativa manual: `cd llm && python -m http.server 8765` e no browser abra `http://127.0.0.1:8765/tools/pcdt-chunks-viewer/index.html` (é necessário servir `llm/`, não só `llm/data/`, para o `fetch` ao manifest e aos JSONL funcionar).
+
 ### Einstein (USP)
 
 ```bash
