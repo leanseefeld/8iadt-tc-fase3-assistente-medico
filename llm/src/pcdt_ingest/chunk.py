@@ -223,6 +223,37 @@ def write_chunks_jsonl(documents: list[Document], path: Path) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def parse_chunks_jsonl_line(line: str) -> Document:
+    """Uma linha do formato gravado por ``write_chunks_jsonl`` → ``Document``."""
+    row = json.loads(line)
+    text = row["text"]
+    meta = dict(row["metadata"])
+    return Document(page_content=text, metadata=meta)
+
+
+def assign_stable_chunk_ids(documents: list[Document]) -> None:
+    """Define ``doc.id`` como ``{source_stem}:{chunk_index}`` para idempotência no Chroma."""
+    for doc in documents:
+        stem = doc.metadata.get("source_stem")
+        idx = doc.metadata.get("chunk_index")
+        if stem is None or idx is None:
+            raise ValueError("metadata deve incluir source_stem e chunk_index")
+        doc.id = f"{stem}:{idx}"
+
+
+def read_chunks_jsonl(path: Path) -> list[Document]:
+    """Lê ``*.chunks.jsonl``; arquivo vazio ou só linhas em branco → lista vazia."""
+    documents: list[Document] = []
+    with path.open(encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line:
+                continue
+            documents.append(parse_chunks_jsonl_line(line))
+    assign_stable_chunk_ids(documents)
+    return documents
+
+
 def chunk_sidecar_file(
     pages_jsonl: Path,
     *,

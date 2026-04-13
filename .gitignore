@@ -76,3 +76,6 @@ mlruns/
 # raw/: PDFs PCDT, CSV/XLSX/ZIP Einstein; manifests/: *.jsonl, *.json;
 # processed/, chunks/: extração e fragmentação (pipeline-rag); sft/samples/: amostras SFT.
 llm/data/
+
+# Vector store local (Chroma na raiz do repo; não versionar artefactos pesados).
+vectorstore/
