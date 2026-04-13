@@ -110,19 +110,88 @@ def delete_vectors_for_source_stem(store: Chroma, source_stem: str) -> None:
     store.delete(where={"source_stem": source_stem})
 
 
+def ollama_single_embed_with_token_count(
+    emb: OllamaEmbeddings,
+    text: str,
+) -> tuple[list[float], int | None]:
+    """
+    Uma chamada ``/api/embed`` por texto (alinhada a ``OllamaEmbeddings.embed_documents``).
+
+    Devolve o vetor e ``prompt_eval_count`` reportado pelo Ollama (tokens avaliados no prompt).
+    """
+    if not emb._client:
+        msg = (
+            "Cliente Ollama síncrono não inicializado; "
+            "construa ``OllamaEmbeddings`` normalmente."
+        )
+        raise RuntimeError(msg)
+    resp = emb._client.embed(
+        emb.model,
+        text,
+        dimensions=emb.dimensions,
+        options=emb._default_params,
+        keep_alive=emb.keep_alive,
+    )
+    vectors = resp.embeddings
+    if not vectors:
+        raise ValueError("Resposta Ollama embed sem vetores")
+    return vectors[0], resp.prompt_eval_count
+
+
 def add_documents_batched(
     store: Chroma,
     documents: list[Document],
     *,
     batch_size: int = DEFAULT_ADD_BATCH_SIZE,
+    verbose: bool = False,
+    source_stem: str = "",
+    embedding_fn: OllamaEmbeddings | None = None,
 ) -> None:
     """Adiciona documentos em lotes para reduzir picos de memória e carga no Ollama."""
     if batch_size < 1:
         raise ValueError("batch_size deve ser >= 1")
-    # --- Loop em janelas: cada lote passa por ``add_documents`` (embeddings + persistência) ---
+    # --- Modo verboso: um embed por chunk (tokens reais do Ollama) + upsert sem re-embed ---
+    use_verbose_path = verbose and embedding_fn is not None
+    if use_verbose_path and not isinstance(embedding_fn, OllamaEmbeddings):
+        _log.warning(
+            "%s: modo verboso exige ``OllamaEmbeddings``; usando ingestão em lote normal.",
+            source_stem or "embed",
+        )
+        use_verbose_path = False
+
     for i in range(0, len(documents), batch_size):
         batch = documents[i : i + batch_size]
-        store.add_documents(batch)
+        if use_verbose_path:
+            assert embedding_fn is not None
+            embeddings_out: list[list[float]] = []
+            for doc in batch:
+                _vec, n_tok = ollama_single_embed_with_token_count(
+                    embedding_fn,
+                    doc.page_content,
+                )
+                embeddings_out.append(_vec)
+                _log.info(
+                    "fragmento: id=%s stem=%s tokens_embed=%s",
+                    doc.id,
+                    source_stem,
+                    n_tok,
+                )
+            # --- Persistência explícita do lote (vetores já calculados) ---
+            store._collection.upsert(
+                ids=[d.id for d in batch],
+                documents=[d.page_content for d in batch],
+                metadatas=[d.metadata for d in batch],
+                embeddings=embeddings_out,
+            )
+            _log.info(
+                "lote persistido: stem=%s docs=%s (offset global %s–%s)",
+                source_stem,
+                len(batch),
+                i,
+                i + len(batch) - 1,
+            )
+        else:
+            store.add_documents(batch)
 
 
 def embed_one_stem(
@@ -131,6 +200,8 @@ def embed_one_stem(
     *,
     source_stem: str,
     batch_size: int = DEFAULT_ADD_BATCH_SIZE,
+    verbose: bool = False,
+    embedding_fn: OllamaEmbeddings | None = None,
 ) -> tuple[str, int]:
     """
     Apaga entradas antigas do stem, lê chunks do disco e volta a indexar.
@@ -147,7 +218,14 @@ def embed_one_stem(
     # --- Substituir vetores deste documento antes de inserir lotes ---
     delete_vectors_for_source_stem(store, source_stem)
     ready = documents_for_chroma(docs)
-    add_documents_batched(store, ready, batch_size=batch_size)
+    add_documents_batched(
+        store,
+        ready,
+        batch_size=batch_size,
+        verbose=verbose,
+        source_stem=source_stem,
+        embedding_fn=embedding_fn,
+    )
     return "embedded", len(ready)
 
 

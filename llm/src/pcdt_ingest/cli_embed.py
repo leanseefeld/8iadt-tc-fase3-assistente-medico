@@ -78,6 +78,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Menos saída no console (só avisos e erros).",
     )
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Registra cada chunk (id, stem, tokens_embed da resposta Ollama) e confirmação "
+            "por lote persistido no Chroma."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -113,8 +121,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.batch_size < 1:
         print("Erro: --batch-size deve ser >= 1.", file=sys.stderr)
         return 2
+    if args.verbose and args.quiet:
+        _log.warning("--verbose e --quiet: mantém nível INFO para os registos detalhados.")
 
-    configure_logging(quiet=args.quiet)
+    configure_logging(quiet=args.quiet, verbose=args.verbose)
     ensure_data_dirs()
     root = data_root()
     chroma_dir = vectorstore_chroma_dir()
@@ -188,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
                 chunks_path,
                 source_stem=stem,
                 batch_size=args.batch_size,
+                verbose=args.verbose,
+                embedding_fn=embeddings,
             )
             record["status"] = status
             record["embedded_count"] = count

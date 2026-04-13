@@ -71,6 +71,7 @@ ollama pull nomic-embed-text
 build-vectorstore
 build-vectorstore --max-files 5
 build-vectorstore --force
+build-vectorstore --verbose # Converte para tokens antes de armazenar (não durante) e exibe número de tokens por chunk
 ```
 
 Opcional: variável de ambiente `OLLAMA_BASE_URL` (por padrão `http://127.0.0.1:11434`). O manifesto `llm/data/manifests/pcdt_embed_index.jsonl` regista o último estado por documento e permite execuções incrementais; use `--skip-embed-manifest` para desativar. O diretório `vectorstore/` está no `.gitignore`.

@@ -7,10 +7,13 @@ from pathlib import Path
 
 import pytest
 
+from unittest.mock import MagicMock
+
 from pcdt_ingest.embed import (
     chroma_safe_metadata,
     filter_pcdt_chunk_manifest_rows,
     mtime_unchanged_vs_embed_manifest,
+    ollama_single_embed_with_token_count,
 )
 from pcdt_ingest.chunk import parse_chunks_jsonl_line, read_chunks_jsonl
 
@@ -78,3 +81,19 @@ def test_mtime_unchanged_vs_embed_manifest(
     expected: bool,
 ) -> None:
     assert mtime_unchanged_vs_embed_manifest(stored, current) is expected
+
+
+def test_ollama_single_embed_with_token_count_mock() -> None:
+    emb = MagicMock()
+    emb._client = MagicMock()
+    emb._client.embed.return_value = MagicMock(
+        embeddings=[[0.25, -0.5]],
+        prompt_eval_count=17,
+    )
+    emb.model = "nomic-embed-text"
+    emb.dimensions = None
+    emb._default_params = {}
+    emb.keep_alive = None
+    vec, n = ollama_single_embed_with_token_count(emb, "x")
+    assert vec == [0.25, -0.5]
+    assert n == 17

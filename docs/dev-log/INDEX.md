@@ -21,6 +21,7 @@ Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `c
 | 2026-04-12 | dev-log-regras-cursor | git:leander@nomadmacaw.com | Índice do dev log, regra `dev-log.mdc` e regra `report-and-wait-before-implement.mdc`. | `2843ab3` chore(cursor): add report-and-wait-before-implement rule |
 | 2026-04-12 | dev-log-sistema-adocao | Leander Seefeld | Criação do sistema (`docs/dev-log/`, `decisions/`, regra `dev-log.mdc`) e adoção formal: overview, marcos via `git log`, Autor `git:email` e coluna Revisão. | `5ea7645` docs(dev-log): regista criação e adoção do sistema de dev log |
 | 2026-04-12 | chroma-embed-pcdt | agent:cursor | CLI `build-vectorstore`, `embed.py`, Chroma em `vectorstore/chroma`, manifesto `pcdt_embed_index.jsonl`, deps langchain-chroma/ollama/chromadb. | `be5a299` docs(dev-log): registra criação e adoção do sistema de dev log |
+| 2026-04-13 | build-vectorstore-verbose | agent:cursor | CLI `build-vectorstore --verbose`: log id/stem/tokens Ollama por fragmento e confirmação por lote Chroma (`embed.py`, `logutil.py`). | `d3375e0` fix: chunk visualizer "jump to page" with incorrect index |
 
 ## `decisions/` (opcional)
 
