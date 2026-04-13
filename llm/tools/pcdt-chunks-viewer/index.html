@@ -240,6 +240,11 @@
         color: var(--text);
         font-size: 0.75rem;
       }
+      .chunk-toolbar .jump-hint {
+        font-size: 0.65rem;
+        font-weight: normal;
+        opacity: 0.88;
+      }
       .position-label {
         font-size: 0.72rem;
         color: var(--muted);
@@ -712,15 +717,19 @@
           `;
         }
 
-        function findArrayIndexForChunkIndex(chunks, chunkIndexInput) {
-          const n = Number(chunkIndexInput);
+        /**
+         * Converte o valor do campo "Ir para chunk" para índice no array.
+         * O utilizador indica posição 1-based (1 = primeiro chunk, N = último).
+         */
+        function findArrayIndexForJumpInput(chunks, rawInput) {
+          const n = Number(String(rawInput).trim());
           if (!Number.isFinite(n)) return -1;
-          const byMeta = chunks.findIndex(
-            (c) => c.metadata && c.metadata.chunk_index === n
-          );
-          if (byMeta >= 0) return byMeta;
-          if (Number.isInteger(n) && n >= 0 && n < chunks.length) return n;
-          return -1;
+          const pos = Math.trunc(n);
+          if (pos !== n) return -1;
+          const len = chunks.length;
+          if (len === 0) return -1;
+          if (pos < 1 || pos > len) return -1;
+          return pos - 1;
         }
 
         function renderChunkPanel() {
@@ -737,10 +746,8 @@
           activeChunkArrayIndex = idx;
 
           const cur = activeChunks[idx];
-          const metaIdx =
-            cur.metadata && typeof cur.metadata.chunk_index === "number"
-              ? cur.metadata.chunk_index
-              : idx;
+          // Campo de salto: posição 1-based (alinha com "Chunk 1 / N" na barra).
+          const jumpDisplayPos = idx + 1;
 
           const prevDisabled = idx <= 0;
           const nextDisabled = idx >= total - 1;
@@ -753,8 +760,8 @@
               title="${prevDisabled ? "Primeiro chunk" : "Chunk anterior"}">Anterior</button>
             <button type="button" id="btnNext" ${nextDisabled ? "disabled" : ""}
               title="${nextDisabled ? "Último chunk" : "Próximo chunk"}">Próximo</button>
-            <label>Ir para chunk_index
-              <input type="number" id="jumpInput" step="1" value="${metaIdx}" />
+            <label>Ir para chunk <span class="jump-hint">(1 = primeiro)</span>
+              <input type="number" id="jumpInput" step="1" min="1" max="${total}" value="${jumpDisplayPos}" />
             </label>
             <button type="button" id="btnJump">Ir</button>
             <span class="position-label">Chunk ${idx + 1} / ${total}</span>
@@ -775,15 +782,25 @@
             activeChunkArrayIndex = idx + 1;
             renderChunkPanel();
           });
-          document.getElementById("btnJump").addEventListener("click", () => {
+          function applyChunkJump() {
             const raw = document.getElementById("jumpInput").value;
-            const target = findArrayIndexForChunkIndex(activeChunks, raw);
+            const target = findArrayIndexForJumpInput(activeChunks, raw);
             if (target < 0) {
-              alert("Índice inválido: não existe chunk com esse chunk_index.");
+              alert(
+                `Índice inválido: use um número inteiro entre 1 e ${total} (1 = primeiro chunk).`
+              );
               return;
             }
             activeChunkArrayIndex = target;
             renderChunkPanel();
+          }
+
+          document.getElementById("btnJump").addEventListener("click", applyChunkJump);
+          document.getElementById("jumpInput").addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") {
+              ev.preventDefault();
+              applyChunkJump();
+            }
           });
           document.getElementById("btnTextRaw").addEventListener("click", () => {
             setTextViewMode("raw");
