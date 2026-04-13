@@ -1,0 +1,43 @@
+---
+description: Handoff — report what was done, next steps, and wait before implementing the plan
+alwaysApply: false
+---
+
+# Report and wait (before implementing)
+
+## When this applies
+
+Activate when the user **references this rule** (`@report-and-wait-before-implement` or the file under `.cursor/rules/`) **or** ends the message with one of these signals:
+
+- `/report-and-wait`
+- `report and wait`
+
+If the signal appears **at the end of the message**, it overrides earlier parts of the same message that imply immediate implementation: **do not implement the plan in this turn**.
+
+## Required behavior
+
+1. **Do not** apply patches, create implementation files, or run “execute the plan” steps until the user sends another message.
+2. **Reply** in clear language with:
+   - **What was done** this turn (reads, conclusions, mental drafts — do not invent changes that did not happen).
+   - **Proposed next actions** (concrete, ordered steps).
+   - **An explicit question or invitation** to confirm, adjust priorities, or say “ok” for the next step.
+3. **Wait** for the user’s reply before implementing.
+
+## Reading and research
+
+- Allowed: read files, search the repo, explain or refine the plan in prose.
+- Avoid: persistent changes to the project (unless the user explicitly asked for *only* documentation/rule work and that is this turn’s scope).
+
+## Example reply (structure)
+
+```markdown
+## What I did this turn
+- …
+
+## Suggested next steps
+1. …
+2. …
+
+## Confirmation
+Should I proceed with step 1 in the next message, or do you want to adjust …?
+```
