@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Dev log do projeto
 
-## Antes de concluir um trabalho substancial
+## Antes de concluir um trabalho substancial ou fazer commit
 
 Alvo: só alterações **substanciais** (não refactors cosméticos).
 
@@ -18,7 +18,7 @@ Alvo: só alterações **substanciais** (não refactors cosméticos).
 - **ID:** `slug-curto-kebab` (ex.: `vectorstore-raiz-repo`).
 - **Autor (opcional):** humano se tiver explicitamente tomado a decisão → valor de `git config user.name` (ou iniciais); agente/assistente → `agent:cursor` (prefixo `agent:` para `rg`/filtros). Omitir se irrelevante.
 - **Resumo:** ≤ 140 caracteres se possível; mencionar ficheiro/pasta chave quando útil.
-- **Revisão:** último commit git - hash e mensagem one-line
+- **Revisão-Anterior:** último commit git até o momento - hash e mensagem one-line
 
 ## Onde não registar
 

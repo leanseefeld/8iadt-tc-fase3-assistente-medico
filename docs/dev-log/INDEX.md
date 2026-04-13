@@ -10,7 +10,7 @@ Formato: uma linha por marco relevante; mais detalhe só em `decisions/` quando 
 
 Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `clinicalApi`; **pipeline RAG** com download de PCDTs, dataset COVID e ingestão PCDT linear; evolução para **extração MD a partir de PDF**, **chunking** e **visualizador** de chunks; **documentação** (relatório, referências) e **governação Cursor** (dev log + regras `dev-log` e `report-and-wait`).
 
-| Data (ISO) | ID | Autor | Resumo | Revisão |
+| Data (ISO) | ID | Autor | Resumo | Revisão-Anterior |
 |------------|-----|-------|--------|---------|
 | 2026-04-02 | repo-spa-inicial | git:leander@nomadmacaw.com | Estrutura do repo, SPA, mocks, Docker, páginas, docs de referência, UI alinhada e `clinicalApi`. | `effc8e0` feat(frontend): align UI with reference and add clinicalApi facade |
 | 2026-04-06 | pipeline-pcdt-docs | git:leander@nomadmacaw.com | Download de PCDTs e documentação do pipeline RAG. | `7faa982` feat(pipeline-rag): download PCDTs and document pipeline |
