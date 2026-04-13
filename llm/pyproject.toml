@@ -10,18 +10,28 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.12",
+    "chromadb>=0.6",
     "httpx>=0.27",
+    "langchain-chroma>=0.1",
+    "langchain-core>=0.3",
+    "langchain-ollama>=0.2",
+    "langchain-text-splitters>=0.3",
     "lxml>=5.0",
+    "openpyxl>=3.1",
+    "pandas>=2.0",
+    "playwright>=1.41",
+    "pymupdf4llm>=0.0.17",
+    "pytest>=8.0",
+    "ruff>=0.6",
 ]
-
-[project.optional-dependencies]
-playwright = ["playwright>=1.41"]
-tabular = ["pandas>=2.0", "openpyxl>=3.1"]
-dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 download-pcdt = "pcdt_ingest.cli_pcdt:main"
 download-clinical-exams = "pcdt_ingest.cli_exams:main"
+extract-pcdt-markdown = "pcdt_ingest.cli_extract:main"
+chunk-pcdt = "pcdt_ingest.cli_chunk:main"
+build-vectorstore = "pcdt_ingest.cli_embed:main"
+view-pcdt-chunks = "pcdt_ingest.cli_view_pcdt_chunks:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

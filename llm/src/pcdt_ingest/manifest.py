@@ -8,6 +8,20 @@ from pathlib import Path
 from typing import Any
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Lê linhas JSON do ficheiro; ignora linhas vazias."""
+    if not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:

@@ -14,9 +14,9 @@ Este documento descreve uma linha de implementação sugerida após a ingestão 
 
 ## Estágios RAG (PCDT e, se aplicável, texto derivado de exames)
 
-1. **Extrair**: PDF → texto por página em `llm/data/processed/pcdt/`.
+1. **Extrair**: PDF → sidecar JSONL por página (`processed/pcdt/<nome>.pages.jsonl`, comando `extract-pcdt-markdown`); Markdown combinado opcional com `--with-combined-md`.
 2. **Limpar**: normalizar espaços, remover cabeçalhos/rodapés repetidos; idioma `pt-BR` na metadata.
-3. **Fragmentar**: janelas com sobreposição ou chunking hierárquico; metadata: `doc_id`, `page`, `title`, `source_url`.
+3. **Fragmentar**: `chunk-pcdt` gera `chunks/pcdt/<nome>.chunks.jsonl` a partir dos sidecars; metadata inclui seção (`section`, `header_*`), `page_start`/`page_end`, `chunk_index` (ver plano de chunking).
 4. **Embeddings**: lotes com o modelo de embedding escolhido.
 5. **Recuperação**: busca híbrida (BM25 + denso) costuma funcionar bem em documentos longos normativos.
 
@@ -32,7 +32,7 @@ O conjunto Einstein contém informação clínica anonimizada; respeitar termos 
 
 O repositório exige aceite de termos (nome, e-mail e concordância) antes de liberar o download. O script `download-clinical-exams` lida com isso de duas formas:
 
-- **Com Playwright** (`pip install -e ".[playwright]"`): abre um navegador real para o usuário preencher os termos; o download é capturado automaticamente, extraído e catalogado.
+- **Com Playwright** (`pip install -e .` a partir de `llm/`, depois `playwright install chromium`): abre um navegador real para o usuário preencher os termos; o download é capturado automaticamente, extraído e catalogado.
 - **Sem Playwright** (`--zip`): o usuário baixa o ZIP manualmente no navegador e passa o caminho ao script para extração e catalogação.
 
 Em ambos os casos, os arquivos extraídos ficam em `llm/data/raw/clinical_exams/` e o manifesto em `llm/data/manifests/clinical_exams_index.jsonl`.

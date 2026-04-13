@@ -28,6 +28,9 @@ MANIFEST_PCDT_INDEX = "pcdt_index.jsonl"
 MANIFEST_PCDT_RUN = "pcdt_run.json"
 MANIFEST_CLINICAL_EXAMS_INDEX = "clinical_exams_index.jsonl"
 MANIFEST_CLINICAL_EXAMS_RUN = "clinical_exams_run.json"
+MANIFEST_PCDT_MD_EXTRACT = "pcdt_md_extract.jsonl"
+MANIFEST_PCDT_CHUNK = "pcdt_chunk_index.jsonl"
+MANIFEST_PCDT_EMBED = "pcdt_embed_index.jsonl"
 
 
 def find_repo_root() -> Path:
@@ -37,6 +40,11 @@ def find_repo_root() -> Path:
 
 def data_root() -> Path:
     return find_repo_root() / "llm" / "data"
+
+
+def vectorstore_chroma_dir() -> Path:
+    """Diretório persistente do Chroma na raiz do repositório (fora de ``llm/data``)."""
+    return find_repo_root() / "vectorstore" / "chroma"
 
 
 def ensure_data_dirs() -> Path:

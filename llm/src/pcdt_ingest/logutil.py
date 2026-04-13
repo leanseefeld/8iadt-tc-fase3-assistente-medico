@@ -17,9 +17,15 @@ class _FlushingStderrHandler(logging.StreamHandler):
         self.flush()
 
 
-def configure_logging(*, quiet: bool = False) -> None:
+def configure_logging(*, quiet: bool = False, verbose: bool = False) -> None:
     """Define formato e nível; idempotente se handlers já existirem no logger raiz."""
-    level = logging.WARNING if quiet else logging.INFO
+    # --verbose força INFO (detalhe por chunk) mesmo com --quiet.
+    if verbose:
+        level = logging.INFO
+    elif quiet:
+        level = logging.WARNING
+    else:
+        level = logging.INFO
     root = logging.getLogger("pcdt_ingest")
     root.setLevel(level)
     if not root.handlers:
@@ -33,7 +39,8 @@ def configure_logging(*, quiet: bool = False) -> None:
         )
         root.addHandler(h)
     else:
-        root.handlers[0].setLevel(level)
+        for h in root.handlers:
+            h.setLevel(level)
 
 
 def get_logger(name: str) -> logging.Logger:

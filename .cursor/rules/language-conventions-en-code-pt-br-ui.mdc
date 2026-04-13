@@ -1,15 +1,30 @@
 ---
-description: English for code and URL paths; Brazilian Portuguese for UI, docs, and comments; mirror user language in replies and plans
+description: "Assistant replies match the user's message language first; code and URLs in English; UI, human-facing repo docs, and code comments in Português Brasileiro pt-BR."
 alwaysApply: true
 ---
 
+Ensure you reason about this rule before generating any responses and documents so that this rule is always respected and the correct language for each output is determined.
+
 # Language conventions
+
+## Priority (apply in this order)
+
+1. **Assistant reply language** — Match the language of the **current user message** for explanations, answers, and **plans** written for the conversation (including agent implementation plans). Exception: the user explicitly asks for another language. This takes precedence over any default bias toward pt-BR for “project work.”
+2. **Repository artifacts** — The sections **Project artifacts** below apply to **files and strings committed to the repo** (code, UI copy, README, comments). They do **not** redefine the language of chat replies.
+
+**Separation:** Explanations, plans, and chat replies are **not** “README,” “UI copy,” or “human-facing documentation” in the sense of § Project artifacts. Only § Assistant replies governs their language.
+
+**Counter-example:** The user writes in English → the assistant explains and plans in **English** in chat; in the same turn, edits to `README.md` body, UI strings, and code **comments/docstrings** in the repo still follow **§ Project artifacts** (pt-BR for those artifacts; English for identifiers).
+
+**Ambiguous or mixed-language messages:** Default assistant replies to **English** unless the user has clearly been using **pt-BR** as the dominant language in the thread.
 
 ## Assistant replies
 
-Detect the language the user writes in for their instructions and **reply in that same language**, unless they explicitly ask for another language. Plans should also respect the initial language.
+Detect the language the user writes in for their instructions and **reply in that same language**, unless they explicitly ask for another language. Plans should also respect the initial language of the conversation - even if they are going to be committed.
 
 ## Project artifacts (independent of chat language)
+
+Rules below apply to **repository content**, not to the language of assistant chat messages.
 
 ### English
 
@@ -36,3 +51,5 @@ def calculate_cart_total(items: list[CartItem], discount_percent: float) -> Deci
 ```
 
 Identifiers and code symbols in English; translation values and UI strings in pt-BR. When editing or generating code, keep this split.
+
+Avoid European Portuguese ("secção", "ficheiro", "autocarro", "eléctrico").

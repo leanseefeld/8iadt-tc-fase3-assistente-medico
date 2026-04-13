@@ -43,13 +43,76 @@ Embora os exames desta base tenham sido solicitados no contexto de diagnóstico 
 
 ## Pipeline de extração e preparo de documentos
 
-Foi criado um utilitário em `/llm` para baixar os PCDTs automaticamente. Este utilitário se comporta como um módulo isolado para esta finalidade e após instalado (consulte [llm/README.md](../llm/README.md) para instruções), pode ser executado via linha de comando com:
+Foi criado um utilitário em `/llm` para baixar e converter os PCDTs automaticamente. Este utilitário se comporta como um módulo isolado para as diferentes fases da pipeline.
+Seus componentes e modo de usar são descritos no em [llm/README.md](../llm/README.md).
+
+### Download dos datasets
 
 ```sh
 download-pcdt # para os PDFs com os PCDTs da CONITEC/SUS
 download-clinical-exams # para baixar ou extrair os exames para COVID do Albert Einstein
 ```
 
-O dataset COVID requer aceite de termos e por isso um navegador é aberto automaticamente para que o usuário preencha os dados e faça o aceite. Do contrário, o utilitário também pode ser executado com o argumento `--zip caminho/do/dataset.zip` para usar um arquivo previamente baixado.
+Estes utilitários carregam os datasets diretamente da internet, salvando para a pasta `llm/data/raw`.
 
-O download automático dos datasets resulta em sua indexação via arquivos `jsonl`, contendo nome original, texto, URL, data do acesso e (para PCDTs) Portaria de origem e data de publicação.
+Para os PCDTs, o HTML da página é carregado em Python e seletores CSS (ou operações equivalentes) são usados para selecionar os link do documento e seus títulos (primeiro `<table>` de conteúdo da página).
+
+O dataset COVID requer aceite de termos e por isso um navegador é aberto automaticamente para que o usuário preencha os dados e faça o aceite. Do contrário, o utilitário também pode ser executado com o argumento `--zip caminho/do/dataset.zip` para usar o arquivo zip do dataset previamente baixado.
+
+Para ambos os datasets, um arquivo `.jsonl` é criado em `llm/data/manifests` contendo URL de origem, SHA do arquivo baixado, nome salvo localmente, data de acesso e descrição da fonte (publicação e data).
+
+### Conversão para Markdown
+
+```sh
+extract-pcdt-markdown
+```
+
+Através deste utilitário, usamos a lib `pymupdf4llm` para gerar conteúdo Markdown a partir dos PCDTs. Cada documento resulta em um `.pages.jsonl` em `llm/data/processed/pcdt` contendo a página original e seu conteúdo convertido para Markdown. Se executado com `--with-combined-md`, gera também um arquivo .md com todas as páginas concatenadas.
+
+Um novo manifesto é gerado (`llm/data/manifests/pcdt_md_extract.jsonl`) para rastrear erros e permitir processar apenas novos documentos.
+
+Nenhum tratamento adicional foi implementado para os documentos. O objetivo é entender como os documentos são gerados antes de implementar melhorias.
+
+### Geração de chunks
+
+```sh
+chunk-pcdt
+```
+
+A geração de tokens usa `MarkdownHeaderTextSplitter` e `RecursiveCharacterTextSplitter` (quando se excede a estimativa de 800 tokens) para geração de chunks a partir dos arquivos gerados na etapa anterior. Há tratamento para indexar a seção e cabeçalhos prévios onde o conteúdo extraído aparece.
+
+O resultado da execução são arquivos `.jsonl` para cada documento inicial, que são salvos em `llm/data/chunks`, e um novo `manifests/pcdt_chunk_index.jsonl` com um registro para cada documento PCDT.
+
+Um visualizador de chunks foi implementado para facilitar a exploração dos resultados deste processo e realizar ajustes no algoritmo.
+
+```sh
+view-pcdt-chunks
+```
+![Preview do visualizador de chunks](./assets/Screenshot%202026-04-12%20at%2022.07.53.png)
+
+Em primeiro momento, é possível perceber que uma estratégia melhor é necessária para capturar corretamente os cabeçalhos e seções relevantes.
+Há também problemas em formatação de tabelas, especialmente quando a tabela é continuada em outra página.
+
+Há conteúdo potencialmente redundante (como página inicial de cada documento, como declaração do órgão regulador - Ministério da Saúde) e referências que talvez não possamos usar adequadamente para fundamentar as respostas pois exigiria identificar suas chamadas no corpus e correlacionar com sua declaração na seção de referências do documento (geralmente ao fim).
+
+### Embeddings em Vectorstore/Chroma
+
+```
+sh
+build-vectorstore
+```
+
+Aqui os chunks da etapa anterior são convertidos em embeddings com `OllamaEmbeddings` usando `nomic-embed-text`.
+
+Durante os testes, alguns chunks excederam o limite de contexto deste modelo de embedding (8.192 tokens) e então o limite de chunk (`_CHUNK_TOKENS` em [chunks.py](../llm/src/pcdt_ingest/chunk.py)) foi reduzido de 800 para 400.
+A mensagem de erro do Ollama não indicava o limite suportado ou quantos tokens seriam necessários para comportar o chunk que ocasionou o erro, e inspecionando o chunk culpado, não ficou evidente uma diferença significativa na quantidade de palavras.
+Isso evidencia o desalinhamento entre a estimativa de tokens do módulo `chunks.py` em relação ao processo de tokenização com `nomic` usando linguagem complexa da medicina em Português Brasileiro.
+
+**Recomendação:** substituir o motor de embedding por um que lide melhor com o vocabulário utilizado nos PCDTs.
+
+Foi criado também um script para fazer a consulta dos documentos ingeridos: [example_vectorstore_rag_query.py](../llm/scripts/example_vectorstore_rag_query.py).
+
+É necessário ter ingerido pelo menos um documento com o comando `build-vectorstore` para fazer o teste.
+Neste script é feito uma busca simples, onde a query é convertida diretamente em embeddings e feito a busca no espaço vetorial. Isso resultou em chunks importantes não sendo retornados, mesmo com um k=10.
+
+Na implementação real, é indicado aplicar uma otimização de consulta, que identique os documentos relevantes de antemão e inclua cabeçalhos do metadata (hoje, apenas o conteúdo textual do chunk é consultado).
