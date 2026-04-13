@@ -17,8 +17,8 @@ _log = get_logger("chunk")
 
 # Estimativa simples ~4 caracteres por token (PT-BR); alvo ~800 / ~150 tokens.
 _CHARS_PER_TOKEN = 4
-_CHUNK_TOKENS = 800
-_OVERLAP_TOKENS = 150
+_CHUNK_TOKENS = 400
+_OVERLAP_TOKENS = 50
 
 CHUNK_JSONL_SUFFIX = ".chunks.jsonl"
 
