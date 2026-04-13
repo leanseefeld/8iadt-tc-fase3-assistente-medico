@@ -75,6 +75,17 @@ build-vectorstore --force
 
 Opcional: variável de ambiente `OLLAMA_BASE_URL` (por padrão `http://127.0.0.1:11434`). O manifesto `llm/data/manifests/pcdt_embed_index.jsonl` regista o último estado por documento e permite execuções incrementais; use `--skip-embed-manifest` para desativar. O diretório `vectorstore/` está no `.gitignore`.
 
+#### Visualizar a coleção Chroma (CLI)
+
+Com venv ativo e `pip install -e .`, use o binário `chroma` do pacote `chromadb`. Na **raiz do repositório**:
+
+```bash
+chroma run --path vectorstore/chroma   # terminal 1 — servidor local
+chroma browse pcdt --local             # terminal 2 — TUI da coleção
+```
+
+Se o `browse` não funcionar, tente `chroma browse pcdt --local --path vectorstore/chroma`.
+
 ### Visualizador de chunks PCDT (browser)
 
 Interface HTML estática em `[tools/pcdt-chunks-viewer/index.html](tools/pcdt-chunks-viewer/index.html)` (lista documentos a partir de `pcdt_chunk_index.jsonl`, navegação por chunk, PDF, modo raw/preview Markdown).
