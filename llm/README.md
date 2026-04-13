@@ -19,7 +19,25 @@ Para usar o download Einstein com navegador (Playwright), instale também o Chro
 playwright install chromium
 ```
 
+Você também precisará de [Ollama](https://ollama.com/) executando localmente com `nomic-embed-text` para conseguir os embeddings:
+
+```bash
+ollama pull nomic-embed-text
+```
+
 ## Uso
+
+Veja as subseções seguintes para explicação de cada comando - incluindo formas de visualizar artefatos intermediários - ou execute estes comando em sequência para completar a pipeline localmente:
+
+```bash
+download-pcdt
+download-clinical-exams # Opcional: caso queira o dataset Albert Einstein
+extract-pcdt-markdown --workers 6
+chunk-pcdt --workers 6
+build-vectorstore
+```
+
+### Download de arquivos
 
 ```bash
 download-pcdt --max-files 200
@@ -62,6 +80,19 @@ chunk-pcdt --workers 4
 
 Manifesto: `llm/data/manifests/pcdt_chunk_index.jsonl`.
 
+#### Visualizador de chunks PCDT (browser)
+
+Interface HTML estática em `[tools/pcdt-chunks-viewer/index.html](tools/pcdt-chunks-viewer/index.html)` (lista documentos a partir de `pcdt_chunk_index.jsonl`, navegação por chunk, PDF, modo raw/preview Markdown).
+
+Após `pip install -e .`, o comando a seguir sobe um servidor HTTP na raiz do pacote `llm/` e exibe a URL para o acessar o visualizador:
+
+```bash
+view-pcdt-chunks
+# opcional: --port 8765 --bind 127.0.0.1
+```
+
+Alternativa manual: `cd llm && python -m http.server 8765` e no browser abra `http://127.0.0.1:8765/tools/pcdt-chunks-viewer/index.html` (é necessário servir `llm/`, não só `llm/data/`, para o `fetch` ao manifest e aos JSONL funcionar).
+
 ### Vector store (Chroma + Ollama)
 
 Com os arquivos `chunks/pcdt/<nome>.chunks.jsonl` e o manifesto `pcdt_chunk_index.jsonl`, indexa os chunks em uma base Chroma em `vectorstore/chroma/` **na raiz do repositório** (fora de `llm/data/`, para não perder embeddings ao limpar dados de ingestão). Requer [Ollama](https://ollama.com/) em execução com o modelo de embeddings:
@@ -86,19 +117,6 @@ chroma browse pcdt --local             # terminal 2 — TUI da coleção
 ```
 
 Se o `browse` não funcionar, tente `chroma browse pcdt --local --path vectorstore/chroma`.
-
-### Visualizador de chunks PCDT (browser)
-
-Interface HTML estática em `[tools/pcdt-chunks-viewer/index.html](tools/pcdt-chunks-viewer/index.html)` (lista documentos a partir de `pcdt_chunk_index.jsonl`, navegação por chunk, PDF, modo raw/preview Markdown).
-
-Após `pip install -e .`, o comando a seguir sobe um servidor HTTP na raiz do pacote `llm/` e exibe a URL para o acessar o visualizador:
-
-```bash
-view-pcdt-chunks
-# opcional: --port 8765 --bind 127.0.0.1
-```
-
-Alternativa manual: `cd llm && python -m http.server 8765` e no browser abra `http://127.0.0.1:8765/tools/pcdt-chunks-viewer/index.html` (é necessário servir `llm/`, não só `llm/data/`, para o `fetch` ao manifest e aos JSONL funcionar).
 
 ### Dataset COVID Albert Einstein
 
