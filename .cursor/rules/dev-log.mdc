@@ -11,17 +11,18 @@ Alvo: só alterações **substanciais** (não refactors cosméticos).
 
 1. Ler `docs/dev-log/INDEX.md` (é curto).
 2. Perguntar: houve **decisão de arquitetura**, **contrato de pipeline** (caminhos, CLI, formatos), **mudança de comportamento** visível, ou **preferência explícita do utilizador**? Se sim → atualizar o índice.
-3. Se não → não adicionar ruído (typos, um ficheiro sem impacto).
+3. Se não → não adicionar ruído (typos, um arquivo sem impacto).
 
-## O que registar (uma linha na tabela)
+## O que registrar (uma linha na tabela)
 
 - **ID:** `slug-curto-kebab` (ex.: `vectorstore-raiz-repo`).
-- **Autor (opcional):** humano → valor de `git config user.name` (ou iniciais); agente/assistente → `agent:cursor` (prefixo `agent:` para `rg`/filtros). Omitir se irrelevante.
+- **Autor (opcional):** humano se tiver explicitamente tomado a decisão → valor de `git config user.name` (ou iniciais); agente/assistente → `agent:cursor` (prefixo `agent:` para `rg`/filtros). Omitir se irrelevante.
 - **Resumo:** ≤ 140 caracteres se possível; mencionar ficheiro/pasta chave quando útil.
+- **Revisão:** último commit git - hash e mensagem one-line
 
 ## Onde não registar
 
-- Detalhe longo: opcionalmente `docs/dev-log/decisions/YYYYMMDD-id.md` e uma linha no índice a apontar o ficheiro.
+- Detalhe longo: opcionalmente `docs/dev-log/decisions/YYYYMMDD-id.md` e uma linha no índice com o caminho do arquivo.
 
 ## Tom
 

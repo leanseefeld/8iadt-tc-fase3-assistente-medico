@@ -1,13 +1,25 @@
 # Dev log (índice compacto)
 
-Formato: uma linha por decisão relevante; mais detalhe só em `decisions/` quando necessário.
+Formato: uma linha por marco relevante; mais detalhe só em `decisions/` quando necessário.
 
-**Autor (opcional):** humano → `git config user.name` (curto); agente → `agent:cursor` (ou prefixo fixo `agent:`) para filtros/`rg` fáceis.
+**Autor:** `git:<email>` quando ligado a commits no histórico; `agent:cursor` quando for registo só do assistente (sem commit). Prefixos facilitam `rg`/filtros.
 
-| Data (ISO) | ID | Autor | Resumo |
-|------------|-----|-------|--------|
-| 2026-04-12 | dev-log-bootstrap | agent:cursor | Log em `docs/dev-log/`; regra `dev-log.mdc`; follow-up script limpeza + flag `llm/data` + `vectorstore/` (plano embeddings). |
-| 2026-04-12 | cursor-rule-report-and-wait | Preferência de fluxo: `.cursor/rules/report-and-wait-before-implement.mdc` — @ ou `/report-and-wait` no fim da mensagem para o agente reportar e aguardar antes de implementar. |
+**Revisão:** commit curto (7 hex) + assunto one-line do `git log`, conforme `.cursor/rules/dev-log.mdc`.
+
+## Overview (histórico git)
+
+Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `clinicalApi`; **pipeline RAG** com download de PCDTs, dataset COVID e ingestão PCDT linear; evolução para **extração MD a partir de PDF**, **chunking** e **visualizador** de chunks; **documentação** (relatório, referências) e **governação Cursor** (dev log + regras `dev-log` e `report-and-wait`).
+
+| Data (ISO) | ID | Autor | Resumo | Revisão |
+|------------|-----|-------|--------|---------|
+| 2026-04-02 | repo-spa-inicial | git:leander@nomadmacaw.com | Estrutura do repo, SPA, mocks, Docker, páginas, docs de referência, UI alinhada e `clinicalApi`. | `effc8e0` feat(frontend): align UI with reference and add clinicalApi facade |
+| 2026-04-06 | pipeline-pcdt-docs | git:leander@nomadmacaw.com | Download de PCDTs e documentação do pipeline RAG. | `7faa982` feat(pipeline-rag): download PCDTs and document pipeline |
+| 2026-04-06 | docs-relatorio | git:leander@nomadmacaw.com | Relatório de implementação em `docs/`. | `3128b97` docs: relatório de implementação |
+| 2026-04-07 | dataset-covid | git:leander@nomadmacaw.com | Download e extração do dataset COVID no pipeline. | `987e403` feat(pipeline-rag): download and extract COVID dataset |
+| 2026-04-08 | pcdt-ingest-linear | git:leander@nomadmacaw.com | Refactor da ingestão PCDT para fluxo linear. | `e749a15` refactor(pipeline-rag): ingestão PCDT linear |
+| 2026-04-12 | pcdt-pdf-chunk-viz | git:leander@nomadmacaw.com | Markdown a partir de PDFs, chunking PCDT e ferramenta de visualização de chunks. | `6fde7c4` feat: PCDT chunks visualizer |
+| 2026-04-12 | dev-log-regras-cursor | git:leander@nomadmacaw.com | Índice do dev log, regra `dev-log.mdc` e regra `report-and-wait-before-implement.mdc`. | `2843ab3` chore(cursor): add report-and-wait-before-implement rule |
+| 2026-04-12 | dev-log-sistema-adocao | Leander Seefeld | Criação do sistema (`docs/dev-log/`, `decisions/`, regra `dev-log.mdc`) e adoção formal: overview, marcos via `git log`, Autor `git:email` e coluna Revisão. | `5ea7645` docs(dev-log): regista criação e adoção do sistema de dev log |
 
 ## `decisions/` (opcional)
 
