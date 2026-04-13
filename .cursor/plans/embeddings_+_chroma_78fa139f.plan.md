@@ -21,7 +21,7 @@ todos:
     content: Testes unitários (filtro/parsing); atualizar llm/README.md se já documentar o pipeline (pull nomic + comando)
     status: pending
   - id: cleanup-script
-    content: "(adiado) Script CLI de limpeza — fora do âmbito desta entrega; ver secção Follow-up no corpo do plano."
+    content: (adiado) Script CLI de limpeza — fora do âmbito desta entrega; ver secção Follow-up no corpo do plano.
     status: cancelled
 isProject: false
 ---
