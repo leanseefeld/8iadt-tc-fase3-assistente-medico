@@ -1,0 +1,1 @@
+"""Esquemas Pydantic da API."""

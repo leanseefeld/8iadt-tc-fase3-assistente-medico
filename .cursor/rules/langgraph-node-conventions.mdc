@@ -1,0 +1,60 @@
+---
+description: Convenções para adicionar nós ao grafo LangGraph do backend. Aplicar sempre que tocar em backend/src/**/graph/.
+globs: backend/src/**/graph/**
+alwaysApply: false
+---
+
+# Convenções de nós LangGraph
+
+## Contrato async/sync
+
+| Nó faz | Como escrever |
+|--------|--------------|
+| Gera resposta final (texto ao cliente) | `async def` + `llm.astream` — emite `on_chat_model_stream` → tokens SSE |
+| Chama LLM internamente (refinamento, roteamento, grading) | `async def` + `llm.ainvoke` — async sem emitir tokens para o cliente |
+| I/O bloqueante (Chroma, DB, rede) | `def` síncrono — LangGraph roda em thread automaticamente |
+| Lógica pura | Sync ou async, indiferente |
+
+**Nunca** usar `llm.invoke` dentro de `async def` — bloqueia o event loop.  
+**Nunca** usar `llm.astream` em nó intermediário — seus tokens vazam para o cliente via `on_chat_model_stream`.
+
+### Exemplo: nó intermediário com LLM (refinamento de query)
+
+```python
+async def refine_query_node(state: ChatRAGState, settings: Settings) -> dict:
+    llm = _build_llm(settings)
+    result = await llm.ainvoke([SystemMessage(...), HumanMessage(state["query"])])
+    steps = list(state.get("reasoning_steps") or [])
+    steps.append(f"Query refinada: {result.content}")
+    return {"refined_query": result.content, "reasoning_steps": steps}
+```
+
+Resultado aparece no painel de raciocínio da UI. Nenhum token é emitido ao cliente durante este nó.
+
+## Metadados via campos de estado
+
+Nós escrevem metadados nos campos de estado (`sources`, `reasoning_steps`).  
+`chat.py` decide **o quê** e **quando** emitir para o cliente — nós não conhecem o protocolo SSE.
+
+```python
+# Correto: nó só atualiza estado
+def my_node(state: ChatRAGState) -> dict:
+    steps = list(state.get("reasoning_steps") or [])
+    steps.append("Etapa X concluída.")
+    return {"reasoning_steps": steps, "sources": [...]}
+
+# Errado: nó não deve emitir SSE nem conhecer o formato de resposta
+```
+
+## Não hardcodar nomes de nós em chat.py
+
+`chat.py` usa `on_chain_end` com o nome do nó para disparar metadados antes dos tokens.  
+Ao adicionar nós, atualizar o mapeamento em `chat.py` se necessário — ou mover metadados para campos emitidos no `on_chain_end` do nó correto.
+
+## Checklist para novo nó
+
+1. Escolher sync vs async conforme tabela acima.
+2. Escrever no(s) campo(s) de estado correto(s) (`retrieved_docs`, `sources`, `reasoning_steps`, `answer`).
+3. Adicionar em `chat_rag.py`: `workflow.add_node(...)` + `workflow.add_edge(...)`.
+4. Se o nó deve disparar metadados SSE antes dos tokens: adicionar case em `chat.py` para `on_chain_end` + `name="<nome_do_nó>"`.
+5. LLM node: usar `llm.astream` e acumular em `answer`; não usar `llm.invoke`.
