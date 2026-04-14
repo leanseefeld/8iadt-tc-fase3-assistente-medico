@@ -13,7 +13,7 @@ Alvo: só alterações **substanciais** (não refactors cosméticos).
 2. Perguntar: houve **decisão de arquitetura**, **contrato de pipeline** (caminhos, CLI, formatos), **mudança de comportamento** visível, ou **preferência explícita do utilizador**? Se sim → atualizar o índice.
 3. Se não → não adicionar ruído (typos, um arquivo sem impacto).
 
-## O que registrar (uma linha na tabela)
+## O que registrar (uma entrada na lista por data em `INDEX.md`)
 
 - **ID:** `slug-curto-kebab` (ex.: `vectorstore-raiz-repo`).
 - **Autor (opcional):** humano se tiver explicitamente tomado a decisão → valor de `git config user.name` (ou iniciais); agente/assistente → `agent:cursor` (prefixo `agent:` para `rg`/filtros). Omitir se irrelevante.
