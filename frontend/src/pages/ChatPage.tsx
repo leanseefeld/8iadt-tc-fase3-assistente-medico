@@ -1,21 +1,28 @@
 import { Send } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
+  clinicalApiUsesHttp,
   postAssistantChatMock,
   quickQuestionsForCid,
 } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
+import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  /** True enquanto tokens SSE estão chegando (modo HTTP). */
+  streaming?: boolean;
 }
 
 export function ChatPage() {
   const { activePatientId } = useAppSession();
   const { patient } = usePatientDetail(activePatientId);
+  const { showToast } = useToast();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sources, setSources] = useState<string[]>([]);
@@ -46,6 +53,63 @@ export function ChatPage() {
       { id: `u-${Date.now()}`, role: 'user', text: trimmed },
     ]);
     setInput('');
+
+    // --- Modo HTTP: SSE com atualização incremental do balão do assistente ---
+    if (clinicalApiUsesHttp()) {
+      const assistantId = `a-${Date.now()}`;
+      setMessages((m) => [
+        ...m,
+        { id: assistantId, role: 'assistant', text: '', streaming: true },
+      ]);
+      try {
+        const res = await postAssistantChatMock(activePatientId!, trimmed, {
+          onToken: (delta) => {
+            setMessages((m) =>
+              m.map((msg) =>
+                msg.id === assistantId
+                  ? { ...msg, text: msg.text + delta }
+                  : msg,
+              ),
+            );
+          },
+          onMeta: (src, steps) => {
+            setSources(src);
+            setReasoning(steps);
+          },
+          onError: (detail) => {
+            showToast(detail);
+          },
+        });
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === assistantId
+              ? { ...msg, text: res.text, streaming: false }
+              : msg,
+          ),
+        );
+        setSources(res.sources);
+        setReasoning(res.reasoning);
+        if (!res.text.trim()) {
+          setMessages((m) =>
+            m.map((msg) =>
+              msg.id === assistantId
+                ? {
+                    ...msg,
+                    text:
+                      '__FALLBACK__O assistente não devolveu texto. Verifique o backend e o Ollama.__',
+                    streaming: false,
+                  }
+                : msg,
+            ),
+          );
+        }
+      } catch {
+        setMessages((m) => m.filter((x) => x.id !== assistantId));
+      }
+      return;
+    }
+
+    // --- Modo memória (protótipo mock) ---
     const res = await postAssistantChatMock(activePatientId!, trimmed);
     setSources(res.sources);
     setReasoning(res.reasoning);
@@ -106,7 +170,17 @@ export function ChatPage() {
                       : 'bg-slate-100 text-slate-800'
                   }`}
                 >
-                  <p className="whitespace-pre-wrap">{msg.text}</p>
+                  <div className="[&>p]:mb-2 [&>p:last-child]:mb-0 [&>ul]:list-disc [&>ul]:pl-4 [&>ol]:list-decimal [&>ol]:pl-4 [&>pre]:bg-slate-800 [&>pre]:text-white [&>pre]:p-2 [&>pre]:rounded [&>pre]:my-2 [&>pre]:overflow-x-auto [&>code]:bg-slate-200 [&>code]:px-1 [&>code]:rounded">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {msg.text}
+                    </ReactMarkdown>
+                    {msg.streaming ? (
+                      <span
+                        className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-slate-500 align-middle"
+                        aria-hidden
+                      />
+                    ) : null}
+                  </div>
                 </div>
               </div>
             ),

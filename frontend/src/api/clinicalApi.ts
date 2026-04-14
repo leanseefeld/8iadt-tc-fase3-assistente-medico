@@ -1,35 +1,48 @@
 /**
  * API clínica: uma única entrada para o app.
- * Na carga do módulo escolhe implementação em memória (padrão) ou HTTP (futuro).
+ * Com `VITE_CLINICAL_API_HTTP=true`, apenas o **chat** usa HTTP/SSE; o restante continua em memória
+ * até as rotas CRUD existirem no backend.
  *
  * @see API_ASSUMPTIONS.md
  */
 import * as memory from '@/api/clinicalApi.memory';
 import * as http from '@/api/clinicalApi.http';
 import { quickQuestionsForCid } from '@/mocks/internal/chatMocks';
+import type { ChatStreamHandlers } from '@/api/sseChat';
 
-function useHttpTransport(): boolean {
+export type { ChatStreamHandlers };
+
+export function clinicalApiUsesHttp(): boolean {
   const v = import.meta.env.VITE_CLINICAL_API_HTTP;
   return v === 'true' || v === '1';
 }
 
-const impl = useHttpTransport() ? http : memory;
-
 export type PatchPatientBody = memory.PatchPatientBody;
 
-export const getCidListMock = impl.getCidListMock;
-export const getPatientsMock = impl.getPatientsMock;
-export const searchPatientsMock = impl.searchPatientsMock;
-export const createPatientMock = impl.createPatientMock;
-export const getPatientByIdMock = impl.getPatientByIdMock;
-export const patchPatientMock = impl.patchPatientMock;
-export const getAlertsMock = impl.getAlertsMock;
-export const patchAlertMock = impl.patchAlertMock;
-export const postAssistantChatMock = impl.postAssistantChatMock;
-export const postAssistantDecisionFlowMock = impl.postAssistantDecisionFlowMock;
-export const getUnresolvedAlertCountMock = impl.getUnresolvedAlertCountMock;
-export const getAlertsForPatientMock = impl.getAlertsForPatientMock;
-export const addAlertMock = impl.addAlertMock;
+export const getCidListMock = memory.getCidListMock;
+export const getPatientsMock = memory.getPatientsMock;
+export const searchPatientsMock = memory.searchPatientsMock;
+export const createPatientMock = memory.createPatientMock;
+export const reAdmitPatientMock = memory.reAdmitPatientMock;
+export const getPatientByIdMock = memory.getPatientByIdMock;
+export const patchPatientMock = memory.patchPatientMock;
+export const getAlertsMock = memory.getAlertsMock;
+export const patchAlertMock = memory.patchAlertMock;
+export const postAssistantDecisionFlowMock = memory.postAssistantDecisionFlowMock;
+export const getUnresolvedAlertCountMock = memory.getUnresolvedAlertCountMock;
+export const getAlertsForPatientMock = memory.getAlertsForPatientMock;
+export const addAlertMock = memory.addAlertMock;
+
+export async function postAssistantChatMock(
+  patientId: string,
+  message: string,
+  handlers?: ChatStreamHandlers,
+) {
+  if (clinicalApiUsesHttp()) {
+    return http.postAssistantChatMock(patientId, message, handlers);
+  }
+  return memory.postAssistantChatMock(patientId, message, handlers);
+}
 
 /** Lista de perguntas rápidas: função pura, igual em ambos os transportes. */
 export { quickQuestionsForCid };

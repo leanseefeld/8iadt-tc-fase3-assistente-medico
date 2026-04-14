@@ -172,22 +172,34 @@ export async function searchPatientsMock(query: string): Promise<Patient[]> {
   return getPatientsMock({ q: query });
 }
 
+function normalizeAge(age: number | undefined): number {
+  if (age === undefined || Number.isNaN(age)) {
+    return 45;
+  }
+  return Math.min(120, Math.max(0, age));
+}
+
 export async function createPatientMock(
   body: CreatePatientRequestBody,
 ): Promise<Patient> {
   await delay(280);
   const proto = getProtocolForCid(body.cid.code);
   const now = new Date().toISOString();
+  const name = body.name?.trim() || 'Paciente sem nome';
+  const bed = body.bed?.trim() || 'S/N';
+  const chiefComplaint = body.chiefComplaint?.trim() || 'Não informado';
+  const sex = body.sex ?? 'M';
+  const age = normalizeAge(body.age);
   const patient: Patient = {
     id: newId('pt'),
-    name: body.name.trim(),
-    age: body.age,
-    sex: body.sex,
-    bed: body.bed.trim(),
+    name,
+    age,
+    sex,
+    bed,
     status: 'admitted',
     admittedAt: now,
     cid: { ...body.cid },
-    chiefComplaint: body.chiefComplaint.trim(),
+    chiefComplaint,
     comorbidities: body.comorbidities ?? [],
     currentMedications: parseMedications(body.currentMedications),
     vitalSigns: defaultVitalSigns(),
@@ -205,6 +217,52 @@ export async function createPatientMock(
   applyProtocolToPatientCore(patient, body.cid.code);
   maybeAlertsOnAdmission(patient, proto);
   mockServerState.patients.push(patient);
+  return patient;
+}
+
+export type ReAdmitOverrides = {
+  bed?: string;
+  chiefComplaint?: string;
+  comorbidities?: string[];
+  /** Texto multilinha; mesmo formato que createPatientMock. */
+  currentMedications?: string;
+};
+
+/** Readmite paciente com alta: reaplica protocolo e alertas de admissão (mock). */
+export async function reAdmitPatientMock(
+  patientId: string,
+  overrides?: ReAdmitOverrides,
+): Promise<Patient | null> {
+  await delay(280);
+  const patient = findPatient(patientId);
+  if (!patient || patient.status !== 'discharged') {
+    return null;
+  }
+  const proto = getProtocolForCid(patient.cid.code);
+  const now = new Date().toISOString();
+  if (overrides?.bed?.trim()) {
+    patient.bed = overrides.bed.trim();
+  }
+  if (overrides?.chiefComplaint?.trim()) {
+    patient.chiefComplaint = overrides.chiefComplaint.trim();
+  }
+  if (overrides?.comorbidities != null) {
+    patient.comorbidities = [...overrides.comorbidities];
+  }
+  if (overrides?.currentMedications !== undefined) {
+    patient.currentMedications = parseMedications(overrides.currentMedications);
+  }
+  patient.status = 'admitted';
+  patient.admittedAt = now;
+  patient.vitalSigns = defaultVitalSigns();
+  applyProtocolToPatientCore(patient, patient.cid.code);
+  maybeAlertsOnAdmission(patient, proto);
+  patient.agentLog.push({
+    step: 'readmission',
+    status: 'done',
+    detail: 'Readmissão — protocolo aplicado (mock).',
+    timestamp: now,
+  });
   return patient;
 }
 
@@ -360,6 +418,7 @@ export async function patchAlertMock(
 export async function postAssistantChatMock(
   patientId: string,
   message: string,
+  _handlers?: unknown,
 ): Promise<ChatResponse> {
   await delay(400);
   const patient = findPatient(patientId);

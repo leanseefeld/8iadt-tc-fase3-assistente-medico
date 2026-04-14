@@ -94,12 +94,16 @@ export interface DecisionFlowResponse {
 }
 
 export interface CreatePatientRequestBody {
-  name: string;
-  age: number;
-  sex: PatientSex;
-  bed: string;
+  /** Omisso no mock → "Paciente sem nome". */
+  name?: string;
+  /** Omisso ou inválido no mock → 45. */
+  age?: number;
+  sex?: PatientSex;
+  /** Omisso no mock → "S/N". */
+  bed?: string;
   cid: Cid;
-  chiefComplaint: string;
+  /** Omisso no mock → "Não informado". */
+  chiefComplaint?: string;
   comorbidities?: string[];
   /** Texto multilinha do formulário; normalizado para array no mock */
   currentMedications?: string;

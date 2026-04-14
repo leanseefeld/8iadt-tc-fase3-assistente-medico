@@ -1,10 +1,14 @@
 # Premissas de API REST (protótipo)
 
-Contrato alinhado à [referencia-frontend.md](../docs/referencia-frontend.md). **Hoje** as rotas abaixo são implementadas via `src/api/clinicalApi.ts` (por padrão delega a `src/api/clinicalApi.memory.ts` + `src/api/mockServerState.ts`). Com `VITE_CLINICAL_API_HTTP=true`, delega a `src/api/clinicalApi.http.ts` (fetch — a implementar). Quando existir backend real, a mesma forma de payloads deve ser preservada na medida do possível.
+Contrato alinhado à [referencia-frontend.md](../docs/referencia-frontend.md). **Hoje** as rotas abaixo são implementadas via `src/api/clinicalApi.ts`: por padrão tudo delega a `src/api/clinicalApi.memory.ts` + `src/api/mockServerState.ts`.
+
+Com `VITE_CLINICAL_API_HTTP=true`, apenas **`POST /assistant/chat`** passa a usar `src/api/clinicalApi.http.ts` (fetch + SSE). As demais operações continuam em **memória** até existirem endpoints reais — evita quebrar check-in, dashboard, etc.
 
 ## Sessão (`activePatientId`)
 
 Não faz parte do contrato HTTP no protótipo: o cliente mantém o paciente ativo no **contexto React**. O backend futuro pode expor `GET/PATCH /session`.
+
+**Nota (chat):** o `patientId` é enviado no corpo do chat para alinhamento futuro; o backend atual **não** injeta contexto clínico do paciente no RAG (planeado após CRUD).
 
 ---
 
@@ -185,13 +189,41 @@ Corpo: `{ "resolved": boolean }`
 
 ### 7. `POST /assistant/chat`
 
-Corpo:
+**Corpo (JSON no fio — camelCase):**
 
 ```json
 { "patientId": "uuid", "message": "string" }
 ```
 
-**Resposta 200:** `ChatResponse` (perguntas não mapeadas: `text` vazio e uso de mensagem de fallback na UI)
+O servidor FastAPI aceita `patientId` (alias); internamente pode mapear para `patient_id`.
+
+**Modo principal — SSE (streaming):**
+
+- Cabeçalho: `Accept: text/event-stream`
+- Corpo: `Content-Type: application/json` com o JSON acima
+- Resposta: `200` com `Content-Type: text/event-stream`; fluxo de eventos Server-Sent Events:
+
+| Nome do evento (`event:`) | Corpo JSON (`data:`) | Descrição |
+| ------------------------- | -------------------- | --------- |
+| `sources` | `{ "sources": string[] }` | Rótulos das fontes PCDT recuperadas |
+| `reasoning` | `{ "steps": string[] }` | Traço curto da etapa de recuperação (no cliente mapeado para o painel «raciocínio») |
+| `token` | `{ "content": string }` | Fragmento incremental da resposta do modelo |
+| `done` | `{}` | Fim do fluxo com sucesso |
+| `error` | `{ "detail": string }` | Erro durante recuperação ou geração |
+
+O cliente (`src/api/sseChat.ts`) agrega os `token` em `ChatResponse.text` e usa `sources` + `steps` como `sources` e `reasoning`.
+
+**Modo alternativo — JSON (bloqueante):**
+
+- Sem `Accept: text/event-stream` (ex.: `Accept: application/json` ou omisso, conforme implementação do cliente)
+- **Resposta 200:** corpo JSON igual a `ChatResponse` (`text`, `sources`, `reasoning`)
+
+**Erros HTTP:** ex. **503** se Chroma/Ollama indisponíveis na inicialização ou falha grave na invocação do grafo (detalhe em `detail` quando aplicável).
+
+**Premissas alteradas em relação ao protótipo só-mock:**
+
+- Perguntas «não mapeadas» deixam de ser só fallback na UI: com backend ativo, o modelo responde com RAG sobre PCDTs indexados em `vectorstore/chroma`.
+- `conversationId`: reservado para versões futuras; não é obrigatório na v1.
 
 ---
 
@@ -211,7 +243,9 @@ Simula execução do grafo para o paciente atual (log + metadados de branch seps
 
 ## Base URL
 
-Variável: `VITE_API_BASE_URL` (ver `src/api/client.ts`). Padrão de documentação: `http://localhost:3000/api`.
+Variável: `VITE_API_BASE_URL` (ver `src/api/client.ts`). Padrão documental e no código: **`http://localhost:8001/api`** (servidor FastAPI local, prefixo `/api`).
+
+Ativar chat real: `VITE_CLINICAL_API_HTTP=true` e backend a correr (ver `backend/README.md`).
 
 ## Mapeamento futuro backend
 

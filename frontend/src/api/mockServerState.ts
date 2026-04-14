@@ -1,5 +1,6 @@
 import type { Alert } from '@/types/alert';
 import type { Patient } from '@/types/domain';
+import { buildSeedDischargedPatients } from '@/mocks/internal/seedDischargedPatients';
 
 export interface MockServerState {
   patients: Patient[];
@@ -22,12 +23,12 @@ function initialAlerts(): Alert[] {
 }
 
 export const mockServerState: MockServerState = {
-  patients: [],
+  patients: buildSeedDischargedPatients(),
   alerts: initialAlerts(),
 };
 
 /** Útil em testes ou ao reiniciar a demo. */
 export function resetMockServer(): void {
-  mockServerState.patients = [];
+  mockServerState.patients = buildSeedDischargedPatients();
   mockServerState.alerts = initialAlerts();
 }
