@@ -1,6 +1,6 @@
 Python script for a langgraph + langchain + gemma agent that fetches patient information from a database, detects pending exams, fires alerts to a medical team if urgent intervention is needed for a patient according to hospital protocols (rag). Agent should stop from prescribing medication to patients. Doctor has the final say before requesting exams. Language is appropriate.
 
------
+---
 
 This is a highly sophisticated use case that requires a combination of complex state management, specialized tool use, and robust prompt engineering to 
 ensure safety and adherence to hospital protocols.
@@ -20,6 +20,7 @@ pip install langchain langgraph langchain-core pydantic google-genai
 ```
 
 You must also set up your API key:
+
 ```bash
 export GEMMA_API_KEY="YOUR_GEMMA_API_KEY"
 ```
