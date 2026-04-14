@@ -110,9 +110,58 @@ Isso evidencia o desalinhamento entre a estimativa de tokens do módulo `chunks.
 
 **Recomendação:** substituir o motor de embedding por um que lide melhor com o vocabulário utilizado nos PCDTs.
 
-Foi criado também um script para fazer a consulta dos documentos ingeridos: [example_vectorstore_rag_query.py](../llm/scripts/example_vectorstore_rag_query.py).
+Foi criado também um script para fazer a consulta dos documentos ingeridos: [example_vectorstore_rag_query.py](https://github.com/leanseefeld/8iadt-tc-fase3-assistente-medico/blob/9171d61704174b75abc8816912182d622a5b6ab0/llm/scripts/example_vectorstore_rag_query.py).
+<!-- usando link para versão específica, tornando seguro excluir este arquivo -->
 
 É necessário ter ingerido pelo menos um documento com o comando `build-vectorstore` para fazer o teste.
 Neste script é feito uma busca simples, onde a query é convertida diretamente em embeddings e feito a busca no espaço vetorial. Isso resultou em chunks importantes não sendo retornados, mesmo com um k=10.
 
 Na implementação real, é indicado aplicar uma otimização de consulta, que identique os documentos relevantes de antemão e inclua cabeçalhos do metadata (hoje, apenas o conteúdo textual do chunk é consultado).
+
+# Backend
+
+Precisamos de um serviço que irá executar nosso agente LangGraph e também para gerenciar operações CRUD do nosso EMR (Electronic Medical Records) - de cadastro de pacientes à registro de solicitações e resultados de exames.
+
+A pasta `/backend/` passa assim a abrigar o `assistente_medico_api`- um projeto FastAPI encapsulado que pode ser executado com:
+
+```bash
+uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Este serviço consome a `/vectorstore/chroma` criada pelo comando `build-embeddings` da seção anterior e usa o pacote `assistente-medico-llm` (`/llm`) para inicializar os embeddings com a mesma configuração em que foram gerados.
+
+## LangGraph - Chat com Assistente
+
+Em primeiro momento, criamos um LangGraph simples em [`assistente_medico_api/graph/chat_rag.py`](../backend/src/assistente_medico_api/graph/chat_rag.py) com um _retriever_ e um _generator_, recebendo uma mensagem do usuário e a usando diretamente para fazer a busca na base vetorizada.
+
+```
++-----------+  
+| __start__ |  
++-----------+  
+      *        
+      *        
+      *        
++----------+   
+| retrieve |   
++----------+   
+      *        
+      *        
+      *        
++----------+   
+| generate |   
++----------+   
+      *        
+      *        
+      *        
+ +---------+   
+ | __end__ |   
+ +---------+   
+ ```
+
+A geração de texto é feita com Ollama + Gemma4:e4b (8B de parâmetros) e o conteúdo buscado deixa muito a desejar. Neste momento ainda não é feito nenhum tipo de tratamento para os termos da busca e nem são usados os campos de metadados dos chunks para refinar o escopo. Há ainda a questão com possível baixa qualidade dos embeddings utilizados para nosso contexto.
+
+Para facilitar os testes, integramos a aba "Chat com assistente" do nosso protótipo com a nova API, e pudemos verificar a geração adequada de respostas onde a busca foi bem sucedida, e resposta honesta do modelo quando não pôde responder perguntas - conforme orientação passada no _system prompt_ utilizado. Entregamos, também, a "linha de raciocínio" do agente (atualmente alimentada pelos nós, indicando a busca feita na base) e as fontes consultadas (obtidas diretamente do retorno da consulta Chroma).
+
+Para reduzir o tempo de espera até a resposta ser gerada, executamos o grafo LangGraph de forma assíncrona (`graph.astream_events`) e capturamos eventos (`on_chain_end`, `on_chat_model_stream`) para enviar tokens para o cliente front-end conforme são gerados (cabeçalho `Accepts: text/event-stream`).
+
+![Chat com fontes e mensagem sendo gerada](./assets/Screenshot%202026-04-14%20at%2016.49.38.png)
