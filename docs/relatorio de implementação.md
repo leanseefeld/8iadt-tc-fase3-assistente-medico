@@ -97,8 +97,7 @@ Há conteúdo potencialmente redundante (como página inicial de cada documento,
 
 ### Embeddings em Vectorstore/Chroma
 
-```
-sh
+```sh
 build-vectorstore
 ```
 
