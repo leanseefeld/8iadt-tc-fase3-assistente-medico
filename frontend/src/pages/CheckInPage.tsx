@@ -57,7 +57,6 @@ export function CheckInPage() {
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [sex, setSex] = useState<PatientSex>('M');
-  const [bed, setBed] = useState('');
   const [chiefComplaint, setChiefComplaint] = useState('');
   const [comorbidities, setComorbidities] = useState<string[]>([]);
   const [medications, setMedications] = useState('');
@@ -151,7 +150,6 @@ export function CheckInPage() {
       setComorbPickerOpen(false);
       setName('');
       setAge('');
-      setBed('');
       setChiefComplaint('');
       setComorbidities([]);
       setMedications('');
@@ -213,7 +211,6 @@ export function CheckInPage() {
         name: trimmedName,
         age: ageNum,
         sex,
-        bed: bed.trim() || undefined,
         cid,
         chiefComplaint: chiefComplaint.trim() || undefined,
         comorbidities,
@@ -304,12 +301,6 @@ export function CheckInPage() {
                     <dd className="text-right text-slate-800">
                       {selectedReturn.age} ·{' '}
                       {selectedReturn.sex === 'M' ? 'Masc.' : 'Fem.'}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-slate-500">Último leito (histórico)</dt>
-                    <dd className="text-right text-slate-800">
-                      {selectedReturn.bed}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-4">
@@ -417,16 +408,6 @@ export function CheckInPage() {
                 </select>
               </div>
             </div>
-            <div>
-              <label className="text-sm font-medium text-slate-700">Leito</label>
-              <input
-                value={bed}
-                onChange={(e) => setBed(e.target.value)}
-                placeholder="vazio → S/N (mock)"
-                className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
-              />
-            </div>
-
             <div ref={cidPickerRef} className="relative">
               <label className="text-sm font-medium text-slate-700">
                 CID principal
@@ -482,14 +463,14 @@ export function CheckInPage() {
 
             <div>
               <label className="text-sm font-medium text-slate-700">
-                Queixa principal
+                Observações:
               </label>
               <textarea
                 maxLength={300}
                 rows={3}
                 value={chiefComplaint}
                 onChange={(e) => setChiefComplaint(e.target.value)}
-                placeholder="vazio → Não informado (mock)"
+                placeholder="Escreva uma observação"
                 className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
               />
               <p className="mt-0.5 text-xs text-slate-500">
