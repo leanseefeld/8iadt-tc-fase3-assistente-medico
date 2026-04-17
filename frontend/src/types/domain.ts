@@ -66,7 +66,6 @@ export interface Patient {
   name: string;
   age: number;
   sex: PatientSex;
-  bed: string;
   status: PatientStatus;
   admittedAt: string;
   cid: Cid;
@@ -100,7 +99,6 @@ export interface CreatePatientRequestBody {
   age?: number;
   sex?: PatientSex;
   /** Omisso no mock → "S/N". */
-  bed?: string;
   cid: Cid;
   /** Omisso no mock → "Não informado". */
   chiefComplaint?: string;

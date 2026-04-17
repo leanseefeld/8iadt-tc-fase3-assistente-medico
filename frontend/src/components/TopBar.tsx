@@ -91,10 +91,6 @@ export function TopBar() {
               <dd className="font-medium text-slate-800">{patient.age} anos</dd>
             </div>
             <div>
-              <dt className="text-xs text-slate-500">Leito</dt>
-              <dd className="font-medium text-slate-800">{patient.bed}</dd>
-            </div>
-            <div>
               <dt className="text-xs text-slate-500">Admissão</dt>
               <dd className="font-medium text-slate-800">
                 {formatAdmission(patient.admittedAt)}

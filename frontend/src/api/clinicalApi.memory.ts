@@ -186,7 +186,6 @@ export async function createPatientMock(
   const proto = getProtocolForCid(body.cid.code);
   const now = new Date().toISOString();
   const name = body.name?.trim() || 'Paciente sem nome';
-  const bed = body.bed?.trim() || 'S/N';
   const chiefComplaint = body.chiefComplaint?.trim() || 'Não informado';
   const sex = body.sex ?? 'M';
   const age = normalizeAge(body.age);
@@ -195,7 +194,6 @@ export async function createPatientMock(
     name,
     age,
     sex,
-    bed,
     status: 'admitted',
     admittedAt: now,
     cid: { ...body.cid },
@@ -221,7 +219,6 @@ export async function createPatientMock(
 }
 
 export type ReAdmitOverrides = {
-  bed?: string;
   chiefComplaint?: string;
   comorbidities?: string[];
   /** Texto multilinha; mesmo formato que createPatientMock. */
@@ -240,9 +237,6 @@ export async function reAdmitPatientMock(
   }
   const proto = getProtocolForCid(patient.cid.code);
   const now = new Date().toISOString();
-  if (overrides?.bed?.trim()) {
-    patient.bed = overrides.bed.trim();
-  }
   if (overrides?.chiefComplaint?.trim()) {
     patient.chiefComplaint = overrides.chiefComplaint.trim();
   }
@@ -278,7 +272,6 @@ export type PatchPatientBody = Partial<
     | 'status'
     | 'chiefComplaint'
     | 'comorbidities'
-    | 'bed'
     | 'vitalSigns'
   >
 > & {
@@ -297,9 +290,6 @@ export async function patchPatientMock(
     return null;
   }
 
-  if (patch.bed != null) {
-    patient.bed = patch.bed;
-  }
   if (patch.chiefComplaint != null) {
     patient.chiefComplaint = patch.chiefComplaint;
   }

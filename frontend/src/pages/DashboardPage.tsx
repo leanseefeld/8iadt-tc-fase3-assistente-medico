@@ -145,7 +145,6 @@ export function DashboardPage() {
           <p className="text-sm text-slate-600">
             {patient.sex === 'F' ? 'Feminino' : 'Masculino'}, {patient.age} anos
           </p>
-          <p className="mt-1 text-sm">Leito {patient.bed}</p>
           <button
             type="button"
             onClick={() => setCidOpen(true)}
