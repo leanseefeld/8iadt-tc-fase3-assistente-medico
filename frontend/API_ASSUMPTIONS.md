@@ -75,7 +75,7 @@ Não faz parte do contrato HTTP no protótipo: o cliente mantém o paciente ativ
 | `status`             | `admitted` \| `discharged`                                           |
 | `admittedAt`         | string (ISO 8601)                                                    |
 | `cid`                | `Cid`                                                                |
-| `chiefComplaint`     | string                                                               |
+| `observations`     | string                                                               |
 | `comorbidities`      | string[]                                                             |
 | `currentMedications` | string[] (itens normalizados a partir do texto do check-in)        |
 | `vitalSigns`         | `VitalSigns`                                                         |
@@ -137,7 +137,7 @@ Admissão (Página 0). Corpo JSON alinhado ao formulário:
 | `sex`                 | `M` \| `F` | sim         |
 | `bed`                 | string      | sim         |
 | `cid`                 | `Cid`       | sim         |
-| `chiefComplaint`      | string      | sim         |
+| `observations`      | string      | sim         |
 | `comorbidities`       | string[]    | não         |
 | `currentMedications`  | string      | não (multilinha → split em array no servidor) |
 
@@ -159,7 +159,7 @@ O servidor aplica o protocolo mock do CID: preenche `exams`, `suggestedItems`, `
 
 Corpo JSON **parcial**. Campos de primeiro nível suportados (lista mínima do protótipo):
 
-- `cid`, `status`, `chiefComplaint`, `comorbidities`, `currentMedications`, `vitalSigns`, `bed`, etc.
+- `cid`, `status`, `observations`, `comorbidities`, `currentMedications`, `vitalSigns`, `bed`, etc.
 - **`exams`**: array de objetos `{ id, ...campos }` — **merge por `id`**: cada elemento atualiza o exame existente com os campos enviados.
 - **`suggestedItems`**: idem — merge por `id` para aceitar / modificar / rejeitar / alterar `description`.
 

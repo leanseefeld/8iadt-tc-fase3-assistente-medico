@@ -91,8 +91,8 @@ export function SuggestedActionsPage() {
         </p>
         <p className="mt-2 text-sm leading-relaxed text-slate-700">
           Paciente internado com queixa principal descrita no check-in. Contexto
-          simulado para demonstração: {p.chiefComplaint.slice(0, 200)}
-          {p.chiefComplaint.length > 200 ? '…' : ''}
+          simulado para demonstração: {p.observations.slice(0, 200)}
+          {p.observations.length > 200 ? '…' : ''}
         </p>
         <p className="mt-3 text-sm text-teal-800">
           <a

@@ -69,7 +69,7 @@ export interface Patient {
   status: PatientStatus;
   admittedAt: string;
   cid: Cid;
-  chiefComplaint: string;
+  observations: string;
   comorbidities: string[];
   currentMedications: string[];
   vitalSigns: VitalSigns;
@@ -101,7 +101,7 @@ export interface CreatePatientRequestBody {
   /** Omisso no mock → "S/N". */
   cid: Cid;
   /** Omisso no mock → "Não informado". */
-  chiefComplaint?: string;
+  observations?: string;
   comorbidities?: string[];
   /** Texto multilinha do formulário; normalizado para array no mock */
   currentMedications?: string;

@@ -49,7 +49,7 @@ export function CheckInPage() {
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [sex, setSex] = useState<PatientSex>('M');
-  const [chiefComplaint, setChiefComplaint] = useState('');
+  const [observations, setChiefComplaint] = useState('');
   const [comorbidities, setComorbidities] = useState<string[]>([]);
   const [comorbidityOptions, setComorbidityOptions] = useState<ComorbidityOption[]>([]);
   const [configLoading, setConfigLoading] = useState(true);
@@ -233,7 +233,7 @@ export function CheckInPage() {
         age: ageNum,
         sex,
         cid,
-        chiefComplaint: chiefComplaint.trim() || undefined,
+        observations: observations.trim() || undefined,
         comorbidities,
         currentMedications: medications,
       });
@@ -333,7 +333,7 @@ export function CheckInPage() {
                   <div className="border-t border-slate-200 pt-2">
                     <dt className="text-slate-500">Queixa (histórico)</dt>
                     <dd className="mt-1 text-slate-800">
-                      {selectedReturn.chiefComplaint}
+                      {selectedReturn.observations}
                     </dd>
                   </div>
                 </dl>
@@ -489,13 +489,13 @@ export function CheckInPage() {
               <textarea
                 maxLength={300}
                 rows={3}
-                value={chiefComplaint}
+                value={observations}
                 onChange={(e) => setChiefComplaint(e.target.value)}
                 placeholder="Escreva uma observação"
                 className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
               />
               <p className="mt-0.5 text-xs text-slate-500">
-                {chiefComplaint.length}/300
+                {observations.length}/300
               </p>
             </div>
             <div ref={comorbPickerRef} className="relative">

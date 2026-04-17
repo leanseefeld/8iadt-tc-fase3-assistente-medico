@@ -45,7 +45,7 @@ interface Patient {
     code: string;   // ex: "L40.5"
     label: string;  // ex: "Artrite Psoriásica"
   };
-  chiefComplaint: string;
+  observations: string;
   comorbidities: string[];   // ex: ["HAS", "DM2"]
   currentMedications: string[];
   vitalSigns: VitalSigns;

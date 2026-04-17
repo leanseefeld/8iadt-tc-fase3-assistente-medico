@@ -186,7 +186,7 @@ export async function createPatientMock(
   const proto = getProtocolForCid(body.cid.code);
   const now = new Date().toISOString();
   const name = body.name?.trim() || 'Paciente sem nome';
-  const chiefComplaint = body.chiefComplaint?.trim() || 'Não informado';
+  const observations = body.observations?.trim() || 'Não informado';
   const sex = body.sex ?? 'M';
   const age = normalizeAge(body.age);
   const patient: Patient = {
@@ -197,7 +197,7 @@ export async function createPatientMock(
     status: 'admitted',
     admittedAt: now,
     cid: { ...body.cid },
-    chiefComplaint,
+    observations,
     comorbidities: body.comorbidities ?? [],
     currentMedications: parseMedications(body.currentMedications),
     vitalSigns: defaultVitalSigns(),
@@ -219,7 +219,7 @@ export async function createPatientMock(
 }
 
 export type ReAdmitOverrides = {
-  chiefComplaint?: string;
+  observations?: string;
   comorbidities?: string[];
   /** Texto multilinha; mesmo formato que createPatientMock. */
   currentMedications?: string;
@@ -237,8 +237,8 @@ export async function reAdmitPatientMock(
   }
   const proto = getProtocolForCid(patient.cid.code);
   const now = new Date().toISOString();
-  if (overrides?.chiefComplaint?.trim()) {
-    patient.chiefComplaint = overrides.chiefComplaint.trim();
+  if (overrides?.observations?.trim()) {
+    patient.observations = overrides.observations.trim();
   }
   if (overrides?.comorbidities != null) {
     patient.comorbidities = [...overrides.comorbidities];
@@ -270,7 +270,7 @@ export type PatchPatientBody = Partial<
     Patient,
     | 'cid'
     | 'status'
-    | 'chiefComplaint'
+    | 'observations'
     | 'comorbidities'
     | 'vitalSigns'
   >
@@ -290,8 +290,8 @@ export async function patchPatientMock(
     return null;
   }
 
-  if (patch.chiefComplaint != null) {
-    patient.chiefComplaint = patch.chiefComplaint;
+  if (patch.observations != null) {
+    patient.observations = patch.observations;
   }
   if (patch.comorbidities != null) {
     patient.comorbidities = patch.comorbidities;
