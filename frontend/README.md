@@ -55,8 +55,8 @@ docker build --build-arg VITE_API_BASE_URL=https://api.exemplo.com -t assistente
 
 - `src/layouts/AppLayout.tsx` — shell (sidebar + barra + conteúdo)
 - `src/components/` — barra superior, busca, alertas, badge de internação
-- `src/api/clinicalApi.ts` — fachada da API (memória por padrão; HTTP com `VITE_CLINICAL_API_HTTP=true`)
-- `src/api/clinicalApi.memory.ts` — implementação in-memory + atrasos simulados
+- `src/api/clinicalApi.ts` — fachada da API consumindo backend HTTP
+- `src/api/clinicalApi.*.http.ts` — wrappers de endpoints REST (pacientes, alertas, chat, exames)
 
 ## Scripts npm
 

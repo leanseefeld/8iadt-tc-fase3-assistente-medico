@@ -21,6 +21,13 @@ export type ExamStatus = 'pending' | 'completed' | 'critical';
 
 export type ExamSource = 'protocol' | 'manual';
 
+export interface ExamAttachment {
+  name: string;
+  mime: string;
+  size: number;
+  path: string;
+}
+
 export interface Exam {
   id: string;
   name: string;
@@ -30,6 +37,7 @@ export interface Exam {
   interpretation?: string;
   source: ExamSource;
   protocolRef?: string;
+  attachments?: ExamAttachment[];
 }
 
 export type SuggestedActionType =

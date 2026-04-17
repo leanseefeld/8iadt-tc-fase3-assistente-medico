@@ -30,23 +30,27 @@ export function AlertsPage() {
   const [resolvedOpen, setResolvedOpen] = useState(false);
 
   const load = useCallback(async () => {
-    const raw = await getAlertsMock();
-    let list = raw;
-    if (sevFilter !== 'all') {
-      list = list.filter((a) => a.severity === sevFilter);
+    try {
+      const raw = await getAlertsMock();
+      let list = raw;
+      if (sevFilter !== 'all') {
+        list = list.filter((a) => a.severity === sevFilter);
+      }
+      if (teamFilter !== 'all') {
+        list = list.filter(
+          (a) => a.team === teamFilter || a.team === 'all',
+        );
+      }
+      setAllAlerts(list);
+      const patients = await getPatientsMock();
+      const map: Record<string, string> = { system: 'Sistema' };
+      for (const p of patients) {
+        map[p.id] = p.name;
+      }
+      setPatientNames(map);
+    } catch (err) {
+      console.error('Erro ao carregar alertas:', err);
     }
-    if (teamFilter !== 'all') {
-      list = list.filter(
-        (a) => a.team === teamFilter || a.team === 'all',
-      );
-    }
-    setAllAlerts(list);
-    const patients = await getPatientsMock();
-    const map: Record<string, string> = { system: 'Sistema' };
-    for (const p of patients) {
-      map[p.id] = p.name;
-    }
-    setPatientNames(map);
   }, [sevFilter, teamFilter]);
 
   useEffect(() => {

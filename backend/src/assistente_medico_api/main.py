@@ -6,8 +6,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from assistente_medico_api.api.alerts import router as alerts_router
+from assistente_medico_api.api.cids import router as cids_router
 from assistente_medico_api.api.chat import router as chat_router
 from assistente_medico_api.api.comorbidities import router as comorbidities_router
+from assistente_medico_api.api.patients import router as patients_router
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
 
@@ -56,6 +59,9 @@ def create_app() -> FastAPI:
     )
     app.include_router(chat_router, prefix="/api")
     app.include_router(comorbidities_router, prefix="/api")
+    app.include_router(cids_router, prefix="/api")
+    app.include_router(patients_router, prefix="/api")
+    app.include_router(alerts_router, prefix="/api")
     return app
 
 

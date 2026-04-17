@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     )
     chroma_collection: str = "pcdt"
     retrieval_k: int = 6
+    database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
+    uploads_dir: Path = Field(
+        default=Path("./uploads"),
+        description="Diretório para uploads manuais de exames.",
+    )
     llm_stream_timeout_s: float = Field(
         default=120.0,
         description="Timeout (segundos) para o streaming do nó de geração via Ollama.",

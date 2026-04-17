@@ -79,3 +79,9 @@ llm/data/
 
 # Vector store local (Chroma na raiz do repo; não versionar artefactos pesados).
 vectorstore/
+
+# Banco de dados local (SQLite na raiz do repo; não versionar artefactos pesados).
+assistente_medico.db
+
+# Logs e artefatos temporários
+uploads/

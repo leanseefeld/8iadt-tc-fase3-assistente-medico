@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Plus, Upload, Download, Trash2 } from 'lucide-react';
 import {
   addAlertMock,
   patchPatientMock,
 } from '@/api/clinicalApi';
+import { createExamHttp, uploadExamFileHttp } from '@/api/clinicalApi.exams.http';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
@@ -22,6 +24,11 @@ export function ExamsPage() {
   const [resultValue, setResultValue] = useState('');
   const [resultUnit, setResultUnit] = useState('mg/dL');
   const [criticalFlag, setCriticalFlag] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [newExamName, setNewExamName] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filtered = useMemo(() => {
     if (!patient) {
@@ -105,12 +112,127 @@ export function ExamsPage() {
     showToast('Notificação registrada.');
   }
 
+  async function createExam() {
+    if (!patient || !newExamName.trim()) {
+      showToast('Por favor, insira o nome do exame.');
+      return;
+    }
+    
+    try {
+      setIsCreating(true);
+      await createExamHttp(patient.id, newExamName.trim());
+      await refetch();
+      setCreateModalOpen(false);
+      setNewExamName('');
+      showToast('Exame criado com sucesso.');
+    } catch (error) {
+      console.error('Erro ao criar exame:', error);
+      showToast('Erro ao criar exame.');
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  async function handleFileUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || !patient || !selected) {
+      return;
+    }
+
+    try {
+      setIsUploading(true);
+      const updatedExam = await uploadExamFileHttp(patient.id, selected.id, file);
+      setSelected(updatedExam);
+      await refetch();
+      showToast('Arquivo enviado com sucesso.');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    } catch (error) {
+      console.error('Erro ao fazer upload:', error);
+      showToast('Erro ao enviar arquivo.');
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  function formatFileSize(bytes?: number): string {
+    if (!bytes) return 'Tamanho desconhecido';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  function getFileIcon(mime?: string): string {
+    if (!mime) return '📄';
+    if (mime.includes('pdf')) return '📕';
+    if (mime.includes('image')) return '🖼️';
+    if (mime.includes('word')) return '📘';
+    if (mime.includes('sheet')) return '📗';
+    return '📄';
+  }
+
+  async function downloadFile(attachmentPath: string, fileName: string) {
+    if (!attachmentPath || !fileName) {
+      showToast('Arquivo não disponível para download.');
+      return;
+    }
+
+    try {
+      const response = await fetch(attachmentPath);
+      if (!response.ok) {
+        throw new Error('Falha ao fazer download');
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error('Erro ao fazer download:', error);
+      showToast('Erro ao fazer download do arquivo.');
+    }
+  }
+
+  async function deleteAttachment(index: number) {
+    if (!selected || !selected.attachments) {
+      return;
+    }
+
+    try {
+      const updatedAttachments = selected.attachments.filter((_, i) => i !== index);
+      const updatedExam = { ...selected, attachments: updatedAttachments };
+      setSelected(updatedExam);
+      
+      // Aqui você poderia fazer uma chamada de API para deletar o arquivo no backend
+      // Por enquanto, apenas atualizamos o estado local
+      showToast('Arquivo removido.');
+    } catch (error) {
+      console.error('Erro ao remover arquivo:', error);
+      showToast('Erro ao remover arquivo.');
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4 lg:flex-row">
       <div className="min-w-0 flex-1 space-y-4">
-        <h2 className="text-xl font-semibold text-slate-900">
-          Exames e pendências
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold text-slate-900">
+            Exames e pendências
+          </h2>
+          <button
+            type="button"
+            onClick={() => setCreateModalOpen(true)}
+            className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
+          >
+            <Plus className="h-4 w-4" />
+            Novo Exame
+          </button>
+        </div>
         <div className="flex flex-wrap gap-2">
           {(
             [
@@ -231,13 +353,76 @@ export function ExamsPage() {
                 {selected.interpretation}
               </p>
             ) : null}
-            <button
-              type="button"
-              onClick={() => void notifyResponsible()}
-              className="w-full rounded-lg border border-teal-600 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50"
-            >
-              Notificar responsável
-            </button>
+            {selected.attachments && selected.attachments.length > 0 ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-600 uppercase mb-2">
+                  Arquivos ({selected.attachments.length})
+                </p>
+                <div className="space-y-2">
+                  {selected.attachments.map((attachment, index) => (
+                    <div
+                      key={`${attachment.name}-${index}`}
+                      className="flex items-start gap-3 rounded bg-white p-2"
+                    >
+                      <span className="text-xl">{getFileIcon(attachment.mime)}</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-slate-900">
+                          {attachment.name}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {formatFileSize(attachment.size)}
+                        </p>
+                      </div>
+                      <div className="flex flex-shrink-0 gap-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void downloadFile(attachment.path, attachment.name)
+                          }
+                          className="rounded p-1 text-teal-600 hover:bg-teal-50"
+                          title="Fazer download"
+                        >
+                          <Download className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void deleteAttachment(index)}
+                          className="rounded p-1 text-red-600 hover:bg-red-50"
+                          title="Remover arquivo"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-teal-600 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50 disabled:bg-teal-50 disabled:opacity-50"
+              >
+                <Upload className="h-4 w-4" />
+                {isUploading ? 'Enviando...' : 'Fazer upload'}
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={(e) => void handleFileUpload(e)}
+                className="hidden"
+                accept="*/*"
+              />
+              <button
+                type="button"
+                onClick={() => void notifyResponsible()}
+                className="w-full rounded-lg border border-teal-600 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50"
+              >
+                Notificar responsável
+              </button>
+            </div>
           </div>
         )}
       </aside>
@@ -284,6 +469,49 @@ export function ExamsPage() {
                 className="rounded bg-teal-600 px-4 py-2 text-sm text-white"
               >
                 Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {createModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <h3 className="font-semibold text-slate-900">
+              Criar novo exame
+            </h3>
+            <input
+              type="text"
+              value={newExamName}
+              onChange={(e) => setNewExamName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  void createExam();
+                }
+              }}
+              placeholder="Nome do exame"
+              className="mt-4 w-full rounded border px-3 py-2 text-sm"
+              autoFocus
+            />
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateModalOpen(false);
+                  setNewExamName('');
+                }}
+                className="rounded px-4 py-2 text-sm text-slate-600"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void createExam()}
+                disabled={isCreating}
+                className="rounded bg-teal-600 px-4 py-2 text-sm text-white disabled:bg-teal-400"
+              >
+                {isCreating ? 'Criando...' : 'Criar'}
               </button>
             </div>
           </div>

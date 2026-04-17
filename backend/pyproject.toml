@@ -10,8 +10,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.34",
     "pydantic-settings>=2.0",
+    "sqlmodel>=0.0.22",
+    "alembic>=1.13",
+    "aiosqlite>=0.20",
+    "greenlet>=3.0",
     "sse-starlette>=2.0",
     "langgraph>=0.4",
     "langchain-core>=0.3",

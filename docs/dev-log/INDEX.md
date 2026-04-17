@@ -53,6 +53,7 @@ Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `c
 ### 2026-04-17
 
 - **comorb-backend-endpoint** — agent:copilot — Migração de comorbidades: endpoint backend `GET /api/assistant/comorbidities` (lista em memória, sem banco), schema Pydantic `schemas/comorbidities.py`, frontend via `clinicalApi.comorbidities.ts`, check-in remove constante local, 22 opções expandidas. Proxy Vite para `/api`. — Implementação completa, 10/10 testes backend ✅.
+- **padrao-criar-novas-tabelas** — agent:copilot — Documentação completa em `docs/dev-log/padrao-criar-novas-tabelas.md`: 7 passos (Model, Schema, Repository, Service, API, Migração, Registro); convenções nomes (tabelas, colunas, IDs, aliases); exemplo prático `Medications`; checklist implementação; boas práticas para IA. — Referência estruturada para novas entidades.
 
 ## `decisions/` (opcional)
 

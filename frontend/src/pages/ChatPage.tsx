@@ -3,7 +3,6 @@ import { useEffect, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  clinicalApiUsesHttp,
   postAssistantChatMock,
   quickQuestionsForCid,
 } from '@/api/clinicalApi';
@@ -54,81 +53,56 @@ export function ChatPage() {
     ]);
     setInput('');
 
-    // --- Modo HTTP: SSE com atualização incremental do balão do assistente ---
-    if (clinicalApiUsesHttp()) {
-      const assistantId = `a-${Date.now()}`;
-      setMessages((m) => [
-        ...m,
-        { id: assistantId, role: 'assistant', text: '', streaming: true },
-      ]);
-      try {
-        const res = await postAssistantChatMock(activePatientId!, trimmed, {
-          onToken: (delta) => {
-            setMessages((m) =>
-              m.map((msg) =>
-                msg.id === assistantId
-                  ? { ...msg, text: msg.text + delta }
-                  : msg,
-              ),
-            );
-          },
-          onMeta: (src, steps) => {
-            setSources(src);
-            setReasoning(steps);
-          },
-          onError: (detail) => {
-            showToast(detail);
-          },
-        });
-        setMessages((m) =>
-          m.map((msg) =>
-            msg.id === assistantId
-              ? { ...msg, text: res.text, streaming: false }
-              : msg,
-          ),
-        );
-        setSources(res.sources);
-        setReasoning(res.reasoning);
-        if (!res.text.trim()) {
+    const assistantId = `a-${Date.now()}`;
+    setMessages((m) => [
+      ...m,
+      { id: assistantId, role: 'assistant', text: '', streaming: true },
+    ]);
+    try {
+      const res = await postAssistantChatMock(activePatientId!, trimmed, {
+        onToken: (delta) => {
           setMessages((m) =>
             m.map((msg) =>
               msg.id === assistantId
-                ? {
-                    ...msg,
-                    text:
-                      '__FALLBACK__O assistente não devolveu texto. Verifique o backend e o Ollama.__',
-                    streaming: false,
-                  }
+                ? { ...msg, text: msg.text + delta }
                 : msg,
             ),
           );
-        }
-      } catch {
-        setMessages((m) => m.filter((x) => x.id !== assistantId));
-      }
-      return;
-    }
-
-    // --- Modo memória (protótipo mock) ---
-    const res = await postAssistantChatMock(activePatientId!, trimmed);
-    setSources(res.sources);
-    setReasoning(res.reasoning);
-    if (!res.text.trim()) {
-      setMessages((m) => [
-        ...m,
-        {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          text:
-            '__FALLBACK__Esta pergunta requer consulta ao backend. Em modo demo, apenas perguntas pré-definidas têm resposta simulada.__',
         },
-      ]);
-      return;
+        onMeta: (src, steps) => {
+          setSources(src);
+          setReasoning(steps);
+        },
+        onError: (detail) => {
+          showToast(detail);
+        },
+      });
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.id === assistantId
+            ? { ...msg, text: res.text, streaming: false }
+            : msg,
+        ),
+      );
+      setSources(res.sources);
+      setReasoning(res.reasoning);
+      if (!res.text.trim()) {
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === assistantId
+              ? {
+                  ...msg,
+                  text:
+                    '__FALLBACK__O assistente não devolveu texto. Verifique o backend e o Ollama.__',
+                  streaming: false,
+                }
+              : msg,
+          ),
+        );
+      }
+    } catch {
+      setMessages((m) => m.filter((x) => x.id !== assistantId));
     }
-    setMessages((m) => [
-      ...m,
-      { id: `a-${Date.now()}`, role: 'assistant', text: res.text },
-    ]);
   }
 
   function onSubmit(e: FormEvent) {

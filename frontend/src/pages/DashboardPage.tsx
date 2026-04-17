@@ -6,6 +6,22 @@ import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
 
+function parseSystolicPressure(value: number | string): number | null {
+  const left = String(value).split('/')[0]?.trim();
+  if (!left) {
+    return null;
+  }
+  const systolic = Number(left);
+  if (Number.isNaN(systolic)) {
+    return null;
+  }
+  // Accept shorthand commonly used in PT-BR, e.g. 19/11 -> 190/110.
+  if (systolic <= 30) {
+    return systolic * 10;
+  }
+  return systolic;
+}
+
 function vitalStatus(
   key: 'bloodPressure' | 'temperature' | 'oxygenSaturation' | 'heartRate',
   value: number | string,
@@ -38,12 +54,11 @@ function vitalStatus(
     }
   }
   if (key === 'bloodPressure') {
-    const s = String(value);
-    const sys = Number(s.split('/')[0]);
-    if (!Number.isNaN(sys) && sys >= 180) {
+    const sys = parseSystolicPressure(value);
+    if (sys != null && sys >= 180) {
       return 'crit';
     }
-    if (!Number.isNaN(sys) && sys >= 140) {
+    if (sys != null && sys >= 140) {
       return 'warn';
     }
   }
@@ -119,9 +134,30 @@ export function DashboardPage() {
       patch = { vitalSigns: { ...vs, bloodPressure: vValue.trim() } };
     }
     const updated = await patchPatientMock(patient.id, patch);
-    if (updated && patch.vitalSigns?.oxygenSaturation != null) {
-      if (patch.vitalSigns.oxygenSaturation < 92) {
-        showToast('SpO₂ crítica — alerta emitido para a equipe médica.');
+    if (updated && patch.vitalSigns != null) {
+      if (vField === 'spo2' && patch.vitalSigns.oxygenSaturation < 92) {
+        showToast('SpO2 crítica — alerta emitido para a equipe médica.');
+      }
+
+      if (vField === 'temp') {
+        const t = patch.vitalSigns.temperature;
+        if (t >= 39 || t < 35) {
+          showToast('Temperatura crítica — alerta emitido para a equipe médica.');
+        }
+      }
+
+      if (vField === 'hr') {
+        const hr = patch.vitalSigns.heartRate;
+        if (hr > 120 || hr < 45) {
+          showToast('Frequência cardíaca crítica — alerta emitido para a equipe médica.');
+        }
+      }
+
+      if (vField === 'bp') {
+        const sys = parseSystolicPressure(patch.vitalSigns.bloodPressure);
+        if (sys != null && sys >= 180) {
+          showToast('Pressão arterial crítica — alerta emitido para a equipe médica.');
+        }
       }
     }
     await refreshAlertBadge();

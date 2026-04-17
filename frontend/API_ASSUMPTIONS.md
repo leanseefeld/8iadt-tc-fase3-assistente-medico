@@ -1,8 +1,6 @@
 # Premissas de API REST (protótipo)
 
-Contrato alinhado à [referencia-frontend.md](../docs/referencia-frontend.md). **Hoje** as rotas abaixo são implementadas via `src/api/clinicalApi.ts`: por padrão tudo delega a `src/api/clinicalApi.memory.ts` + `src/api/mockServerState.ts`.
-
-Com `VITE_CLINICAL_API_HTTP=true`, apenas **`POST /assistant/chat`** passa a usar `src/api/clinicalApi.http.ts` (fetch + SSE). As demais operações continuam em **memória** até existirem endpoints reais — evita quebrar check-in, dashboard, etc.
+Contrato alinhado à [referencia-frontend.md](../docs/referencia-frontend.md). As rotas abaixo sao consumidas via HTTP em `src/api/clinicalApi.ts`, com backend como fonte unica de dados.
 
 ## Sessão (`activePatientId`)
 
@@ -31,6 +29,8 @@ Não faz parte do contrato HTTP no protótipo: o cliente mantém o paciente ativ
 | `heartRate`           | number |
 | `updatedAt`           | string (ISO 8601) |
 
+Persistência: no backend, sinais vitais são armazenados como histórico (append-only). O DTO `VitalSigns` expõe somente o último registro.
+
 ### `Exam`
 
 | Campo             | Tipo                                      |
@@ -43,6 +43,10 @@ Não faz parte do contrato HTTP no protótipo: o cliente mantém o paciente ativ
 | `interpretation`  | string (opcional)                         |
 | `source`          | `protocol` \| `manual`                    |
 | `protocolRef`     | string (opcional)                         |
+| `attachmentName`  | string (opcional)                         |
+| `attachmentMime`  | string (opcional)                         |
+| `attachmentSize`  | number (opcional)                         |
+| `attachmentPath`  | string (opcional)                         |
 
 ### `SuggestedActionItem`
 
@@ -171,6 +175,41 @@ Quando `cid` muda, o servidor **substitui** `exams` e `suggestedItems` pelos der
 
 ---
 
+### 4.1 `PATCH /patients/:id/vitals`
+
+Corpo JSON **parcial** de `VitalSigns`.
+
+Comportamento:
+
+- o backend cria um novo item no histórico de sinais vitais (não sobrescreve o anterior);
+- em `GET /patients/:id`, o campo `vitalSigns` representa sempre o último item do histórico.
+
+**Resposta 200:** `{ "patient": Patient }`
+
+**Resposta 404:** paciente inexistente
+
+---
+
+### 4.2 `POST /patients/:id/exams/:examId/upload`
+
+Upload manual de arquivo para exame.
+
+- `Content-Type`: `multipart/form-data`
+- Campo esperado: `file`
+
+Regras:
+
+- permitido apenas para exames `source='manual'`;
+- persistir metadados no exame (`attachmentName`, `attachmentMime`, `attachmentSize`, `attachmentPath`).
+
+**Resposta 200:** `{ "exam": Exam }`
+
+**Resposta 400:** exame não permite upload
+
+**Resposta 404:** paciente ou exame inexistente
+
+---
+
 ### 5. `GET /alerts`
 
 **Query (opcional):** `patientId`, `severity`, `team`, `resolved` (`true` / `false`)
@@ -283,9 +322,9 @@ Exemplo:
 
 ## Base URL
 
-Variável: `VITE_API_BASE_URL` (ver `src/api/client.ts`). Padrão documental e no código: **`http://localhost:8001/api`** (servidor FastAPI local, prefixo `/api`).
+Variável: `VITE_API_BASE_URL` (ver `src/api/client.ts`). Padrao no codigo: **`http://localhost:8000/api`** (servidor FastAPI local, prefixo `/api`).
 
-Ativar chat real: `VITE_CLINICAL_API_HTTP=true` e backend a correr (ver `backend/README.md`).
+Para chat e fluxo de decisao, garanta backend ativo (ver `backend/README.md`).
 
 ## Mapeamento futuro backend
 
