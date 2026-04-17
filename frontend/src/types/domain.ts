@@ -9,6 +9,13 @@ export interface Cid {
   label: string;
 }
 
+export interface MedicationOption {
+  code: string;
+  label: string;
+  activeIngredient: string;
+  sourceTags: string[];
+}
+
 export interface VitalSigns {
   bloodPressure: string;
   temperature: number;

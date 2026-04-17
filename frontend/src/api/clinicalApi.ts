@@ -7,6 +7,7 @@
 import * as http from '@/api/clinicalApi.http';
 import * as comorbidities from '@/api/clinicalApi.comorbidities';
 import * as cidsHttp from '@/api/clinicalApi.cids.http';
+import * as medicationsHttp from '@/api/clinicalApi.medications.http';
 import * as patientsHttp from '@/api/clinicalApi.patients.http';
 import * as examsHttp from '@/api/clinicalApi.exams.http';
 import * as suggestedItemsHttp from '@/api/clinicalApi.suggestedItems.http';
@@ -32,6 +33,10 @@ function parseMedicationLines(text?: string): string[] {
 
 export async function getCidListMock() {
   return cidsHttp.getCidListHttp();
+}
+
+export async function getMedicationCatalogMock() {
+  return medicationsHttp.getMedicationCatalogHttp();
 }
 
 export async function getPatientsMock(params?: { status?: string; q?: string }) {

@@ -1,6 +1,7 @@
 import {
   createPatientMock,
   getCidListMock,
+  getMedicationCatalogMock,
   getPatientsMock,
   reAdmitPatientMock,
   getComorbidities,
@@ -8,7 +9,7 @@ import {
 } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
-import type { Cid, Patient, PatientSex } from '@/types/domain';
+import type { Cid, MedicationOption, Patient, PatientSex } from '@/types/domain';
 import { Search, UserPlus, UserRoundSearch } from 'lucide-react';
 import {
   useEffect,
@@ -42,6 +43,10 @@ export function CheckInPage() {
   const [comorbQuery, setComorbQuery] = useState('');
   const comorbPickerRef = useRef<HTMLDivElement>(null);
 
+  const [medicationPickerOpen, setMedicationPickerOpen] = useState(false);
+  const [medicationQuery, setMedicationQuery] = useState('');
+  const medicationPickerRef = useRef<HTMLDivElement>(null);
+
   const [discharged, setDischarged] = useState<Patient[]>([]);
   const [returnQuery, setReturnQuery] = useState('');
   const [selectedReturn, setSelectedReturn] = useState<Patient | null>(null);
@@ -52,7 +57,9 @@ export function CheckInPage() {
   const [observations, setChiefComplaint] = useState('');
   const [comorbidities, setComorbidities] = useState<string[]>([]);
   const [comorbidityOptions, setComorbidityOptions] = useState<ComorbidityOption[]>([]);
+  const [medicationOptions, setMedicationOptions] = useState<MedicationOption[]>([]);
   const [configLoading, setConfigLoading] = useState(true);
+  const [medicationsLoading, setMedicationsLoading] = useState(true);
   const [medications, setMedications] = useState('');
   const [spinning, setSpinning] = useState(false);
 
@@ -77,6 +84,20 @@ export function CheckInPage() {
       })
       .finally(() => {
         setConfigLoading(false);
+      });
+  }, [showToast]);
+
+  // Load medication catalog from backend
+  useEffect(() => {
+    setMedicationsLoading(true);
+    void getMedicationCatalogMock()
+      .then(setMedicationOptions)
+      .catch((error) => {
+        console.error('Failed to load medication catalog:', error);
+        showToast('Erro ao carregar catalogo de medicamentos');
+      })
+      .finally(() => {
+        setMedicationsLoading(false);
       });
   }, [showToast]);
 
@@ -113,6 +134,23 @@ export function CheckInPage() {
     document.addEventListener('mousedown', handleMouseDown);
     return () => document.removeEventListener('mousedown', handleMouseDown);
   }, [comorbPickerOpen]);
+
+  // Fecha lista de medicamentos ao clicar fora.
+  useEffect(() => {
+    if (!medicationPickerOpen) {
+      return;
+    }
+    function handleMouseDown(e: MouseEvent) {
+      if (
+        medicationPickerRef.current &&
+        !medicationPickerRef.current.contains(e.target as Node)
+      ) {
+        setMedicationPickerOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [medicationPickerOpen]);
 
   const filteredCids = cids.filter(
     (c) =>
@@ -152,6 +190,34 @@ export function CheckInPage() {
     return map;
   }, [comorbidityOptions]);
 
+  const parsedMedicationLines = useMemo(() => {
+    return medications
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }, [medications]);
+
+  const selectedMedicationLookup = useMemo(() => {
+    return new Set(parsedMedicationLines.map((item) => item.toLowerCase()));
+  }, [parsedMedicationLines]);
+
+  const filteredMedicationOptions = useMemo(() => {
+    const q = medicationQuery.trim().toLowerCase();
+    return medicationOptions.filter((option) => {
+      if (selectedMedicationLookup.has(option.label.toLowerCase())) {
+        return false;
+      }
+      if (!q) {
+        return true;
+      }
+      return (
+        option.code.toLowerCase().includes(q) ||
+        option.label.toLowerCase().includes(q) ||
+        option.activeIngredient.toLowerCase().includes(q)
+      );
+    });
+  }, [medicationOptions, medicationQuery, selectedMedicationLookup]);
+
   function toggleComorbidity(key: string) {
     setComorbidities((prev) =>
       prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key],
@@ -169,6 +235,8 @@ export function CheckInPage() {
       setCidPickerOpen(false);
       setComorbQuery('');
       setComorbPickerOpen(false);
+      setMedicationQuery('');
+      setMedicationPickerOpen(false);
       setName('');
       setAge('');
       setChiefComplaint('');
@@ -185,6 +253,26 @@ export function CheckInPage() {
   function openComorbPicker() {
     setComorbPickerOpen(true);
     setComorbQuery('');
+  }
+
+  function openMedicationPicker() {
+    setMedicationPickerOpen(true);
+    setMedicationQuery('');
+  }
+
+  function addMedicationFromCatalog(option: MedicationOption) {
+    const normalized = option.label.trim();
+    setMedications((prev) => {
+      const lines = prev
+        .split('\n')
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const exists = lines.some((item) => item.toLowerCase() === normalized.toLowerCase());
+      if (exists) {
+        return prev;
+      }
+      return [...lines, normalized].join('\n');
+    });
   }
 
   async function runReadmit() {
@@ -578,6 +666,65 @@ export function CheckInPage() {
                 </div>
               ) : null}
             </div>
+            <div ref={medicationPickerRef} className="relative">
+              <label className="text-sm font-medium text-slate-700">
+                Catalogo oficial de medicamentos{medicationsLoading ? <span className="ml-1 text-slate-400">…</span> : null}
+              </label>
+              <button
+                type="button"
+                onClick={openMedicationPicker}
+                disabled={medicationsLoading}
+                className="mt-1 flex w-full items-center gap-2 rounded-lg border border-[var(--color-border-subtle)] bg-white px-3 py-2.5 text-left text-sm text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Search className="h-4 w-4 shrink-0 text-slate-400" />
+                <span className="min-w-0 flex-1 truncate">
+                  Clique para buscar no catalogo (RENAME + Conitec)
+                </span>
+              </button>
+              {medicationPickerOpen ? (
+                <div className="absolute left-0 right-0 z-[22] mt-1 rounded-lg border border-[var(--color-border-subtle)] bg-white shadow-lg">
+                  <input
+                    type="search"
+                    autoFocus
+                    value={medicationQuery}
+                    onChange={(e) => setMedicationQuery(e.target.value)}
+                    placeholder="Filtrar por nome, principio ativo ou codigo..."
+                    className="w-full rounded-t-lg border-b border-[var(--color-border-subtle)] px-3 py-2 text-sm"
+                  />
+                  <ul className="max-h-48 overflow-auto rounded-b-lg py-1">
+                    {filteredMedicationOptions.length === 0 ? (
+                      <li className="px-3 py-2 text-sm text-slate-500">
+                        Nenhum resultado no catalogo.
+                      </li>
+                    ) : (
+                      filteredMedicationOptions.slice(0, 30).map((option) => (
+                        <li key={option.code}>
+                          <button
+                            type="button"
+                            onClick={() => addMedicationFromCatalog(option)}
+                            className="flex w-full flex-col items-start px-3 py-2 text-left text-sm hover:bg-teal-50"
+                          >
+                            <span className="font-medium text-slate-900">
+                              {option.label}
+                            </span>
+                            <span className="text-xs text-slate-500">
+                              {option.activeIngredient}
+                            </span>
+                          </button>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                  <p className="border-t border-[var(--color-border-subtle)] px-3 py-2 text-xs text-slate-500">
+                    Selecionar um item adiciona uma nova linha no campo de medicamentos.
+                  </p>
+                </div>
+              ) : null}
+              <p className="mt-1 text-xs text-slate-500">
+                Itens preenchidos no campo: {parsedMedicationLines.length}.
+              </p>
+            </div>
+
             <div>
               <label className="text-sm font-medium text-slate-700">
                 Medicamentos em uso
@@ -586,7 +733,7 @@ export function CheckInPage() {
                 rows={3}
                 value={medications}
                 onChange={(e) => setMedications(e.target.value)}
-                placeholder="Uma linha por medicamento"
+                placeholder="Uma linha por medicamento. Pode combinar catalogo oficial com texto livre."
                 className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
               />
             </div>

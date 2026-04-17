@@ -1,8 +1,18 @@
-"""In-memory CID catalog used by /api/cids."""
+"""In-memory CID-10 catalog used by /api/cids."""
+
+from __future__ import annotations
+
+from functools import lru_cache
 
 from assistente_medico_api.schemas.cids import Cid
 
-CID_LIST: list[Cid] = [
+try:
+    import simple_icd_10 as icd10
+except Exception:  # pragma: no cover - fallback keeps endpoint working.
+    icd10 = None
+
+
+_FALLBACK_CID_LIST: list[Cid] = [
     Cid(code="L40.5", label="Artrite Psoriásica"),
     Cid(code="A41.9", label="Sepse não especificada"),
     Cid(code="T81.4", label="Infecção pós-procedimento cirúrgico"),
@@ -26,6 +36,38 @@ CID_LIST: list[Cid] = [
     Cid(code="C50.9", label="Neoplasia maligna da mama"),
     Cid(code="G43.9", label="Enxaqueca"),
 ]
+
+
+def _is_selectable_cid_code(code: str) -> bool:
+    # Excludes chapter labels (e.g. "I") and range buckets (e.g. "A00-A09").
+    if "-" in code or len(code) < 3:
+        return False
+    return code[0].isalpha() and code[1].isdigit() and code[2].isdigit()
+
+
+@lru_cache(maxsize=1)
+def _build_cid_list() -> tuple[Cid, ...]:
+    if icd10 is None:
+        return tuple(_FALLBACK_CID_LIST)
+
+    items: list[Cid] = []
+    seen: set[str] = set()
+    for code in icd10.get_all_codes(with_dots=True):
+        if not _is_selectable_cid_code(code) or code in seen:
+            continue
+        description = (icd10.get_description(code) or "").strip()
+        if not description:
+            continue
+        seen.add(code)
+        items.append(Cid(code=code, label=description))
+
+    if not items:
+        return tuple(_FALLBACK_CID_LIST)
+    return tuple(items)
+
+
+# Constant kept at module import time for fast read-only endpoint usage.
+CID_LIST: list[Cid] = list(_build_cid_list())
 
 
 def list_cids() -> list[Cid]:

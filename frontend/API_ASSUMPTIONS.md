@@ -19,6 +19,15 @@ Não faz parte do contrato HTTP no protótipo: o cliente mantém o paciente ativ
 | `code` | string |
 | `label`| string |
 
+### `MedicationOption`
+
+| Campo              | Tipo      |
+| ------------------ | --------- |
+| `code`             | string    |
+| `label`            | string    |
+| `activeIngredient` | string    |
+| `sourceTags`       | string[]  |
+
 ### `VitalSigns`
 
 | Campo                 | Tipo   |
@@ -130,6 +139,15 @@ Persistência: no backend, sinais vitais são armazenados como histórico (appen
 
 ---
 
+### 1.1 `GET /medications`
+
+Catálogo oficial de medicamentos para autocomplete em formulários
+(combinação de referências RENAME + Conitec no protótipo).
+
+**Resposta 200:** `{ "medications": MedicationOption[] }`
+
+---
+
 ### 2. `POST /patients`
 
 Admissão (Página 0). Corpo JSON alinhado ao formulário:
@@ -143,7 +161,7 @@ Admissão (Página 0). Corpo JSON alinhado ao formulário:
 | `cid`                 | `Cid`       | sim         |
 | `observations`      | string      | sim         |
 | `comorbidities`       | string[]    | não         |
-| `currentMedications`  | string      | não (multilinha → split em array no servidor) |
+| `currentMedications`  | string      | não (multilinha → split em array no servidor; permite híbrido catálogo + texto livre) |
 
 O servidor aplica o protocolo mock do CID: preenche `exams`, `suggestedItems`, `protocolRef` nos itens, `agentLog` inicial quando aplicável, e alertas específicos (ex.: sepse T81.4 farmácia, A41.9 crítico).
 

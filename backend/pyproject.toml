@@ -24,6 +24,7 @@ dependencies = [
     "langchain-chroma>=0.1",
     "chromadb>=0.6",
     "grandalf>=0.8",
+    "simple-icd-10>=2.1.0",
 ]
 
 [tool.setuptools.packages.find]
