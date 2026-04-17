@@ -168,7 +168,7 @@ Formulário centralizado, largura máxima 640px, fundo em card.
 | Leito | text | ✅ | ex: "UTI-03" |
 | CID Principal | searchable select | ✅ | Busca por código ou descrição |
 | Queixa principal | textarea | ✅ | máx 300 chars |
-| Comorbidades | checkbox group | — | HAS, DM2, IRC, DPOC, Obesidade, Outras |
+| Comorbidades | checkbox group | — | Carregadas do backend via `GET /api/assistant/comorbidities` |
 | Medicamentos em uso | textarea | — | Campo livre, uma linha por medicamento |
 
 ### CID Mock List (mínimo necessário para os fluxos de teste)

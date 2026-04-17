@@ -7,6 +7,7 @@
  */
 import * as memory from '@/api/clinicalApi.memory';
 import * as http from '@/api/clinicalApi.http';
+import * as comorbidities from '@/api/clinicalApi.comorbidities';
 import { quickQuestionsForCid } from '@/mocks/internal/chatMocks';
 import type { ChatStreamHandlers } from '@/api/sseChat';
 
@@ -46,3 +47,8 @@ export async function postAssistantChatMock(
 
 /** Lista de perguntas rápidas: função pura, igual em ambos os transportes. */
 export { quickQuestionsForCid };
+
+/** Comorbidities endpoint: reference data for patient check-in */
+export const getComorbidities = comorbidities.getComorbidities;
+export const clearComorbidititiesCache = comorbidities.clearComorbidititiesCache;
+export type { ComorbidityOption, ComorbidititiesResponse } from '@/api/clinicalApi.comorbidities';

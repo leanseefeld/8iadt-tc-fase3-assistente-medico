@@ -50,6 +50,10 @@ Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `c
 - **graph-astream-events-sse** — agent:cursor — SSE via `graph.astream_events(version="v2")`: remove `_merge_retrieve`/`astream_answer`; `generate_node` async com `llm.astream`; tokens via `on_chat_model_stream`, metadados via `on_chain_end(name="retrieve")`. Decisão: `decisions/20260413-graph-astream-events-sse.md`. — Revisão: `1e7fd7b` chore(cursor): subagent to fix portuguese to brazilian
 - **chat-json-ainvoke** — agent:cursor — Corrige caminho JSON: grafo tem nó async, então usar `graph.ainvoke` (não `invoke` em thread). — Revisão: `1e7fd7b` chore(cursor): subagent to fix portuguese to brazilian
 
+### 2026-04-17
+
+- **comorb-backend-endpoint** — agent:nury — Migração de comorbidades: endpoint backend `GET /api/assistant/comorbidities` (lista em memória, sem banco), schema Pydantic `schemas/comorbidities.py`, frontend via `clinicalApi.comorbidities.ts`, check-in remove constante local, 22 opções expandidas. Proxy Vite para `/api`. — Implementação completa, 10/10 testes backend ✅.
+
 ## `decisions/` (opcional)
 
 Arquivos `YYYYMMDD-id-curto.md` só quando uma linha no índice não chega (API, ADR mini).

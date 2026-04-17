@@ -241,6 +241,46 @@ Simula execução do grafo para o paciente atual (log + metadados de branch seps
 
 ---
 
+### 9. `GET /assistant/comorbidities`
+
+Retorna opções disponíveis de comorbidades para seleção no check-in (dados de referência em memória, sem persistência em banco de dados).
+
+**Query:** nenhuma
+
+**Resposta 200:** `ComorbidititiesResponse`
+
+| Campo | Tipo | Descrição |
+| --- | --- | --- |
+| `comorbidities` | `ComorbidityOption[]` | Lista de opções de comorbidades para seleção no check-in |
+
+**`ComorbidityOption`:**
+
+| Campo | Tipo | Descrição |
+| --- | --- | --- |
+| `code` | string | Identificador único (ex.: `HAS`, `DM2`, `Gravidez`) |
+| `label` | string | Descrição legível em português (ex.: `Hipertensão Arterial Sistêmica`) |
+| `category` | string | Categoria para agrupamento (ex.: `cardiovascular`, `endocrine`, `respiratory`) |
+
+Exemplo:
+```json
+{
+  "comorbidities": [
+    {
+      "code": "HAS",
+      "label": "Hipertensão Arterial Sistêmica",
+      "category": "cardiovascular"
+    },
+    {
+      "code": "Gravidez",
+      "label": "Gravidez",
+      "category": "reproductive"
+    }
+  ]
+}
+```
+
+---
+
 ## Base URL
 
 Variável: `VITE_API_BASE_URL` (ver `src/api/client.ts`). Padrão documental e no código: **`http://localhost:8001/api`** (servidor FastAPI local, prefixo `/api`).

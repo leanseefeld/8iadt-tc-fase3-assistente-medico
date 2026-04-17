@@ -3,6 +3,8 @@ import {
   getCidListMock,
   getPatientsMock,
   reAdmitPatientMock,
+  getComorbidities,
+  type ComorbidityOption,
 } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
@@ -16,16 +18,6 @@ import {
   type FormEvent,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-
-const COMORBIDITY_OPTIONS = [
-  'HAS',
-  'DM2',
-  'IRC',
-  'DPOC',
-  'Obesidade',
-  'Outras',
-];
-
 
 type CheckInMode = 'new' | 'return';
 
@@ -59,6 +51,8 @@ export function CheckInPage() {
   const [sex, setSex] = useState<PatientSex>('M');
   const [chiefComplaint, setChiefComplaint] = useState('');
   const [comorbidities, setComorbidities] = useState<string[]>([]);
+  const [comorbidityOptions, setComorbidityOptions] = useState<ComorbidityOption[]>([]);
+  const [configLoading, setConfigLoading] = useState(true);
   const [medications, setMedications] = useState('');
   const [spinning, setSpinning] = useState(false);
 
@@ -69,6 +63,22 @@ export function CheckInPage() {
   useEffect(() => {
     void getPatientsMock({ status: 'discharged' }).then(setDischarged);
   }, []);
+
+  // Load comorbidity options from backend
+  useEffect(() => {
+    setConfigLoading(true);
+    void getComorbidities()
+      .then((response) => {
+        setComorbidityOptions(response.comorbidities);
+      })
+      .catch((error) => {
+        console.error('Failed to load comorbidity options:', error);
+        showToast('Erro ao carregar opções de comorbidades');
+      })
+      .finally(() => {
+        setConfigLoading(false);
+      });
+  }, [showToast]);
 
   // Fecha lista CID ao clicar fora.
   useEffect(() => {
@@ -126,10 +136,21 @@ export function CheckInPage() {
   const filteredComorbOptions = useMemo(() => {
     const q = comorbQuery.trim().toLowerCase();
     if (!q) {
-      return COMORBIDITY_OPTIONS;
+      return comorbidityOptions;
     }
-    return COMORBIDITY_OPTIONS.filter((o) => o.toLowerCase().includes(q));
-  }, [comorbQuery]);
+    return comorbidityOptions.filter(
+      (o) =>
+        o.code.toLowerCase().includes(q) || o.label.toLowerCase().includes(q),
+    );
+  }, [comorbQuery, comorbidityOptions]);
+
+  const comorbidityCodeToLabel = useMemo(() => {
+    const map: Record<string, string> = {};
+    comorbidityOptions.forEach((opt) => {
+      map[opt.code] = opt.label;
+    });
+    return map;
+  }, [comorbidityOptions]);
 
   function toggleComorbidity(key: string) {
     setComorbidities((prev) =>
@@ -479,12 +500,13 @@ export function CheckInPage() {
             </div>
             <div ref={comorbPickerRef} className="relative">
               <label className="text-sm font-medium text-slate-700">
-                Comorbidades
+                Comorbidades{configLoading && <span className="ml-1 text-slate-400">…</span>}
               </label>
               <button
                 type="button"
                 onClick={openComorbPicker}
-                className="mt-1 flex w-full items-center gap-2 rounded-lg border border-[var(--color-border-subtle)] bg-white px-3 py-2.5 text-left text-sm text-slate-800 hover:bg-slate-50"
+                disabled={configLoading}
+                className="mt-1 flex w-full items-center gap-2 rounded-lg border border-[var(--color-border-subtle)] bg-white px-3 py-2.5 text-left text-sm text-slate-800 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Search className="h-4 w-4 shrink-0 text-slate-400" />
                 <span className="min-w-0 flex-1 truncate">
@@ -500,7 +522,7 @@ export function CheckInPage() {
                       key={c}
                       className="rounded-full bg-teal-100 px-2.5 py-0.5 text-xs font-medium text-teal-900"
                     >
-                      {c}
+                      {comorbidityCodeToLabel[c] || c}
                     </span>
                   ))}
                 </div>
@@ -522,12 +544,12 @@ export function CheckInPage() {
                       </li>
                     ) : (
                       filteredComorbOptions.map((opt) => {
-                        const on = comorbidities.includes(opt);
+                        const on = comorbidities.includes(opt.code);
                         return (
-                          <li key={opt}>
+                          <li key={opt.code}>
                             <button
                               type="button"
-                              onClick={() => toggleComorbidity(opt)}
+                              onClick={() => toggleComorbidity(opt.code)}
                               className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-teal-50 ${
                                 on ? 'bg-teal-50 font-medium text-teal-900' : ''
                               }`}
@@ -542,7 +564,7 @@ export function CheckInPage() {
                               >
                                 {on ? '✓' : ''}
                               </span>
-                              {opt}
+                              {opt.label}
                             </button>
                           </li>
                         );

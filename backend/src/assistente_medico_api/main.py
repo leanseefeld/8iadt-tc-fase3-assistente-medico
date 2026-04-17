@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from assistente_medico_api.api.chat import router as chat_router
+from assistente_medico_api.api.comorbidities import router as comorbidities_router
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
 
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(chat_router, prefix="/api")
+    app.include_router(comorbidities_router, prefix="/api")
     return app
 
 
