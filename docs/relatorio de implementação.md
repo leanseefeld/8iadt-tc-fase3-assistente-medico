@@ -47,8 +47,6 @@ Para a base de medicamentos utilizados no sistema, passamos a adotar como fonte 
 
 A RENAME é a lista oficial dos medicamentos do SUS e será usada como referência primária para catálogo de medicamentos, padronização de nomenclatura e preenchimento assistido nos fluxos de admissão e atendimento.
 
-Foi adicionado um plano de implementação para extração dos nomes de medicamentos a partir do PDF local da RENAME em [docs/plano-extracao-rename.md](./plano-extracao-rename.md).
-
 ## Pipeline de extração e preparo de documentos
 
 Foi criado um utilitário em `/llm` para baixar e converter os PCDTs automaticamente. Este utilitário se comporta como um módulo isolado para as diferentes fases da pipeline.
