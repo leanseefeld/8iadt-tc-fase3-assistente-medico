@@ -41,6 +41,14 @@ Os dados já estão anonimizados, mas ainda é necessário um aceite aos termos 
 
 Embora os exames desta base tenham sido solicitados no contexto de diagnóstico e acompanhamento de quadros de COVID-19, os exames são de natureza diversa e podem ajudar o modelo a generalizar bem para outras condições.
 
+## Medicamentos essenciais (RENAME 2024)
+
+Para a base de medicamentos utilizados no sistema, passamos a adotar como fonte oficial a **RENAME 2024** (Relação Nacional de Medicamentos Essenciais), mantida pelo **Ministério da Saúde** com apoio da **Conitec**.
+
+A RENAME é a lista oficial dos medicamentos do SUS e será usada como referência primária para catálogo de medicamentos, padronização de nomenclatura e preenchimento assistido nos fluxos de admissão e atendimento.
+
+Foi adicionado um plano de implementação para extração dos nomes de medicamentos a partir do PDF local da RENAME em [docs/plano-extracao-rename.md](./plano-extracao-rename.md).
+
 ## Pipeline de extração e preparo de documentos
 
 Foi criado um utilitário em `/llm` para baixar e converter os PCDTs automaticamente. Este utilitário se comporta como um módulo isolado para as diferentes fases da pipeline.
@@ -129,6 +137,10 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 
 Este serviço consome a `/vectorstore/chroma` criada pelo comando `build-embeddings` da seção anterior e usa o pacote `assistente-medico-llm` (`/llm`) para inicializar os embeddings com a mesma configuração em que foram gerados.
 
+### Catálogo de CIDs
+
+Para a listagem de CIDs utilizada no backend (endpoint `/api/cids`), passamos a usar o pacote [`simple-icd-10`](https://pypi.org/project/simple-icd-10/), que fornece a base de códigos e descrições ICD-10 em memória para o serviço.
+
 ## LangGraph - Chat com Assistente
 
 Em primeiro momento, criamos um LangGraph simples em [`assistente_medico_api/graph/chat_rag.py`](../backend/src/assistente_medico_api/graph/chat_rag.py) com um _retriever_ e um _generator_, recebendo uma mensagem do usuário e a usando diretamente para fazer a busca na base vetorizada.
@@ -164,3 +176,15 @@ Para facilitar os testes, integramos a aba "Chat com assistente" do nosso protó
 Para reduzir o tempo de espera até a resposta ser gerada, executamos o grafo LangGraph de forma assíncrona (`graph.astream_events`) e capturamos eventos (`on_chain_end`, `on_chat_model_stream`) para enviar tokens para o cliente front-end conforme são gerados (cabeçalho `Accepts: text/event-stream`).
 
 ![Chat com fontes e mensagem sendo gerada](./assets/Screenshot%202026-04-14%20at%2016.49.38.png)
+
+## Plano de extração dos nomes de medicamentos (RENAME)
+
+Resumo do plano executável para o arquivo `docs/rename-medicamentos-2024.pdf`:
+
+1. Extrair tabelas e linhas do PDF com rastreabilidade por página, persistindo artefato bruto em JSONL.
+2. Normalizar nomes (acentos, caixa, espaços), separar nome base de dose/apresentação quando possível e sinalizar ambiguidades.
+3. Deduplicar por chave normalizada, mantendo rótulo de exibição para UI e ingrediente ativo para busca.
+4. Gerar atualização do catálogo em memória do backend preservando o contrato da API de medicamentos.
+5. Validar com testes de contrato e amostragem manual de qualidade antes de publicar.
+
+Detalhamento completo por fase, entradas, saídas e critérios de validação em [docs/plano-extracao-rename.md](./plano-extracao-rename.md).
