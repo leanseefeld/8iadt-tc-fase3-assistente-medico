@@ -15,6 +15,7 @@ async def test_graph_invoke_fails_when_async_node_present():
     initial = {
         "query": "teste",
         "patient_id": "p1",
+        "chat_history": [],
         "retrieved_docs": [],
         "sources": [],
         "reasoning_steps": [],
