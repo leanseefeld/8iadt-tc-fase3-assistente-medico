@@ -12,6 +12,10 @@ Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `c
 
 ## Marcos
 
+### 2026-04-26
+
+- **chat-message-history** — Chat: corpo opcional `messageHistory` (máx. 20 turnos) em `POST /api/assistant/chat`; `ChatRAGState.chat_history`; `generate` monta Human/Ai + última Human com PCDT; frontend envia histórico em `ChatPage`/`clinicalApi.http.ts`. — Revisão: `515092e` refactor: remove implementation plan for medication extraction from documentation
+
 ### 2026-04-02
 
 - **repo-spa-inicial** — git:[leander@nomadmacaw.com](mailto:leander@nomadmacaw.com) — Estrutura do repo, SPA, mocks, Docker, páginas, docs de referência, UI alinhada e `clinicalApi`. — Revisão: `effc8e0` feat(frontend): align UI with reference and add clinicalApi facade

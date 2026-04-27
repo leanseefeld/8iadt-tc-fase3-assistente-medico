@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ChatHistoryTurnModel(BaseModel):
+    """Um turno anterior da conversa (não inclui a mensagem corrente em `message`)."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(
+        ...,
+        min_length=1,
+        max_length=8000,
+        description="Texto do turno, sem o prefixo PCDT da última pergunta.",
+    )
 
 
 class ChatRequest(BaseModel):
@@ -12,6 +26,12 @@ class ChatRequest(BaseModel):
 
     patient_id: str = Field(..., alias="patientId", description="ID do paciente (contexto futuro).")
     message: str = Field(..., min_length=1, description="Última mensagem do médico.")
+    message_history: list[ChatHistoryTurnModel] | None = Field(
+        default=None,
+        alias="messageHistory",
+        max_length=20,
+        description="Turnos anteriores (user/assistant) antes da `message` atual.",
+    )
 
 
 class ChatResponseJson(BaseModel):

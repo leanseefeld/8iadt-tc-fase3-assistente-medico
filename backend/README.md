@@ -36,6 +36,7 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 - Documentação interativa: `http://127.0.0.1:8000/docs`
 - Chat JSON: `POST http://127.0.0.1:8000/api/assistant/chat` com `Accept: application/json`
 - Chat SSE: mesma URL com `Accept: text/event-stream`
+- **Memória de conversa (opcional):** no corpo JSON, além de `patientId` e `message` (pergunta atual), envie `messageHistory` — lista de `{ "role": "user" | "assistant", "content": "..." }` com **no máximo 20** turnos anteriores (não repetir a `message` atual). O PCDT é anexado só ao turno final.
 
 ## Variáveis de ambiente (prefixo `MEDICO_`)
 

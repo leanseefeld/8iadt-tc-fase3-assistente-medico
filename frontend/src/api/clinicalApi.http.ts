@@ -10,15 +10,32 @@ import {
 
 export type { ChatStreamHandlers };
 
+/** Turnos anteriores à `message` atual (contrato alinhado ao backend). */
+export type AssistantMessageHistoryItem = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export type AssistantChatRequestOptions = ChatStreamHandlers & {
+  messageHistory?: AssistantMessageHistoryItem[];
+};
+
 export async function postAssistantChatMock(
   patientId: string,
   message: string,
-  handlers?: ChatStreamHandlers,
+  options?: AssistantChatRequestOptions,
 ): Promise<ChatResponse> {
   const url = `${API_BASE_URL}/assistant/chat`;
-  const body = JSON.stringify({ patientId, message });
+  const messageHistory = options?.messageHistory;
+  const body = JSON.stringify({
+    patientId,
+    message,
+    ...(messageHistory?.length
+      ? { messageHistory: messageHistory }
+      : {}),
+  });
   const useSse = Boolean(
-    handlers && (handlers.onToken != null || handlers.onMeta != null),
+    options && (options.onToken != null || options.onMeta != null),
   );
 
   if (useSse) {
@@ -32,10 +49,10 @@ export async function postAssistantChatMock(
     });
     if (!res.ok) {
       const detail = await parseHttpErrorDetail(res);
-      handlers?.onError?.(detail);
+      options?.onError?.(detail);
       throw new Error(detail);
     }
-    return consumeAssistantChatSse(res, handlers);
+    return consumeAssistantChatSse(res, options);
   }
 
   const res = await fetch(url, {

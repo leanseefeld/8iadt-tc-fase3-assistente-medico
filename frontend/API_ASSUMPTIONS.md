@@ -252,6 +252,8 @@ Corpo: `{ "resolved": boolean }`
 { "patientId": "uuid", "message": "string" }
 ```
 
+Campo opcional para memória de conversa (follow-up): `messageHistory` — array de `{ "role": "user" | "assistant", "content": "string" }` com os turnos **anteriores** à `message` atual (máx. 20 entradas).
+
 O servidor FastAPI aceita `patientId` (alias); internamente pode mapear para `patient_id`.
 
 **Modo principal — SSE (streaming):**
