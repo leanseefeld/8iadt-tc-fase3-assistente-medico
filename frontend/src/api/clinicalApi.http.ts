@@ -18,6 +18,8 @@ export type AssistantMessageHistoryItem = {
 
 export type AssistantChatRequestOptions = ChatStreamHandlers & {
   messageHistory?: AssistantMessageHistoryItem[];
+  /** Memória de conversa no servidor; omitir na primeira mensagem da sessão. */
+  threadId?: string;
 };
 
 export async function postAssistantChatMock(
@@ -30,6 +32,7 @@ export async function postAssistantChatMock(
   const body = JSON.stringify({
     patientId,
     message,
+    ...(options?.threadId ? { threadId: options.threadId } : {}),
     ...(messageHistory?.length
       ? { messageHistory: messageHistory }
       : {}),

@@ -27,11 +27,13 @@ export function ChatPage() {
   const [sources, setSources] = useState<string[]>([]);
   const [reasoning, setReasoning] = useState<string[]>([]);
   const [reasoningOpen, setReasoningOpen] = useState(true);
+  const [assistantThreadId, setAssistantThreadId] = useState<string | null>(null);
 
   useEffect(() => {
     setMessages([]);
     setSources([]);
     setReasoning([]);
+    setAssistantThreadId(null);
   }, [activePatientId]);
 
   if (!activePatientId || !patient) {
@@ -65,6 +67,7 @@ export function ChatPage() {
     ]);
     try {
       const res = await postAssistantChatMock(activePatientId!, trimmed, {
+        threadId: assistantThreadId ?? undefined,
         messageHistory,
         onToken: (delta) => {
           setMessages((m) =>
@@ -92,6 +95,9 @@ export function ChatPage() {
       );
       setSources(res.sources);
       setReasoning(res.reasoning);
+      if (res.threadId) {
+        setAssistantThreadId(res.threadId);
+      }
       if (!res.text.trim()) {
         setMessages((m) =>
           m.map((msg) =>
