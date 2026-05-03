@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -13,22 +14,32 @@ class DummyGraph:
         self.ainvoke_calls = 0
         self.astream_events_calls = 0
         self.last_initial = None
+        self.last_config = None
+        self.last_stream_config = None
 
     def invoke(self, _initial):
         self.invoke_calls += 1
         raise AssertionError("invoke() should not be called by API paths")
 
-    async def ainvoke(self, initial):
+    async def aget_state(self, config):
+        """Simula thread novo (sem histórico persistido no checkpointer)."""
+        self.last_config = config
+        return SimpleNamespace(values={})
+
+    async def ainvoke(self, initial, config=None):
         self.ainvoke_calls += 1
         self.last_initial = initial
+        self.last_config = config
         return {
             "answer": "ok-json",
             "sources": ["S1"],
             "reasoning_steps": ["R1"],
         }
 
-    async def astream_events(self, _initial, *, version: str):
+    async def astream_events(self, initial, config=None, *, version: str):
         self.astream_events_calls += 1
+        self.last_stream_initial = initial
+        self.last_stream_config = config
         assert version == "v2"
         if False:  # pragma: no cover
             yield {}
@@ -54,9 +65,13 @@ async def test_post_chat_json_uses_ainvoke_not_invoke():
     assert payload["text"] == "ok-json"
     assert payload["sources"] == ["S1"]
     assert payload["reasoning"] == ["R1"]
+    assert "threadId" in payload and payload["threadId"]
     assert dummy.ainvoke_calls == 1
     assert dummy.invoke_calls == 0
     assert dummy.last_initial.get("chat_history") == []
+    assert dummy.last_config == {
+        "configurable": {"thread_id": payload["threadId"]},
+    }
 
 
 @pytest.mark.asyncio
@@ -86,6 +101,47 @@ async def test_post_chat_json_pushes_message_history_into_graph_state():
     assert len(h) == 2
     assert h[0] == {"role": "user", "content": "o que é X?"}
     assert h[1] == {"role": "assistant", "content": "X é ..."}
+
+
+class DummyGraphWithCheckpointHistory(DummyGraph):
+    """Simula thread com histórico já no checkpointer LangGraph."""
+
+    async def aget_state(self, config):
+        self.last_config = config
+        return SimpleNamespace(
+            values={
+                "chat_history": [{"role": "user", "content": "persistido"}],
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_post_chat_json_omits_chat_history_when_checkpoint_has_it():
+    """Com histórico persistido, o update não reenvia `chat_history` (merge no grafo)."""
+    app: FastAPI = create_app()
+    dummy = DummyGraphWithCheckpointHistory()
+    app.state.chat_graph = dummy
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.post(
+            "/api/assistant/chat",
+            headers={"Accept": "application/json"},
+            json={
+                "patientId": "p1",
+                "threadId": "thread-fixo",
+                "message": "follow-up",
+                "messageHistory": [
+                    {"role": "user", "content": "isto deve ser ignorado"},
+                ],
+            },
+        )
+
+    assert res.status_code == 200
+    assert "chat_history" not in dummy.last_initial
+    assert dummy.last_config == {
+        "configurable": {"thread_id": "thread-fixo"},
+    }
 
 
 @pytest.mark.asyncio

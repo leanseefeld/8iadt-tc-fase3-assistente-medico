@@ -26,6 +26,11 @@ class ChatRequest(BaseModel):
 
     patient_id: str = Field(..., alias="patientId", description="ID do paciente (contexto futuro).")
     message: str = Field(..., min_length=1, description="Última mensagem do médico.")
+    thread_id: str | None = Field(
+        default=None,
+        alias="threadId",
+        description="ID da conversa (memória no servidor). Omitir: inicia novo thread.",
+    )
     message_history: list[ChatHistoryTurnModel] | None = Field(
         default=None,
         alias="messageHistory",
@@ -37,9 +42,12 @@ class ChatRequest(BaseModel):
 class ChatResponseJson(BaseModel):
     """Resposta JSON alinhada ao DTO ChatResponse do frontend."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     text: str
     sources: list[str]
     reasoning: list[str]
+    thread_id: str = Field(serialization_alias="threadId")
 
 
 class DecisionFlowRequest(BaseModel):

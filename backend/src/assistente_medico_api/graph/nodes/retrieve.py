@@ -38,19 +38,20 @@ def retrieve_node(
     settings: Settings,
 ) -> dict:
     """
-    Executa busca por similaridade na última mensagem do usuário.
+    Executa busca por similaridade usando retrieval_query (reescrita) quando existir.
 
     Síncrono para poder ser executado em asyncio.to_thread no endpoint.
     """
-    query = state.get("query") or ""
+    query = (state.get("retrieval_query") or state.get("query") or "").strip()
     k = settings.retrieval_k
     pairs = store.similarity_search_with_score(query, k=k)
     docs = [d for d, _ in pairs]
 
     sources = [format_source_label(d) for d in docs]
-    reasoning_steps = [
-        f"Consultou a base PCDT com k={k} para a pergunta atual.",
-    ]
+    reasoning_steps = list(state.get("reasoning_steps") or [])
+    reasoning_steps.append(
+        f"Consultou a base PCDT com k={k} (consulta de busca: {query[:120]}{'…' if len(query) > 120 else ''})."
+    )
     if docs:
         stems = sorted({d.metadata.get("source_stem", "?") for d in docs})
         reasoning_steps.append(f"Fragmentos de: {', '.join(stems)}.")

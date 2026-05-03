@@ -12,6 +12,8 @@ from assistente_medico_api.api.chat import router as chat_router
 from assistente_medico_api.api.comorbidities import router as comorbidities_router
 from assistente_medico_api.api.medications import router as medications_router
 from assistente_medico_api.api.patients import router as patients_router
+from langgraph.checkpoint.memory import MemorySaver
+
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
 
@@ -35,12 +37,16 @@ async def lifespan(app: FastAPI):
     )
     app.state.settings = settings
     app.state.chroma_store = store
-    app.state.chat_graph = build_compiled_chat_graph(store, settings)
+    app.state.chat_checkpointer = MemorySaver()
+    app.state.chat_graph = build_compiled_chat_graph(
+        store, settings, app.state.chat_checkpointer
+    )
 
     yield
 
     app.state.chroma_store = None
     app.state.chat_graph = None
+    app.state.chat_checkpointer = None
     app.state.settings = None
 
 

@@ -97,6 +97,8 @@ export interface ChatResponse {
   text: string;
   sources: string[];
   reasoning: string[];
+  /** Presente quando o backend devolve o id do thread (LangGraph checkpointer). */
+  threadId?: string;
 }
 
 export interface DecisionFlowResponse {
