@@ -269,8 +269,6 @@ def main() -> None:
             llm_stream_timeout_s=st.number_input("Timeout LLM (s)", min_value=5.0, max_value=600.0, value=float(cfg0.llm_stream_timeout_s), step=5.0),
         )
         auto_fallback_model = st.checkbox("Fallback automático para modelo leve", value=True)
-        fallback_model_name = st.text_input("Modelo fallback (leve)", value="gemma4:e2b-it-q4_K_M")
-        st.caption("A temperatura segue o backend: `0.2` fixa em `_build_llm`.")
         st.caption("Dica: o path default do Chroma é `vectorstore/chroma` na raiz do repositório.")
 
     tab_run, tab_vectorstore, tab_export = st.tabs(["Executar & inspecionar", "Vectorstore", "Exportar JSON"])
