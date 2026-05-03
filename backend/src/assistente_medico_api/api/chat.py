@@ -14,21 +14,53 @@ from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.deps import get_session
 from assistente_medico_api.repositories import patient_repo
 from assistente_medico_api.schemas.chat import (
+    ChatHistoryTurnModel,
     ChatRequest,
     ChatResponseJson,
     DecisionFlowMeta,
     DecisionFlowRequest,
     DecisionFlowResponse,
 )
+from assistente_medico_api.graph.state import ChatHistoryTurnState
 from assistente_medico_api.services.protocol_map import get_protocol_for_cid
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
+
+"""
+Limite de segurança: últimos N turnos (além do max_length do schema).Para casos em que o 
+cliente envie muitas mensagens de uma vez
+"""
+_MAX_HISTORY_TURNS = 20
+
+
+def _normalize_message_history(
+    body: ChatRequest,
+) -> list[ChatHistoryTurnState]:
+    """
+    Converte o histórico do cliente no formato do grafo, corta a janela e remove 
+    conteúdo vazio.
+    """
+    raw: list[ChatHistoryTurnModel] = list(body.message_history or [])
+    if not raw:
+        return []
+    # Mantém no máximo os últimos _MAX_HISTORY_TURNS itens.
+    if len(raw) > _MAX_HISTORY_TURNS:
+        raw = raw[-_MAX_HISTORY_TURNS:]
+    return [
+        {
+            "role": turn.role,
+            "content": turn.content.strip(),
+        }
+        for turn in raw
+        if turn.content.strip()
+    ]
 
 
 def _initial_state(body: ChatRequest) -> ChatRAGState:
     return {
         "query": body.message.strip(),
         "patient_id": body.patient_id,
+        "chat_history": _normalize_message_history(body),
         "retrieved_docs": [],
         "sources": [],
         "reasoning_steps": [],

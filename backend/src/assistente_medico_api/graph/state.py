@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from langchain_core.documents import Document
+
+
+class ChatHistoryTurnState(TypedDict):
+    """Turno de conversa anterior, serializável no estado do grafo."""
+
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class ChatRAGState(TypedDict, total=False):
@@ -12,6 +19,7 @@ class ChatRAGState(TypedDict, total=False):
 
     query: str
     patient_id: str
+    chat_history: list[ChatHistoryTurnState]
     retrieved_docs: list[Document]
     sources: list[str]
     reasoning_steps: list[str]

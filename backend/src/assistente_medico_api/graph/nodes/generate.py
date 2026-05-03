@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import httpx
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_ollama import ChatOllama
 
 from assistente_medico_api.config import Settings
@@ -26,12 +31,24 @@ def _build_messages(state: ChatRAGState) -> list:
     docs = state.get("retrieved_docs") or []
     context = format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
     user_text = state.get("query") or ""
-    human = (
+    # Bloco PCDT só na pergunta corrente (turno final do utilizador).
+    final_human = (
         f"Pergunta do médico:\n{user_text}\n\n"
         f"Contexto (trechos PCDT):\n{context}\n\n"
         "Responda com base no contexto quando aplicável."
     )
-    return [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human)]
+    out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
+    for turn in state.get("chat_history") or []:
+        text = (turn.get("content") or "").strip()
+        if not text:
+            continue
+        role = turn.get("role")
+        if role == "user":
+            out.append(HumanMessage(content=text))
+        elif role == "assistant":
+            out.append(AIMessage(content=text))
+    out.append(HumanMessage(content=final_human))
+    return out
 
 
 def _build_llm(settings: Settings) -> ChatOllama:

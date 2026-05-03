@@ -47,6 +47,11 @@ export function ChatPage() {
     if (!trimmed) {
       return;
     }
+    // Turnos anteriores concluídos (sem a pergunta atual, enviada em `message`).
+    const messageHistory = messages
+      .filter((m) => !m.streaming && m.text.trim())
+      .map((m) => ({ role: m.role, content: m.text }));
+
     setMessages((m) => [
       ...m,
       { id: `u-${Date.now()}`, role: 'user', text: trimmed },
@@ -60,6 +65,7 @@ export function ChatPage() {
     ]);
     try {
       const res = await postAssistantChatMock(activePatientId!, trimmed, {
+        messageHistory,
         onToken: (delta) => {
           setMessages((m) =>
             m.map((msg) =>

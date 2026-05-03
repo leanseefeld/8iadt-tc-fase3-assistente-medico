@@ -17,9 +17,11 @@ import type {
   ReAdmitOverrides,
 } from '@/api/clinicalApi.types';
 import { quickQuestionsForCid } from '@/mocks/internal/chatMocks';
-import type { ChatStreamHandlers } from '@/api/sseChat';
+import type { AssistantChatRequestOptions } from '@/api/clinicalApi.http';
 
-export type { ChatStreamHandlers, PatchPatientBody, ReAdmitOverrides };
+export type { AssistantChatRequestOptions, AssistantMessageHistoryItem } from '@/api/clinicalApi.http';
+export type { ChatStreamHandlers } from '@/api/sseChat';
+export type { PatchPatientBody, ReAdmitOverrides } from '@/api/clinicalApi.types';
 
 function parseMedicationLines(text?: string): string[] {
   if (!text?.trim()) {
@@ -155,9 +157,9 @@ export const postAssistantDecisionFlowMock = http.postAssistantDecisionFlowMock;
 export async function postAssistantChatMock(
   patientId: string,
   message: string,
-  handlers?: ChatStreamHandlers,
+  options?: AssistantChatRequestOptions,
 ) {
-  return http.postAssistantChatMock(patientId, message, handlers);
+  return http.postAssistantChatMock(patientId, message, options);
 }
 
 /** Lista de perguntas rápidas: função pura, igual em ambos os transportes. */

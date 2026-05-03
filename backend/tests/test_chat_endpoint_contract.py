@@ -12,13 +12,15 @@ class DummyGraph:
         self.invoke_calls = 0
         self.ainvoke_calls = 0
         self.astream_events_calls = 0
+        self.last_initial = None
 
     def invoke(self, _initial):
         self.invoke_calls += 1
         raise AssertionError("invoke() should not be called by API paths")
 
-    async def ainvoke(self, _initial):
+    async def ainvoke(self, initial):
         self.ainvoke_calls += 1
+        self.last_initial = initial
         return {
             "answer": "ok-json",
             "sources": ["S1"],
@@ -54,6 +56,36 @@ async def test_post_chat_json_uses_ainvoke_not_invoke():
     assert payload["reasoning"] == ["R1"]
     assert dummy.ainvoke_calls == 1
     assert dummy.invoke_calls == 0
+    assert dummy.last_initial.get("chat_history") == []
+
+
+@pytest.mark.asyncio
+async def test_post_chat_json_pushes_message_history_into_graph_state():
+    app: FastAPI = create_app()
+    dummy = DummyGraph()
+    app.state.chat_graph = dummy
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.post(
+            "/api/assistant/chat",
+            headers={"Accept": "application/json"},
+            json={
+                "patientId": "p1",
+                "message": "follow-up",
+                "messageHistory": [
+                    {"role": "user", "content": "o que é X?"},
+                    {"role": "assistant", "content": "X é ..."},
+                ],
+            },
+        )
+
+    assert res.status_code == 200
+    assert dummy.ainvoke_calls == 1
+    h = dummy.last_initial.get("chat_history") or []
+    assert len(h) == 2
+    assert h[0] == {"role": "user", "content": "o que é X?"}
+    assert h[1] == {"role": "assistant", "content": "X é ..."}
 
 
 @pytest.mark.asyncio
