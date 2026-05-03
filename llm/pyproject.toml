@@ -23,6 +23,7 @@ dependencies = [
     "pymupdf4llm>=0.0.17",
     "pytest>=8.0",
     "ruff>=0.6",
+    "streamlit>=1.40",
 ]
 
 [project.scripts]

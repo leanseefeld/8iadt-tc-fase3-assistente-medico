@@ -1,0 +1,142 @@
+Connected to: <socket.socket fd=1356, family=2, type=1, proto=0, laddr=('127.0.0.1', 64754), raddr=('127.0.0.1', 51323)>.
+INFO:     Will watch for changes in these directories: ['C:\\Users\\aninh\\OneDrive\\Documentos\\postech-workspace\\postech-ia\\8iadt-tc-fase3-assistente-medico\\backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [4596] using WatchFiles
+Connected to: <socket.socket fd=1164, family=2, type=1, proto=0, laddr=('127.0.0.1', 64757), raddr=('127.0.0.1', 51323)>.
+INFO:     Started server process [11140]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'scripts\update_medication_catalog_from_rename.py', 'src\assistente_medico_api\services\medication_catalog.py', 'src\assistente_medico_api\services\cid_catalog.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [11140]
+Could not connect to 127.0.0.1: 51323
+Traceback (most recent call last):
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\_pydevd_bundle\pydevd_comm.py", line 443, in start_client
+    s.connect((host, port))
+ConnectionRefusedError: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 1849, in settrace
+    _locked_settrace(
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 1906, in _locked_settrace
+    py_db.connect(host, port)  # Note: connect can raise error.
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 688, in connect
+    s = start_client(host, port)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\_pydevd_bundle\pydevd_comm.py", line 443, in start_client
+    s.connect((host, port))
+ConnectionRefusedError: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [15376]
+INFO:     Stopping reloader process [18840]
+INFO:     Will watch for changes in these directories: ['C:\\Users\\aninh\\OneDrive\\Documentos\\postech-workspace\\postech-ia\\8iadt-tc-fase3-assistente-medico\\backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [6224] using WatchFiles
+INFO:     Started server process [26296]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'src\assistente_medico_api\services\cid_catalog.py', 'src\assistente_medico_api\services\medication_catalog.py', 'scripts\update_medication_catalog_from_rename.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [26296]
+WARNING:  WatchFiles detected changes in 'src\assistente_medico_api\services\cid_catalog.py', 'scripts\update_medication_catalog_from_rename.py', 'src\assistente_medico_api\services\medication_catalog.py'. Reloading...
+INFO:     Started server process [36592]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [36592]
+INFO:     Started server process [17548]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+\\8iadt-tc-fase3-assistente-medico\\backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [24012] using WatchFiles
+INFO:     Started server process [16916]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'src\assistente_medico_api\services\medication_catalog.py', 'src\assistente_medico_api\services\cid_catalog.py', 'scripts\update_medication_catalog_from_rename.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [16916]
+WARNING:  WatchFiles detected changes in 'src\assistente_medico_api\services\cid_catalog.py', 'src\assistente_medico_api\services\medication_catalog.py', 'scripts\update_medication_catalog_from_rename.py'. Reloading...
+INFO:     Started server process [10464]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [10464]
+INFO:     Started server process [20300]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ete.
+INFO:     Finished server process [9200]
+Could not connect to 127.0.0.1: 51822
+Traceback (most recent call last):
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\_pydevd_bundle\pydevd_comm.py", line 443, in start_client
+    s.connect((host, port))
+ConnectionRefusedError: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 1849, in settrace
+    _locked_settrace(
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 1906, in _locked_settrace
+    py_db.connect(host, port)  # Note: connect can raise error.
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 688, in connect
+    s = start_client(host, port)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\_pydevd_bundle\pydevd_comm.py", line 443, in start_client
+    s.connect((host, port))
+ConnectionRefusedError: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente
+ains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 1906, in _locked_settrace
+    py_db.connect(host, port)  # Note: connect can raise error.
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 688, in connect
+    s = start_client(host, port)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\_pydevd_bundle\pydevd_comm.py", line 443, in start_client
+    s.connect((host, port))
+ConnectionRefusedError: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente
+rains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydCould not connect to 127.0.0.1: 51108
+Traceback (most recent call last):
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\_pydevd_bundle\pydevd_comm.py", line 443, in start_client
+    s.connect((host, port))
+ConnectionRefusedError: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 1849, in settrace
+    _locked_settrace(
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 1906, in _locked_settrace
+    py_db.connect(host, port)  # Note: connect can raise error.
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\pydevd.py", line 688, in connect
+    s = start_client(host, port)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\JetBrains\PyCharm 2025.2.4\plugins\python-ce\helpers\pydev\_pydevd_bundle\pydevd_comm.py", line 443, in start_client
+    s.connect((host, port))
+ConnectionRefusedError: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente
+rains\PyCharm 2025.2.4\plugins\pyINFO:     Started server process [24180]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [24180]
+INFO:     Started server process [8160]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+python-ce\helpers\pydev\_pydevd_bundle\pydevd_comm.py", line 443, in start_client
+    s.connect((host, port))
+ConnectionRefusedError: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente

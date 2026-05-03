@@ -1,0 +1,180 @@
++-----------+  
+| __start__ |  
++-----------+  
+      *        
+      *        
+      *        
++----------+   
+| retrieve |   
++----------+   
+      *        
+      *        
+      *        
++----------+   
+| generate |   
++----------+   
+      *        
+      *        
+      *        
+ +---------+   
+ | __end__ |   
+ +---------+   
+INFO:     127.0.0.1:60551 - "GET /api/alerts?resolved=false HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60201 - "GET /api/patients?status=admitted HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60201 - "GET /api/patients?status=admitted HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60551 - "GET /api/alerts?resolved=false HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64327 - "GET /api/cids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58413 - "GET /api/assistant/comorbidities HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60145 - "GET /api/assistant/comorbidities HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64327 - "GET /api/patients?status=discharged HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64327 - "GET /api/medications HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64327 - "GET /api/cids HTTP/1.1" 200 OK
+INFO:   [0m +-----------+  
+| __start__ |  
++-----------+  
+      *        
+      *        
+      *        
++----------+   
+| retrieve |   
++----------+   
+      *        
+      *        
+      *        
++----------+   
+| generate |   
++----------+   
+      *        
+      *        
+      *        
+ +---------+   
+ | __end__ |   
+ +---------+   
+[0m+-----------+  
+| __start__ |  
++-----------+  
+      *        
+      *        
+      *        
++----------+   
+| retrieve |   
++----------+   
+      *        
+      *        
+      *        
++----------+   
+| generate |   
++----------+   
+      *        
+      *        
+      *        
+ +---------+   
+ | __end__ |   
+ +---------+   
++-----------+  
+| __start__ |  
++-----------+  
+      *        
+      *        
+      *        
++----------+   
+| retrieve |   
++----------+   
+      *        
+      *        
+      *        
++----------+   
+| generate |   
++----------+   
+      *        
+      *        
+      *        
+ +---------+   
+ | __end__ |   
+ +---------+   
+[0m+-----------+  
+| __start__ |  
++-----------+  
+      *        
+      *        
+      *        
++----------+   
+| retrieve |   
++----------+   
+      *        
+      *        
+      *        
++----------+   
+| generate |   
++----------+   
+      *        
+      *        
+      *        
+ +---------+   
+ | __end__ |   
+ +---------+   
+
+INFO:     127.0.0.1:53341 - "GET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53341 - "OPTIONS /api/assistant/chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53543 - "POST /api/assistant/chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55342 - "GET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55342 - "GET /api/patients/mock-disch-02  [0m1.1" 200 OK
+INFO:     127.0.0.1:55342 - "GET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55342 - "GET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55342 - "POST /api/assistant/chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55342 - "GET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55342 - "GET /api/patients/moc [0mch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55342 - "OPTIONS /api/assistant/decision-flow HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50941 - "POST /api/assistant/decision-flow HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54773 - "GET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54773 - "GET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54773 [0mET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54773 - "GET /api/patients/mock-disch-02 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54773 - "GET /api/alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54773 - "GET /api/alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54773 - "GET /api/patients HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64219 - "GET /api/patients HTTP/1 [0m +-----------+  
+| __start__ |  
++-----------+  
+      *        
+      *        
+      *        
++----------+   
+| retrieve |   
++----------+   
+      *        
+      *        
+      *        
++----------+   
+| generate |   
++----------+   
+      *        
+      *        
+      *        
+ +---------+   
+ | __end__ |   
+ +---------+   
+[0m+-----------+  
+| __start__ |  
++-----------+  
+      *        
+      *        
+      *        
++----------+   
+| retrieve |   
++----------+   
+      *        
+      *        
+      *        
++----------+   
+| generate |   
++----------+   
+      *        
+      *        
+      *        
+ +---------+   
+ | __end__ |   
+ +---------+   
+127.0.0.1:56005 - "POST /api/assistant/chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60035 - "POST /api/assistant/chat HTTP/1.1" 200 OK
+ [0m

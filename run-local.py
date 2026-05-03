@@ -144,7 +144,7 @@ def main() -> int:
         llm_env["PYTHONPATH"] = f"{llm_src}{os.pathsep}{llm_env.get('PYTHONPATH', '')}"
 
         steps = [
-            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--max-files", "20", "--force"]),
+            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--force"]),
             ("extract-pcdt-markdown", ["pcdt_ingest.cli_extract", "--workers", "6", "--force"]),
             ("chunk-pcdt", ["pcdt_ingest.cli_chunk", "--workers", "6", "--force"]),
             ("build-vectorstore", ["pcdt_ingest.cli_embed", "--force"])

@@ -3,13 +3,13 @@ name: RAG + Fine-Tuning Pipeline
 overview: "Master roadmap: PCDT extraction is implemented (JSONL sidecars + CLI). Remaining work — chunking from sidecars, optional [rag] deps for LangChain/Chroma/embeddings, RAG chain, SFT + QLoRA fine-tuning — is described below."
 todos:
   - id: deps
-    content: "Add LangChain/Chroma/finetune deps when implementing embed+RAG+SFT (optional [rag]/[finetune] groups or extend main deps — see Part Dependencies)"
+    content: Add LangChain/Chroma/finetune deps when implementing embed+RAG+SFT (optional [rag]/[finetune] groups or extend main deps — see Part Dependencies)
     status: pending
   - id: extract
-    content: "DONE — extract.py + extract-pcdt-markdown (sidecar *.pages.jsonl, optional combined .md)"
+    content: DONE — extract.py + extract-pcdt-markdown (sidecar *.pages.jsonl, optional combined .md)
     status: completed
   - id: chunk
-    content: "Implement pcdt_ingest/chunk.py — see .cursor/plans/pcdt_chunking_implementation.plan.md"
+    content: Implement pcdt_ingest/chunk.py — see .cursor/plans/pcdt_chunking_implementation.plan.md
     status: pending
   - id: embed
     content: "Implement llm/src/pcdt_ingest/embed.py: bulk Chroma ingestion with nomic-embed-text via OllamaEmbeddings"
@@ -31,9 +31,9 @@ isProject: false
 ## Context (updated)
 
 - 132 PCDT PDFs live at `llm/data/raw/pcdt/` (via `download-pcdt`).
-- **`gemma4:e4b-it-q4_K_M`** runs locally in Ollama.
-- **Extraction is implemented** (see § Part 1 below): per-PDF **sidecar** `processed/pcdt/<stem>.pages.jsonl` (one JSON line per page: `page`, `markdown`), optional combined `*.md` via `--with-combined-md`, CLI **`extract-pcdt-markdown`**, run manifest `manifests/pcdt_md_extract.jsonl`, parallelism via **`--workers`**, incremental/skip logic.
-- **`llm/pyproject.toml`** uses a **single** `[project.dependencies]` list (no optional groups today): core ingest stack includes `pymupdf4llm`, Playwright, pandas, pytest, **ruff** (dev linter folded into main install per “flatten deps” decision). **`pip install -e .`** from `llm/` installs everything listed there.
+- `**gemma4:e4b-it-q4_K_M**` runs locally in Ollama.
+- **Extraction is implemented** (see § Part 1 below): per-PDF **sidecar** `processed/pcdt/<stem>.pages.jsonl` (one JSON line per page: `page`, `markdown`), optional combined `*.md` via `--with-combined-md`, CLI `**extract-pcdt-markdown`**, run manifest `manifests/pcdt_md_extract.jsonl`, parallelism via `**--workers**`, incremental/skip logic.
+- `**llm/pyproject.toml**` uses a **single** `[project.dependencies]` list (no optional groups today): core ingest stack includes `pymupdf4llm`, Playwright, pandas, pytest, **ruff** (dev linter folded into main install per “flatten deps” decision). `**pip install -e .`** from `llm/` installs everything listed there.
 - **Still open**: chunking → embeddings → Chroma → RAG → SFT → QLoRA as in the sections below.
 
 ---
@@ -42,11 +42,11 @@ isProject: false
 
 ### Extraction — implemented
 
-- **Library**: `pymupdf4llm` with **`page_chunks=True`** → list of per-page dicts (`text` + `metadata.page_number`).
+- **Library**: `pymupdf4llm` with `**page_chunks=True`** → list of per-page dicts (`text` + `metadata.page_number`).
 - **Artifacts** (under `llm/data/processed/pcdt/`):
-  - **Always**: `{stem}.pages.jsonl` — canonical **page-level** markdown for downstream **`page_range`** metadata.
-  - **Optional**: `{stem}.md` — full concatenation for human review, only if CLI **`--with-combined-md`**.
-- **CLI**: `extract-pcdt-markdown` — flags include `--with-combined-md`, `--force`, `--max-files`, `--only-manifest`, `--workers`, `--quiet` (see [`llm/README.md`](../../llm/README.md)).
+  - **Always**: `{stem}.pages.jsonl` — canonical **page-level** markdown for downstream `**page_range`** metadata.
+  - **Optional**: `{stem}.md` — full concatenation for human review, only if CLI `**--with-combined-md`**.
+- **CLI**: `extract-pcdt-markdown` — flags include `--with-combined-md`, `--force`, `--max-files`, `--only-manifest`, `--workers`, `--quiet` (see `[llm/README.md](../../llm/README.md)`).
 - **Cleaning**: `clean_markdown()` per page (conservative footer/page-noise stripping).
 
 ### Chunking strategy (unchanged intent, input clarified)
@@ -56,16 +56,18 @@ PCDTs are long (~30–80 pages). Use a **two-pass** approach in `llm/src/pcdt_in
 1. **First pass** — `MarkdownHeaderTextSplitter` on the **stitched document** built from `*.pages.jsonl` (preserve page order), splitting on `##` / `###` → metadata such as `section`, `source`.
 2. **Second pass** — `RecursiveCharacterTextSplitter` (e.g. chunk_size≈800 tokens, overlap≈150) within each section so chunks fit the retriever/LLM.
 
-**Page provenance**: while splitting, map character spans back to **page numbers** using the known per-page boundaries from the sidecar so each chunk gets **`page_range`** (or `page_start` / `page_end`), not only section title.
+**Page provenance**: while splitting, map character spans back to **page numbers** using the known per-page boundaries from the sidecar so each chunk gets `**page_range`** (or `page_start` / `page_end`), not only section title.
 
-**Detailed implementation plan**: [`.cursor/plans/pcdt_chunking_implementation.plan.md`](pcdt_chunking_implementation.plan.md).
+**Detailed implementation plan**: `[.cursor/plans/pcdt_chunking_implementation.plan.md](pcdt_chunking_implementation.plan.md)`.
 
 ### Modules
 
-| Module | Status | Role |
-|--------|--------|------|
-| [`llm/src/pcdt_ingest/extract.py`](../../llm/src/pcdt_ingest/extract.py) | **Done** | PDF → `*.pages.jsonl` (+ optional `*.md`) |
-| `llm/src/pcdt_ingest/chunk.py` | **Todo** | Sidecar JSONL → `List[Document]` / exported chunks + metadata |
+
+| Module                                                                   | Status   | Role                                                          |
+| ------------------------------------------------------------------------ | -------- | ------------------------------------------------------------- |
+| `[llm/src/pcdt_ingest/extract.py](../../llm/src/pcdt_ingest/extract.py)` | **Done** | PDF → `*.pages.jsonl` (+ optional `*.md`)                     |
+| `llm/src/pcdt_ingest/chunk.py`                                           | **Todo** | Sidecar JSONL → `List[Document]` / exported chunks + metadata |
+
 
 ---
 
@@ -91,13 +93,15 @@ Pull the model once: `ollama pull nomic-embed-text`
 
 ### Recommendation: Chroma (local, persistent, best DX for this project)
 
-| | Chroma | Qdrant local | FAISS |
-|---|---|---|---|
-| Setup | `pip install chromadb` | `pip install qdrant-client[local]` | `pip install faiss-cpu` |
-| Persistence | File-backed | File-backed | Manual save/load |
-| Metadata filtering | Yes | Yes (richer) | No |
-| LangChain integration | `langchain-chroma` (official) | `langchain-qdrant` (official) | `langchain-community` |
-| Docs quality (2026) | Excellent | Excellent | Minimal |
+
+|                       | Chroma                        | Qdrant local                       | FAISS                   |
+| --------------------- | ----------------------------- | ---------------------------------- | ----------------------- |
+| Setup                 | `pip install chromadb`        | `pip install qdrant-client[local]` | `pip install faiss-cpu` |
+| Persistence           | File-backed                   | File-backed                        | Manual save/load        |
+| Metadata filtering    | Yes                           | Yes (richer)                       | No                      |
+| LangChain integration | `langchain-chroma` (official) | `langchain-qdrant` (official)      | `langchain-community`   |
+| Docs quality (2026)   | Excellent                     | Excellent                          | Minimal                 |
+
 
 **Choose Chroma** for this project: simpler, in-process (no background process), and `langchain-chroma` is a first-party integration. With 132 PDFs (~5k–15k chunks), Chroma handles it trivially.
 
@@ -306,3 +310,4 @@ llm/src/pcdt_ingest/
 - **SFT dataset size**: 132 PDFs may yield ~1k–3k Q&A pairs after dedup. That's enough for style/format adaptation but not for deep knowledge acquisition — which is exactly why RAG is the right complementary approach.
 - **nomic-embed-text vs bge-m3**: `nomic-embed-text` was primarily trained on English. For PCDTs in Portuguese, `BAAI/bge-m3` may give meaningfully better recall. Worth running a quick retrieval evaluation on 20–30 hand-written queries before committing to the embedding model.
 - **Parallel extraction**: `extract-pcdt-markdown --workers N` uses threads; very high `N` can memory-pressure PyMuPDF — tune per machine.
+
