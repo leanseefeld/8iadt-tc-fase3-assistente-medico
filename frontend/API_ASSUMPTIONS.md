@@ -116,6 +116,7 @@ Persistência: no backend, sinais vitais são armazenados como histórico (appen
 | `text`       | string     |
 | `sources`    | string[]   |
 | `reasoning`  | string[]   |
+| `threadId`   | string     |
 
 ### `DecisionFlowResponse`
 
@@ -252,7 +253,12 @@ Corpo: `{ "resolved": boolean }`
 { "patientId": "uuid", "message": "string" }
 ```
 
-Campo opcional para memória de conversa (follow-up): `messageHistory` — array de `{ "role": "user" | "assistant", "content": "string" }` com os turnos **anteriores** à `message` atual (máx. 20 entradas).
+Campos opcionais:
+
+- `threadId` — id da conversa no servidor (LangGraph **MemorySaver**). Na primeira mensagem omitir; nas seguintes reenviar o valor devolvido em `ChatResponse.threadId` (ou no evento SSE `done`) para memória entre turnos **sem** depender só do cliente.
+- `messageHistory` — array de `{ "role": "user" | "assistant", "content": "string" }` com turnos **anteriores** à `message` atual (máx. 20 entradas). Continua válido para clientes sem `threadId` ou como **fallback** quando o checkpointer ainda não tem histórico (ex.: novo thread ou processo reiniciado).
+
+Quando já existe histórico persistido no thread, o servidor **ignora** `messageHistory` para montar o estado (fonte de verdade: checkpointer).
 
 O servidor FastAPI aceita `patientId` (alias); internamente pode mapear para `patient_id`.
 
@@ -267,7 +273,7 @@ O servidor FastAPI aceita `patientId` (alias); internamente pode mapear para `pa
 | `sources` | `{ "sources": string[] }` | Rótulos das fontes PCDT recuperadas |
 | `reasoning` | `{ "steps": string[] }` | Traço curto da etapa de recuperação (no cliente mapeado para o painel «raciocínio») |
 | `token` | `{ "content": string }` | Fragmento incremental da resposta do modelo |
-| `done` | `{}` | Fim do fluxo com sucesso |
+| `done` | `{ "threadId": string }` | Fim do fluxo com sucesso (id do thread para as próximas mensagens) |
 | `error` | `{ "detail": string }` | Erro durante recuperação ou geração |
 
 O cliente (`src/api/sseChat.ts`) agrega os `token` em `ChatResponse.text` e usa `sources` + `steps` como `sources` e `reasoning`.
@@ -275,14 +281,14 @@ O cliente (`src/api/sseChat.ts`) agrega os `token` em `ChatResponse.text` e usa 
 **Modo alternativo — JSON (bloqueante):**
 
 - Sem `Accept: text/event-stream` (ex.: `Accept: application/json` ou omisso, conforme implementação do cliente)
-- **Resposta 200:** corpo JSON igual a `ChatResponse` (`text`, `sources`, `reasoning`)
+- **Resposta 200:** corpo JSON alinhado a `ChatResponse` (`text`, `sources`, `reasoning`, `threadId`)
 
 **Erros HTTP:** ex. **503** se Chroma/Ollama indisponíveis na inicialização ou falha grave na invocação do grafo (detalhe em `detail` quando aplicável).
 
 **Premissas alteradas em relação ao protótipo só-mock:**
 
 - Perguntas «não mapeadas» deixam de ser só fallback na UI: com backend ativo, o modelo responde com RAG sobre PCDTs indexados em `vectorstore/chroma`.
-- `conversationId`: reservado para versões futuras; não é obrigatório na v1.
+- Memória de conversa: `threadId` + checkpointer no backend; grafo inclui nó de **reescrita de pergunta** para o retrieve quando há histórico.
 
 ---
 

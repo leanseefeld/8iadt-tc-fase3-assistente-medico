@@ -8,10 +8,11 @@ from langgraph.graph import END, StateGraph
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.generate import generate_node
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
+from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
 from assistente_medico_api.graph.state import ChatRAGState
 
 
-def build_compiled_chat_graph(store: Chroma, settings: Settings):
+def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=None):
     """
     Monta o StateGraph com nós que operam com store/settings.
 
@@ -23,17 +24,22 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings):
     def _retrieve(state: ChatRAGState) -> dict:
         return retrieve_node(state, store=store, settings=settings)
 
+    async def _rewrite(state: ChatRAGState) -> dict:
+        return await rewrite_query_node(state, settings)
+
     async def _generate(state: ChatRAGState) -> dict:
         return await generate_node(state, settings)
 
     workflow = StateGraph(ChatRAGState)
+    workflow.add_node("rewrite", _rewrite)
     workflow.add_node("retrieve", _retrieve)
     workflow.add_node("generate", _generate)
-    workflow.set_entry_point("retrieve")
+    workflow.set_entry_point("rewrite")
+    workflow.add_edge("rewrite", "retrieve")
     workflow.add_edge("retrieve", "generate")
     workflow.add_edge("generate", END)
 
-    compiled = workflow.compile()
+    compiled = workflow.compile(checkpointer=checkpointer)
 
     print(compiled.get_graph().draw_ascii())
 

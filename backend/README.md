@@ -36,7 +36,7 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 - Documentação interativa: `http://127.0.0.1:8000/docs`
 - Chat JSON: `POST http://127.0.0.1:8000/api/assistant/chat` com `Accept: application/json`
 - Chat SSE: mesma URL com `Accept: text/event-stream`
-- **Memória de conversa (opcional):** no corpo JSON, além de `patientId` e `message` (pergunta atual), envie `messageHistory` — lista de `{ "role": "user" | "assistant", "content": "..." }` com **no máximo 20** turnos anteriores (não repetir a `message` atual). O PCDT é anexado só ao turno final.
+- **Memória de conversa:** envie `threadId` devolvido na resposta anterior (JSON `threadId` ou SSE `event: done`) para persistir o histórico no servidor (**LangGraph** + `MemorySaver`). Opcional: `messageHistory` — até **20** itens `{ "role", "content" }` anteriores à `message` atual (fallback se o thread ainda não tem estado ou cliente legado). O PCDT entra só no turno final da geração. Com histórico, o grafo **reescreve** a pergunta antes do retrieve no Chroma.
 
 ## Variáveis de ambiente (prefixo `MEDICO_`)
 

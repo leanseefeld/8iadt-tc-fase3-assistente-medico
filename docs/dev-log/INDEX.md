@@ -14,6 +14,7 @@ Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `c
 
 ### 2026-04-26
 
+- **chat-thread-checkpointer-rewrite** — Chat: `threadId` + `MemorySaver` (`ainvoke`/`astream_events` com config); `rewrite`→`retrieve`→`generate`; `retrieval_query` e reescrita via LLM com histórico; `generate` persiste turnos no estado; resposta JSON/SSE com `threadId`; frontend guarda thread por paciente. — Revisão: `844e734` adiciona memoria de conversa do chat
 - **chat-message-history** — Chat: corpo opcional `messageHistory` (máx. 20 turnos) em `POST /api/assistant/chat`; `ChatRAGState.chat_history`; `generate` monta Human/Ai + última Human com PCDT; frontend envia histórico em `ChatPage`/`clinicalApi.http.ts`. — Revisão: `515092e` refactor: remove implementation plan for medication extraction from documentation
 
 ### 2026-04-02

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import json
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from assistente_medico_api.graph.state import ChatRAGState
+from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
 from assistente_medico_api.deps import get_session
 from assistente_medico_api.repositories import patient_repo
 from assistente_medico_api.schemas.chat import (
@@ -26,26 +27,19 @@ from assistente_medico_api.services.protocol_map import get_protocol_for_cid
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
-"""
-Limite de segurança: últimos N turnos (além do max_length do schema).Para casos em que o 
-cliente envie muitas mensagens de uma vez
-"""
-_MAX_HISTORY_TURNS = 20
-
 
 def _normalize_message_history(
     body: ChatRequest,
 ) -> list[ChatHistoryTurnState]:
     """
-    Converte o histórico do cliente no formato do grafo, corta a janela e remove 
-    conteúdo vazio.
+    Converte o histórico do cliente no formato do grafo, corta a janela e remove
+    conteúdo vazio (teto alinhado a CHAT_HISTORY_MAX_ITEMS e ao schema).
     """
     raw: list[ChatHistoryTurnModel] = list(body.message_history or [])
     if not raw:
         return []
-    # Mantém no máximo os últimos _MAX_HISTORY_TURNS itens.
-    if len(raw) > _MAX_HISTORY_TURNS:
-        raw = raw[-_MAX_HISTORY_TURNS:]
+    if len(raw) > CHAT_HISTORY_MAX_ITEMS:
+        raw = raw[-CHAT_HISTORY_MAX_ITEMS:]
     return [
         {
             "role": turn.role,
@@ -56,16 +50,34 @@ def _normalize_message_history(
     ]
 
 
-def _initial_state(body: ChatRequest) -> ChatRAGState:
-    return {
+async def _invoke_payload_and_config(
+    body: ChatRequest,
+    graph,
+) -> tuple[dict, dict, str]:
+    """
+    Monta o update de estado e o RunnableConfig (thread_id) para o grafo com checkpointer.
+
+    Se já existe chat_history no checkpoint, não reenvia `chat_history` no update (merge).
+    Caso contrário, semeia a partir de `messageHistory` no corpo (clientes sem threadId).
+    """
+    tid = (body.thread_id or "").strip() or str(uuid.uuid4())
+    config: dict = {"configurable": {"thread_id": tid}}
+    snap = await graph.aget_state(config)
+    vals = snap.values or {}
+    has_persisted_history = bool(vals.get("chat_history"))
+
+    payload: dict = {
         "query": body.message.strip(),
         "patient_id": body.patient_id,
-        "chat_history": _normalize_message_history(body),
         "retrieved_docs": [],
         "sources": [],
         "reasoning_steps": [],
         "answer": "",
+        "retrieval_query": "",
     }
+    if not has_persisted_history:
+        payload["chat_history"] = _normalize_message_history(body)
+    return payload, config, tid
 
 
 def _get_graph(request: Request):
@@ -91,13 +103,13 @@ async def post_chat(
 ):
     """Chat RAG: SSE com graph.astream_events(); JSON de fallback com graph.invoke()."""
     graph = _get_graph(request)
-    initial = _initial_state(body)
+    initial, config, thread_id = await _invoke_payload_and_config(body, graph)
     wants_stream = bool(accept and "text/event-stream" in accept.lower())
 
     # --- Caminho JSON: usa API async (grafo contém nós async) ---
     if not wants_stream:
         try:
-            final: ChatRAGState = await graph.ainvoke(initial)
+            final: ChatRAGState = await graph.ainvoke(initial, config)
         except Exception as exc:
             raise HTTPException(
                 status_code=503,
@@ -107,12 +119,13 @@ async def post_chat(
             text=final.get("answer") or "",
             sources=list(final.get("sources") or []),
             reasoning=list(final.get("reasoning_steps") or []),
+            thread_id=thread_id,
         )
 
     # --- Caminho SSE: astream_events emite on_chat_model_stream por token ---
     async def event_gen():
         try:
-            async for event in graph.astream_events(initial, version="v2"):
+            async for event in graph.astream_events(initial, config, version="v2"):
                 kind = event["event"]
 
                 # Retrieve terminou → envia metadados antes dos tokens.
@@ -139,7 +152,10 @@ async def post_chat(
                             "data": json.dumps({"content": str(piece)}),
                         }
 
-            yield {"event": "done", "data": "{}"}
+            yield {
+                "event": "done",
+                "data": json.dumps({"threadId": thread_id}),
+            }
 
         except Exception as exc:
             yield {

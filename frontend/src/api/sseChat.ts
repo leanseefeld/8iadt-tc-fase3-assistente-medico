@@ -53,6 +53,7 @@ export async function consumeAssistantChatSse(
   let text = '';
   let sources: string[] = [];
   let reasoning: string[] = [];
+  let threadId = '';
 
   // --- Loop: acumula bytes, fatia em blocos SSE terminados em linha em branco ---
   for (;;) {
@@ -97,9 +98,14 @@ export async function consumeAssistantChatSse(
           typeof payload.detail === 'string' ? payload.detail : 'Erro no assistente.';
         handlers?.onError?.(detail);
         throw new Error(detail);
+      } else if (event === 'done') {
+        const tid = payload.threadId;
+        if (typeof tid === 'string' && tid) {
+          threadId = tid;
+        }
       }
     }
   }
 
-  return { text, sources, reasoning };
+  return { text, sources, reasoning, ...(threadId ? { threadId } : {}) };
 }
