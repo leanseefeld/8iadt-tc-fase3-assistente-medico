@@ -2,7 +2,6 @@ import { NavLink } from 'react-router-dom';
 import { useAppSession } from '@/context/AppSessionContext';
 
 const NAV: { to: string; label: string; showBadge?: boolean }[] = [
-  { to: '/checkin', label: '➕ Check-in / Admissão' },
   { to: '/dashboard', label: '🏠 Dashboard' },
   { to: '/chat', label: '💬 Chat com Assistente' },
   { to: '/flow', label: '🔀 Fluxo de Decisão' },
@@ -26,11 +25,25 @@ export function Sidebar() {
           Assistente Médico IA
         </h1>
         <p className="mt-1 text-xs text-slate-500">Protótipo de interface</p>
+
+        <NavLink
+          to="/checkin"
+          className={({ isActive }) =>
+            [
+              'mt-4 flex items-center justify-center rounded-xl px-4 py-3 text-sm font-extrabold shadow-sm ring-1 transition-all',
+              isActive
+                ? 'bg-teal-600 text-white ring-teal-600 shadow-teal-200'
+                : 'bg-teal-100 text-teal-950 ring-teal-300 hover:bg-teal-200 hover:shadow-md',
+            ].join(' ')
+          }
+        >
+          Nova Admissão
+        </NavLink>
       </div>
 
       <div className="border-b border-[var(--color-border-subtle)] px-3 py-3">
         <label className="text-xs font-medium text-slate-500">
-          Paciente ativo
+          Paciente:
         </label>
         {admittedPatients.length === 0 ? (
           <p className="mt-2 text-xs leading-relaxed text-slate-600">
@@ -55,35 +68,32 @@ export function Sidebar() {
             ))}
           </select>
         )}
-        <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-600">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
-          <span>Agente ativo</span>
-        </p>
+        
+        <nav className="flex flex-1 flex-col gap-0.5 p-2" aria-label="Principal">
+          {NAV.map(({ to, label, showBadge }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                [
+                  'flex items-center justify-between rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                  isActive
+                    ? 'bg-teal-600 text-white'
+                    : 'text-slate-700 hover:bg-slate-100',
+                ].join(' ')
+              }
+            >
+              <span>{label}</span>
+              {showBadge && unresolvedAlertCount > 0 ? (
+                <span className="rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white">
+                  {unresolvedAlertCount > 99 ? '99+' : unresolvedAlertCount}
+                </span>
+              ) : null}
+            </NavLink>
+          ))}
+        </nav>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-0.5 p-2" aria-label="Principal">
-        {NAV.map(({ to, label, showBadge }) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) =>
-              [
-                'flex items-center justify-between rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-teal-600 text-white'
-                  : 'text-slate-700 hover:bg-slate-100',
-              ].join(' ')
-            }
-          >
-            <span>{label}</span>
-            {showBadge && unresolvedAlertCount > 0 ? (
-              <span className="rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white">
-                {unresolvedAlertCount > 99 ? '99+' : unresolvedAlertCount}
-              </span>
-            ) : null}
-          </NavLink>
-        ))}
-      </nav>
     </aside>
   );
 }
