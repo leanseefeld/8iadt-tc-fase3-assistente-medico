@@ -50,6 +50,15 @@ async def get_latest_vitals(session: AsyncSession, patient_id: str) -> VitalSign
     return result.scalar_one_or_none()
 
 
+async def list_vitals_history(session: AsyncSession, patient_id: str) -> list[VitalSigns]:
+    result = await session.execute(
+        select(VitalSigns)
+        .where(VitalSigns.patient_id == patient_id)
+        .order_by(desc(VitalSigns.recorded_at), desc(VitalSigns.id))
+    )
+    return list(result.scalars().all())
+
+
 async def list_exams(session: AsyncSession, patient_id: str) -> list[Exam]:
     result = await session.execute(
         select(Exam).where(Exam.patient_id == patient_id).order_by(desc(Exam.requested_at))

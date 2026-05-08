@@ -87,6 +87,10 @@ export async function getPatientByIdMock(id: string) {
   return patientsHttp.getPatientByIdHttp(id);
 }
 
+export async function getPatientVitalsHistoryMock(id: string) {
+  return patientsHttp.getPatientVitalsHistoryHttp(id);
+}
+
 export async function patchPatientMock(id: string, patch: PatchPatientBody) {
   const { exams, suggestedItems, vitalSigns, ...corePatch } = patch;
   let patient = await patientsHttp.patchPatientHttp(id, corePatch);

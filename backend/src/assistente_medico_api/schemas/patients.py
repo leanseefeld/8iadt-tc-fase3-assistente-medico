@@ -79,3 +79,7 @@ class PatientListResponse(BaseModel):
 
 class PatientResponse(BaseModel):
     patient: Patient
+
+
+class VitalSignsHistoryResponse(BaseModel):
+    history: list[VitalSigns]

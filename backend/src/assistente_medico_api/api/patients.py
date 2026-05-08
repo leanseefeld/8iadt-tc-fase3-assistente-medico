@@ -19,6 +19,7 @@ from assistente_medico_api.schemas.patients import (
     PatientListResponse,
     PatientPatchRequest,
     PatientResponse,
+    VitalSignsHistoryResponse,
     VitalSignsPatchRequest,
 )
 from assistente_medico_api.schemas.suggested_items import (
@@ -74,6 +75,21 @@ async def get_patient(patient_id: str, session: AsyncSession = Depends(get_sessi
     if patient is None:
         raise HTTPException(status_code=404, detail="Paciente não encontrado")
     return PatientResponse(patient=await patient_service.build_patient_schema(session, patient))
+
+
+@router.get("/patients/{patient_id}/vitals-history", response_model=VitalSignsHistoryResponse)
+async def get_vitals_history(
+    patient_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> VitalSignsHistoryResponse:
+    patient = await patient_repo.get_patient_by_id(session, patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Paciente não encontrado")
+
+    history = await patient_repo.list_vitals_history(session, patient_id)
+    return VitalSignsHistoryResponse(
+        history=[patient_service.vitals_to_schema(vitals) for vitals in history]
+    )
 
 
 @router.patch("/patients/{patient_id}", response_model=PatientResponse)

@@ -67,6 +67,19 @@ export async function getPatientByIdHttp(id: string): Promise<Patient | null> {
   return ((await res.json()) as { patient: Patient }).patient;
 }
 
+export async function getPatientVitalsHistoryHttp(id: string): Promise<VitalSigns[]> {
+  const res = await fetch(`${API_BASE_URL}/patients/${id}/vitals-history`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (res.status === 404) {
+    return [];
+  }
+  if (!res.ok) {
+    throw new Error(`Falha ao buscar histórico de sinais vitais: HTTP ${res.status}`);
+  }
+  return ((await res.json()) as { history: VitalSigns[] }).history;
+}
+
 export async function patchPatientHttp(
   id: string,
   patch: PatchPatientBody,

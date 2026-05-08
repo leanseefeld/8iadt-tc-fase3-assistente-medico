@@ -59,6 +59,33 @@ async def test_patch_vitals_keeps_latest(async_client):
 
 
 @pytest.mark.asyncio
+async def test_get_vitals_history_returns_latest_first(async_client):
+    create = await async_client.post("/api/patients", json=patient_create_payload())
+    patient_id = create.json()["patient"]["id"]
+
+    r1 = await async_client.patch(
+        f"/api/patients/{patient_id}/vitals",
+        json={"temperature": 37.8, "heartRate": 88},
+    )
+    assert r1.status_code == 200
+
+    r2 = await async_client.patch(
+        f"/api/patients/{patient_id}/vitals",
+        json={"temperature": 39.2, "oxygenSaturation": 91},
+    )
+    assert r2.status_code == 200
+
+    history = await async_client.get(f"/api/patients/{patient_id}/vitals-history")
+    assert history.status_code == 200
+    items = history.json()["history"]
+    assert len(items) >= 3
+    assert items[0]["temperature"] == 39.2
+    assert items[0]["oxygenSaturation"] == 91
+    assert items[1]["temperature"] == 37.8
+    assert items[1]["heartRate"] == 88
+
+
+@pytest.mark.asyncio
 async def test_patch_vitals_critical_creates_alert(async_client):
     create = await async_client.post("/api/patients", json=patient_create_payload())
     patient_id = create.json()["patient"]["id"]

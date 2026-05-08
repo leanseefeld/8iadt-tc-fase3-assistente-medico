@@ -279,6 +279,8 @@ const PROTOCOL_MAP: Record<string, ProtocolResult> = {
 **Coluna central — Sinais Vitais**
 - 4 métricas em grid 2x2: PA, Temperatura, SpO2, FC
 - Cada métrica com valor e status (normal/atenção/crítico por threshold)
+- Link "Histórico" no topo do card abre modal com os registros vindos do backend, ordenados do mais recente para o mais antigo
+- Modal de histórico exibe timestamp, snapshot completo (PA, temperatura, SpO2, FC) e status consolidado por registro
 - Botão "Simular novo valor" → abre mini-form para alterar um sinal vital e disparar alerta se crítico
 - Timestamp da última atualização
 
@@ -296,6 +298,7 @@ const PROTOCOL_MAP: Record<string, ProtocolResult> = {
 - **Editar CID:** clique no badge do CID → abre `<CIDEditModal>` → re-executa protocolo
 - **Alta:** confirmação → `status: "discharged"` → redireciona para `/checkin` com toast *"Paciente [Nome] recebeu alta."*
 - **Simular sinal vital crítico:** altera o valor, se fora do threshold dispara novo `Alert` com `severity: "critical"`
+- **Histórico de sinais vitais:** clique em "Histórico" → abre modal read-only alimentado por `GET /patients/:id/vitals-history`
 
 ---
 
