@@ -40,6 +40,8 @@ Não faz parte do contrato HTTP no protótipo: o cliente mantém o paciente ativ
 
 Persistência: no backend, sinais vitais são armazenados como histórico (append-only). O DTO `VitalSigns` expõe somente o último registro.
 
+O histórico completo é consumido separadamente pela dashboard via `GET /patients/:id/vitals-history`, retornando `{"history": VitalSigns[]}` em ordem decrescente de `updatedAt`.
+
 ### `Exam`
 
 | Campo             | Tipo                                      |
@@ -204,6 +206,16 @@ Comportamento:
 - em `GET /patients/:id`, o campo `vitalSigns` representa sempre o último item do histórico.
 
 **Resposta 200:** `{ "patient": Patient }`
+
+**Resposta 404:** paciente inexistente
+
+---
+
+### 4.1.1 `GET /patients/:id/vitals-history`
+
+Retorna o histórico completo de sinais vitais do paciente, em ordem do registro mais recente para o mais antigo.
+
+**Resposta 200:** `{ "history": VitalSigns[] }`
 
 **Resposta 404:** paciente inexistente
 

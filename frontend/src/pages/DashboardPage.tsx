@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { patchPatientMock } from '@/api/clinicalApi';
+import { getPatientVitalsHistoryMock, patchPatientMock } from '@/api/clinicalApi';
 import { CIDEditModal } from '@/components/CIDEditModal';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
+import type { VitalSigns } from '@/types/domain';
 
 function parseSystolicPressure(value: number | string): number | null {
   const left = String(value).split('/')[0]?.trim();
@@ -85,14 +86,68 @@ function statusStyle(s: 'normal' | 'warn' | 'crit'): string {
   return 'border-emerald-200 bg-emerald-50 text-emerald-900';
 }
 
+function overallVitalStatus(vitals: VitalSigns): 'normal' | 'warn' | 'crit' {
+  const statuses = [
+    vitalStatus('bloodPressure', vitals.bloodPressure),
+    vitalStatus('temperature', vitals.temperature),
+    vitalStatus('oxygenSaturation', vitals.oxygenSaturation),
+    vitalStatus('heartRate', vitals.heartRate),
+  ];
+  if (statuses.includes('crit')) {
+    return 'crit';
+  }
+  if (statuses.includes('warn')) {
+    return 'warn';
+  }
+  return 'normal';
+}
+
 export function DashboardPage() {
   const { showToast } = useToast();
   const { activePatientId, refreshAlertBadge } = useAppSession();
   const { patient, refetch } = usePatientDetail(activePatientId);
   const [cidOpen, setCidOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [vitalOpen, setVitalOpen] = useState(false);
   const [vField, setVField] = useState<'spo2' | 'temp' | 'hr' | 'bp'>('spo2');
   const [vValue, setVValue] = useState('');
+  const [vitalHistory, setVitalHistory] = useState<VitalSigns[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!historyOpen || !patient) {
+      return;
+    }
+
+    let active = true;
+    const patientId = patient.id;
+
+    async function loadHistory() {
+      setHistoryLoading(true);
+      setHistoryError(null);
+      try {
+        const history = await getPatientVitalsHistoryMock(patientId);
+        if (active) {
+          setVitalHistory(history);
+        }
+      } catch {
+        if (active) {
+          setHistoryError('Não foi possível carregar o histórico de sinais vitais.');
+        }
+      } finally {
+        if (active) {
+          setHistoryLoading(false);
+        }
+      }
+    }
+
+    void loadHistory();
+
+    return () => {
+      active = false;
+    };
+  }, [historyOpen, patient]);
 
   if (!activePatientId || !patient) {
     return (
@@ -204,14 +259,25 @@ export function DashboardPage() {
         </div>
 
         <div className="rounded-xl border border-[var(--color-border-subtle)] bg-white p-4 shadow-sm">
-          <h3 className="text-sm font-semibold text-slate-800">Sinais vitais</h3>
-          <p className="mt-1 text-xs text-slate-500">
-            Atualizado em{' '}
-            {new Date(vs.updatedAt).toLocaleString('pt-BR', {
-              dateStyle: 'short',
-              timeStyle: 'short',
-            })}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800">Sinais vitais</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Atualizado em{' '}
+                {new Date(vs.updatedAt).toLocaleString('pt-BR', {
+                  dateStyle: 'short',
+                  timeStyle: 'short',
+                })}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="text-sm font-medium text-teal-700 underline underline-offset-2"
+            >
+              Histórico
+            </button>
+          </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             {metrics.map((m) => {
               const st = vitalStatus(m.key, m.value);
@@ -298,6 +364,106 @@ export function DashboardPage() {
         onClose={() => setCidOpen(false)}
         onSaved={() => void refetch()}
       />
+
+      {historyOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-3xl rounded-xl border bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h4 className="font-semibold text-slate-900">Histórico de sinais vitais</h4>
+                <p className="mt-1 text-sm text-slate-500">
+                  Valores registrados no backend para {patient.name}.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="rounded px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100"
+              >
+                Fechar
+              </button>
+            </div>
+
+            {historyLoading ? (
+              <p className="mt-4 text-sm text-slate-500">Carregando histórico...</p>
+            ) : null}
+
+            {historyError ? (
+              <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {historyError}
+              </p>
+            ) : null}
+
+            {!historyLoading && !historyError ? (
+              vitalHistory.length ? (
+                <div className="mt-4 max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+                  {vitalHistory.map((entry) => {
+                    const st = overallVitalStatus(entry);
+                    return (
+                      <section
+                        key={entry.updatedAt}
+                        className="rounded-xl border border-slate-200 p-4"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-800">
+                            {new Date(entry.updatedAt).toLocaleString('pt-BR', {
+                              dateStyle: 'short',
+                              timeStyle: 'short',
+                            })}
+                          </p>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${statusStyle(st)}`}
+                          >
+                            {statusLabel(st)}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                          <div className="rounded-lg bg-slate-50 px-3 py-2">
+                            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                              PA
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                              {entry.bloodPressure}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-slate-50 px-3 py-2">
+                            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                              Temperatura
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                              {entry.temperature} °C
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-slate-50 px-3 py-2">
+                            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                              SpO₂
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                              {entry.oxygenSaturation}%
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-slate-50 px-3 py-2">
+                            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                              FC
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">
+                              {entry.heartRate} bpm
+                            </p>
+                          </div>
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-slate-500">
+                  Nenhum histórico de sinais vitais disponível.
+                </p>
+              )
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {vitalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
