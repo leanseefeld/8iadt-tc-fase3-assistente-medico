@@ -8,7 +8,7 @@ Formato: lista agregada por data (uma entrada por marco relevante); mais detalhe
 
 ## Overview (histórico git)
 
-Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `clinicalApi`; **backend** FastAPI (chat LangGraph + RAG Chroma, SSE); **pipeline RAG** com download de PCDTs, dataset COVID e ingestão PCDT linear; evolução para **extração MD a partir de PDF**, **chunking** e **visualizador** de chunks; **documentação** (relatório, referências) e **governação Cursor** (dev log + regras `dev-log` e `report-and-wait`).
+Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clinicalApi`; **backend** FastAPI (chat LangGraph + RAG Chroma, SSE); **pipeline RAG** com download de PCDTs, dataset COVID e ingestão PCDT linear; evolução para **extração MD a partir de PDF**, **chunking** e **visualizador** de chunks; **documentação** (relatório, referências) e **governação Cursor** (dev log + regras `dev-log` e `report-and-wait`).
 
 ## Marcos
 
@@ -63,6 +63,8 @@ Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `c
 ### 2026-05-09
 
 - **prescricoes-rce-soft-delete** — agent:cursor — Prescrições RCE: tabela `prescriptions`, API `GET/POST /patients/{id}/prescriptions`, `GET/PATCH archive /prescriptions/{id}`, migração `20260509_1100`, testes `test_prescriptions_endpoint_contract.py`; UI `/prescriptions`, login fake (médico na TopBar), impressão CSS, integração «Criar prescrição» nas ações sugeridas; colunas `chat_thread_id` / `decision_flow_run_id` para auditoria futura. — Revisão: `69a118e` Cria guardrail de sugestões impróprias
+- **login-fake-demo** — agent:cursor — Login demo `/login` com `fakeAuth.ts` + credenciais em `doctors.ts`; `ProtectedLayout`; TopBar com médico logado e **Sair**; remove seletor de médico. — Revisão: `69a118e` Cria guardrail de sugestões impróprias
+- **ui-sem-atribuicao-ia** — agent:cursor — Remove na UI menção a conteúdo «por IA» (badge lista, faixa na RCE); «Criar prescrição» passa a emitir como médico logado; legado «Assistente Médico IA» exibido como «Médico responsável»; título do app só «Assistente Médico» (`LoginPage`, `Sidebar`, `index.html`). — Revisão: `c0576a8` adiciona prescrição
 
 ### 2026-05-03
 

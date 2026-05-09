@@ -6,7 +6,7 @@ Contrato alinhado à [referencia-frontend.md](../docs/referencia-frontend.md). A
 
 Não faz parte do contrato HTTP no protótipo: o cliente mantém o paciente ativo no **contexto React**. O backend futuro pode expor `GET/PATCH /session`.
 
-**Nota (demo):** o médico ativo (`activeDoctorId`) é escolhido na barra superior, com lista mockada em `src/mocks/internal/doctors.ts` e persistência em `localStorage`; o nome é enviado como `archivedBy` ao arquivar prescrições.
+**Nota (demo):** o médico ativo vem do **login fake** em `/login` (usuário e senha da lista em `src/mocks/internal/doctors.ts`, validação em `src/auth/fakeAuth.ts`, persistência do id em `localStorage`); o nome é enviado como `archivedBy` ao arquivar prescrições. Rotas principais exigem sessão via `ProtectedLayout`.
 
 **Nota (chat):** o `patientId` é enviado no corpo do chat para alinhamento futuro; o backend atual **não** injeta contexto clínico do paciente no RAG (planeado após CRUD).
 

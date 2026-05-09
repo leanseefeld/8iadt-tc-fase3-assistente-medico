@@ -58,6 +58,15 @@ function formatDt(iso: string): string {
   }
 }
 
+/** Nome exibido do prescritor (legado pode ter rótulos antigos substituídos). */
+function prescriptionPrescriberDisplayName(rx: Prescription): string {
+  const n = rx.prescriberName.trim();
+  if (n === 'Assistente Médico IA') {
+    return 'Médico responsável';
+  }
+  return rx.prescriberName;
+}
+
 /** Documento visual no estilo Receita de Controle Especial (conteúdo educativo / demo). */
 function RceViewer({
   rx,
@@ -66,7 +75,7 @@ function RceViewer({
   rx: Prescription;
   patientDisplayName: string;
 }) {
-  const isAi = rx.prescriberKind === 'ai_assistant';
+  const prescriberLabel = prescriptionPrescriberDisplayName(rx);
 
   return (
     <div
@@ -84,13 +93,6 @@ function RceViewer({
           Reprodução simplificada para o protótipo; valide sempre o modelo vigente.
         </p>
       </div>
-
-      {isAi ? (
-        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950">
-          Sugestão gerada pelo <strong>Assistente de IA</strong> — exige validação
-          clínica e assinatura do profissional habilitado.
-        </div>
-      ) : null}
 
       <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
         <section>
@@ -117,8 +119,8 @@ function RceViewer({
         <h3 className="text-xs font-bold uppercase text-slate-600">
           Prescritor
         </h3>
-        <p className="mt-1 font-medium text-slate-900">{rx.prescriberName}</p>
-        {!isAi && rx.prescriberCrm && rx.prescriberCrmUf ? (
+        <p className="mt-1 font-medium text-slate-900">{prescriberLabel}</p>
+        {rx.prescriberCrm && rx.prescriberCrmUf ? (
           <p className="text-slate-700">
             CRM {rx.prescriberCrm} / {rx.prescriberCrmUf}
           </p>
@@ -185,7 +187,7 @@ function RceViewer({
       <div className="mt-10 border-t border-slate-300 pt-4 text-sm">
         <p className="text-slate-700">Assinatura e carimbo do prescritor</p>
         <div className="mt-8 h-px w-64 bg-slate-400" />
-        <p className="mt-1 text-slate-600">{rx.prescriberName}</p>
+        <p className="mt-1 text-slate-600">{prescriberLabel}</p>
       </div>
     </div>
   );
@@ -297,10 +299,12 @@ export function PrescriptionsPage() {
     }
     setShowForm(true);
     setSelected(null);
-    setPrescriberKind('ai_assistant');
-    setPrescriberName('Assistente Médico IA');
-    setPrescriberCrm('');
-    setPrescriberUf('');
+    setPrescriberKind('doctor');
+    if (activeDoctor) {
+      setPrescriberName(activeDoctor.name);
+      setPrescriberCrm(activeDoctor.crm);
+      setPrescriberUf(activeDoctor.uf);
+    }
     setRows([
       {
         ...emptyRow(),
@@ -309,7 +313,7 @@ export function PrescriptionsPage() {
       },
     ]);
     navigate(location.pathname, { replace: true, state: {} });
-  }, [location, location.pathname, location.state, navigate]);
+  }, [activeDoctor, location, location.pathname, location.state, navigate]);
 
   function resetFormFromDoctor() {
     if (!activeDoctor) {
@@ -505,14 +509,9 @@ export function PrescriptionsPage() {
                     <span className="font-medium text-slate-900">
                       {formatDt(rx.issuedAt)}
                     </span>
-                    {rx.prescriberKind === 'ai_assistant' ? (
-                      <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900">
-                        IA
-                      </span>
-                    ) : null}
                   </div>
                   <p className="mt-1 text-slate-700">
-                    {rx.prescriberName} —{' '}
+                    {prescriptionPrescriberDisplayName(rx)} —{' '}
                     {rx.items[0]?.medicationName ?? 'sem itens'}
                     {rx.items.length > 1
                       ? ` (+${rx.items.length - 1})`
@@ -531,21 +530,21 @@ export function PrescriptionsPage() {
             <h3 className="text-lg font-semibold text-slate-900">
               Emitir prescrição
             </h3>
+            <form
+              className="contents"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitForm();
+              }}
+            >
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-slate-600">Tipo de prescritor</span>
-                <select
-                  value={prescriberKind}
-                  onChange={(e) =>
-                    setPrescriberKind(e.target.value as PrescriberKind)
-                  }
-                  className="rounded-lg border px-2 py-2"
-                >
-                  <option value="doctor">Médico</option>
-                  <option value="ai_assistant">Assistente de IA</option>
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
+              <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                <span className="font-medium text-slate-700">Prescritor: </span>
+                {activeDoctor
+                  ? `${activeDoctor.name} — CRM ${activeDoctor.crm}/${activeDoctor.uf}`
+                  : '—'}
+              </div>
+              <label className="flex flex-col gap-1 text-sm sm:col-span-2">
                 <span className="text-slate-600">CPF do paciente (opcional)</span>
                 <input
                   value={patientCpf}
@@ -555,37 +554,10 @@ export function PrescriptionsPage() {
                 />
               </label>
               <label className="flex flex-col gap-1 text-sm sm:col-span-2">
-                <span className="text-slate-600">Nome do prescritor</span>
-                <input
-                  value={prescriberName}
-                  onChange={(e) => setPrescriberName(e.target.value)}
-                  className="rounded-lg border px-2 py-2"
-                />
-              </label>
-              {prescriberKind === 'doctor' ? (
-                <>
-                  <label className="flex flex-col gap-1 text-sm">
-                    <span className="text-slate-600">CRM</span>
-                    <input
-                      value={prescriberCrm}
-                      onChange={(e) => setPrescriberCrm(e.target.value)}
-                      className="rounded-lg border px-2 py-2"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm">
-                    <span className="text-slate-600">UF</span>
-                    <input
-                      value={prescriberUf}
-                      onChange={(e) => setPrescriberUf(e.target.value)}
-                      className="rounded-lg border px-2 py-2"
-                      maxLength={2}
-                    />
-                  </label>
-                </>
-              ) : null}
-              <label className="flex flex-col gap-1 text-sm sm:col-span-2">
                 <span className="text-slate-600">Instituição (opcional)</span>
                 <input
+                  name="prescription-institution-name"
+                  autoComplete="organization"
                   value={institutionName}
                   onChange={(e) => setInstitutionName(e.target.value)}
                   className="rounded-lg border px-2 py-2"
@@ -602,6 +574,8 @@ export function PrescriptionsPage() {
               <label className="flex flex-col gap-1 text-sm sm:col-span-2">
                 <span className="text-slate-600">Endereço da instituição</span>
                 <input
+                  name="prescription-institution-address"
+                  autoComplete="street-address"
                   value={institutionAddress}
                   onChange={(e) => setInstitutionAddress(e.target.value)}
                   className="rounded-lg border px-2 py-2"
@@ -610,6 +584,9 @@ export function PrescriptionsPage() {
               <label className="flex flex-col gap-1 text-sm sm:col-span-2">
                 <span className="text-slate-600">Telefone</span>
                 <input
+                  type="tel"
+                  name="prescription-institution-tel"
+                  autoComplete="tel"
                   value={institutionPhone}
                   onChange={(e) => setInstitutionPhone(e.target.value)}
                   className="rounded-lg border px-2 py-2"
@@ -898,8 +875,7 @@ export function PrescriptionsPage() {
 
             <div className="mt-6 flex flex-wrap gap-2">
               <button
-                type="button"
-                onClick={() => void submitForm()}
+                type="submit"
                 className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
               >
                 Emitir
@@ -915,6 +891,7 @@ export function PrescriptionsPage() {
                 Cancelar
               </button>
             </div>
+            </form>
           </div>
         ) : selected ? (
           <>

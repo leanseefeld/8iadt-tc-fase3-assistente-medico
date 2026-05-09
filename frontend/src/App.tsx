@@ -1,15 +1,16 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppSessionProvider } from '@/context/AppSessionContext';
 import { ToastProvider } from '@/context/ToastContext';
-import { AppLayout } from '@/layouts/AppLayout';
+import { ProtectedLayout } from '@/layouts/ProtectedLayout';
 import { AlertsPage } from '@/pages/AlertsPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { CheckInPage } from '@/pages/CheckInPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { DecisionFlowPage } from '@/pages/DecisionFlowPage';
 import { ExamsPage } from '@/pages/ExamsPage';
-import { SuggestedActionsPage } from '@/pages/SuggestedActionsPage';
+import { LoginPage } from '@/pages/LoginPage';
 import { PrescriptionsPage } from '@/pages/PrescriptionsPage';
+import { SuggestedActionsPage } from '@/pages/SuggestedActionsPage';
 
 export function App() {
   return (
@@ -17,7 +18,8 @@ export function App() {
       <AppSessionProvider>
         <BrowserRouter>
           <Routes>
-            <Route element={<AppLayout />}>
+            <Route path="/login" element={<LoginPage />} />
+            <Route element={<ProtectedLayout />}>
               <Route
                 path="/"
                 element={<Navigate to="/dashboard" replace />}

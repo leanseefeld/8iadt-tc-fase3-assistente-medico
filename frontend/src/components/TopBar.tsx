@@ -5,7 +5,6 @@ import { CIDEditModal } from '@/components/CIDEditModal';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
-import { MOCK_DOCTORS } from '@/mocks/internal/doctors';
 
 function formatSexDisplay(sex: 'M' | 'F'): string {
   return sex === 'F' ? 'Feminino' : 'Masculino';
@@ -29,13 +28,18 @@ export function TopBar() {
     activePatientId,
     refreshAdmittedPatients,
     refreshAlertBadge,
-    activeDoctorId,
-    setActiveDoctorId,
+    activeDoctor,
+    logout,
   } = useAppSession();
   const { patient, refetch } = usePatientDetail(activePatientId);
   const [cidOpen, setCidOpen] = useState(false);
   const [dischargeOpen, setDischargeOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  function handleLogout() {
+    logout();
+    navigate('/login', { replace: true });
+  }
 
   async function confirmDischarge() {
     if (!patient) {
@@ -58,26 +62,32 @@ export function TopBar() {
     navigate('/checkin');
   }
 
+  if (!activeDoctor) {
+    return null;
+  }
+
   if (!activePatientId || !patient) {
     return (
-      <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-4 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] px-4 py-3 shadow-sm">
-        <label className="flex flex-col gap-1 text-xs">
-          <span className="font-medium text-slate-500">Médico (demo)</span>
-          <select
-            value={activeDoctorId}
-            onChange={(e) => setActiveDoctorId(e.target.value)}
-            className="min-w-[14rem] rounded-lg border border-[var(--color-border-subtle)] bg-white px-2 py-2 text-sm text-slate-800"
-          >
-            {MOCK_DOCTORS.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name} — CRM {d.crm}/{d.uf}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="text-sm text-slate-600">
-          Selecione um paciente admitido ou realize um check-in.
-        </p>
+      <header className="flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] px-4 py-3 shadow-sm">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-slate-500">Conectado como</p>
+          <p className="text-sm font-semibold text-teal-900">
+            {activeDoctor.name}{' '}
+            <span className="font-normal text-slate-600">
+              (CRM {activeDoctor.crm}/{activeDoctor.uf})
+            </span>
+          </p>
+          <p className="mt-2 text-sm text-slate-600">
+            Selecione um paciente admitido ou realize um check-in.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Sair
+        </button>
       </header>
     );
   }
@@ -118,36 +128,36 @@ export function TopBar() {
             </div>
           </dl>
         </div>
-        <div className="ml-auto flex flex-wrap items-end gap-4">
-          <label className="flex flex-col gap-1 text-xs">
-            <span className="font-medium text-slate-500">Médico (demo)</span>
-            <select
-              value={activeDoctorId}
-              onChange={(e) => setActiveDoctorId(e.target.value)}
-              className="min-w-[14rem] rounded-lg border border-[var(--color-border-subtle)] bg-white px-2 py-2 text-sm text-slate-800"
-            >
-              {MOCK_DOCTORS.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name} — CRM {d.crm}/{d.uf}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="ml-auto flex flex-wrap items-end justify-end gap-3">
+          <div className="text-right text-xs text-slate-600">
+            <p className="font-medium text-slate-500">Médico logado</p>
+            <p className="font-semibold text-slate-800">{activeDoctor.name}</p>
+            <p className="text-slate-500">
+              CRM {activeDoctor.crm}/{activeDoctor.uf}
+            </p>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setCidOpen(true)}
-            className="rounded-lg border border-teal-600 px-3 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50"
-          >
-            Editar CID
-          </button>
-          <button
-            type="button"
-            onClick={() => setDischargeOpen(true)}
-            className="rounded-lg border border-red-400 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
-          >
-            Alta
-          </button>
+            <button
+              type="button"
+              onClick={() => setCidOpen(true)}
+              className="rounded-lg border border-teal-600 px-3 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50"
+            >
+              Editar CID
+            </button>
+            <button
+              type="button"
+              onClick={() => setDischargeOpen(true)}
+              className="rounded-lg border border-red-400 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
+            >
+              Alta
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Sair
+            </button>
           </div>
         </div>
       </header>
