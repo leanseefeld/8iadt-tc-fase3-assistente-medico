@@ -11,10 +11,10 @@ import {
   getPatientsMock,
   getUnresolvedAlertCountMock,
 } from '@/api/clinicalApi';
-import type { Patient } from '@/types/domain';
+import { AUTH_DOCTOR_STORAGE_KEY, authenticateFake } from '@/auth/fakeAuth';
+import type { MockDoctor } from '@/mocks/internal/doctors';
 import { MOCK_DOCTORS } from '@/mocks/internal/doctors';
-
-const ACTIVE_DOCTOR_STORAGE_KEY = 'assistenteMedico.activeDoctorId';
+import type { Patient } from '@/types/domain';
 
 export interface AppSessionContextValue {
   activePatientId: string | null;
@@ -26,10 +26,10 @@ export interface AppSessionContextValue {
   /** Após editar CID: banner na Página 3 até o médico reexecutar o fluxo */
   pendingFlowReview: boolean;
   setPendingFlowReview: (v: boolean) => void;
-  /** Login fake: médico selecionado na barra superior */
-  activeDoctorId: string;
-  setActiveDoctorId: (id: string) => void;
-  activeDoctor: (typeof MOCK_DOCTORS)[number] | null;
+  /** Médico logado (auth fake); null fora da sessão. */
+  activeDoctor: MockDoctor | null;
+  login: (username: string, password: string) => MockDoctor | null;
+  logout: () => void;
 }
 
 const AppSessionContext = createContext<AppSessionContextValue | null>(null);
@@ -39,33 +39,50 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
   const [admittedPatients, setAdmittedPatients] = useState<Patient[]>([]);
   const [unresolvedAlertCount, setUnresolvedAlertCount] = useState(0);
   const [pendingFlowReview, setPendingFlowReview] = useState(false);
-  const [activeDoctorId, setActiveDoctorIdState] = useState<string>(() => {
+  const [authDoctorId, setAuthDoctorId] = useState<string | null>(() => {
     if (MOCK_DOCTORS.length === 0) {
-      return '';
+      return null;
     }
     try {
-      const stored = localStorage.getItem(ACTIVE_DOCTOR_STORAGE_KEY);
+      const stored = localStorage.getItem(AUTH_DOCTOR_STORAGE_KEY);
       if (stored && MOCK_DOCTORS.some((d) => d.id === stored)) {
         return stored;
       }
     } catch {
       /* ignore */
     }
-    return MOCK_DOCTORS[0].id;
+    return null;
   });
 
-  const setActiveDoctorId = useCallback((id: string) => {
-    setActiveDoctorIdState(id);
+  const login = useCallback((username: string, password: string): MockDoctor | null => {
+    const doc = authenticateFake(username, password);
+    if (doc == null) {
+      return null;
+    }
+    setAuthDoctorId(doc.id);
     try {
-      localStorage.setItem(ACTIVE_DOCTOR_STORAGE_KEY, id);
+      localStorage.setItem(AUTH_DOCTOR_STORAGE_KEY, doc.id);
+    } catch {
+      /* ignore */
+    }
+    return doc;
+  }, []);
+
+  const logout = useCallback(() => {
+    setAuthDoctorId(null);
+    try {
+      localStorage.removeItem(AUTH_DOCTOR_STORAGE_KEY);
     } catch {
       /* ignore */
     }
   }, []);
 
-  const activeDoctor = useMemo(() => {
-    return MOCK_DOCTORS.find((d) => d.id === activeDoctorId) ?? MOCK_DOCTORS[0] ?? null;
-  }, [activeDoctorId]);
+  const activeDoctor = useMemo((): MockDoctor | null => {
+    if (authDoctorId == null) {
+      return null;
+    }
+    return MOCK_DOCTORS.find((d) => d.id === authDoctorId) ?? null;
+  }, [authDoctorId]);
 
   const refreshAdmittedPatients = useCallback(async () => {
     const list = await getPatientsMock({ status: 'admitted' });
@@ -97,9 +114,9 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
       unresolvedAlertCount,
       pendingFlowReview,
       setPendingFlowReview,
-      activeDoctorId,
-      setActiveDoctorId,
       activeDoctor,
+      login,
+      logout,
     }),
     [
       activePatientId,
@@ -108,9 +125,9 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
       refreshAlertBadge,
       unresolvedAlertCount,
       pendingFlowReview,
-      activeDoctorId,
-      setActiveDoctorId,
       activeDoctor,
+      login,
+      logout,
     ],
   );
 
