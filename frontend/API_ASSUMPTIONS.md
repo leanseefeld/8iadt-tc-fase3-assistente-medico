@@ -6,6 +6,8 @@ Contrato alinhado à [referencia-frontend.md](../docs/referencia-frontend.md). A
 
 Não faz parte do contrato HTTP no protótipo: o cliente mantém o paciente ativo no **contexto React**. O backend futuro pode expor `GET/PATCH /session`.
 
+**Nota (demo):** o médico ativo (`activeDoctorId`) é escolhido na barra superior, com lista mockada em `src/mocks/internal/doctors.ts` e persistência em `localStorage`; o nome é enviado como `archivedBy` ao arquivar prescrições.
+
 **Nota (chat):** o `patientId` é enviado no corpo do chat para alinhamento futuro; o backend atual **não** injeta contexto clínico do paciente no RAG (planeado após CRUD).
 
 ---
@@ -110,6 +112,40 @@ O histórico completo é consumido separadamente pela dashboard via `GET /patien
 | `team`      | `doctors` \| `nursing` \| `pharmacy` \| `all`                        |
 | `createdAt` | string (ISO 8601)                                                    |
 | `resolved`  | boolean                                                              |
+
+### `PrescriptionItem` (item de receita)
+
+| Campo               | Tipo   |
+| ------------------- | ------ |
+| `medicationName`    | string |
+| `concentration`     | string (opcional) |
+| `pharmaceuticalForm` | string (opcional) |
+| `quantity`          | string (opcional) |
+| `posology`          | string (opcional) |
+
+### `Prescription` (Receita de Controle Especial — protótipo visual; persistência no banco)
+
+| Campo                 | Tipo |
+| --------------------- | ---- |
+| `id`                  | string |
+| `patientId`           | string |
+| `patientCpf`          | string (opcional) |
+| `prescriberKind`      | `doctor` \| `ai_assistant` |
+| `prescriberName`      | string |
+| `prescriberCrm`       | string (opcional; obrigatório no back-end quando `prescriberKind` é `doctor`) |
+| `prescriberCrmUf`     | string (opcional; idem) |
+| `institutionName`      | string (opcional) |
+| `institutionCnpjCnes` | string (opcional) |
+| `institutionAddress`  | string (opcional) |
+| `institutionPhone`    | string (opcional) |
+| `items`               | `PrescriptionItem[]` |
+| `notes`               | string (opcional) |
+| `chatThreadId`        | string (opcional; reservado para auditoria futura) |
+| `decisionFlowRunId`   | string (opcional; idem) |
+| `issuedAt`            | string (ISO 8601) |
+| `archivedAt`          | string (opcional) — *soft delete* |
+| `archivedReason`      | string (opcional) |
+| `archivedBy`          | string (opcional) |
 
 ### `ChatResponse`
 
@@ -238,6 +274,44 @@ Regras:
 **Resposta 400:** exame não permite upload
 
 **Resposta 404:** paciente ou exame inexistente
+
+---
+
+### 4.3 Prescrições (Receita de Controle Especial — protótipo)
+
+#### `GET /patients/:id/prescriptions`
+
+**Query (opcional):** `includeArchived` (`true` / `false`, default `false`). Quando `true`, inclui registros com `archivedAt` preenchido (*soft delete*).
+
+**Resposta 200:** `{ "prescriptions": Prescription[] }` (ordenadas por `issuedAt` decrescente)
+
+**Resposta 404:** paciente inexistente
+
+#### `POST /patients/:id/prescriptions`
+
+Corpo JSON (camelCase): campos de `Prescription` necessários à emissão (`prescriberKind`, `prescriberName`, `items`, etc.). O servidor valida CRM/UF quando `prescriberKind` é `doctor`.
+
+**Resposta 201:** `{ "prescription": Prescription }`
+
+**Resposta 400:** validação (ex.: itens vazios, CRM ausente para médico)
+
+**Resposta 404:** paciente inexistente
+
+#### `GET /prescriptions/:prescriptionId`
+
+**Resposta 200:** `{ "prescription": Prescription }`
+
+**Resposta 404:** prescrição inexistente
+
+#### `PATCH /prescriptions/:prescriptionId/archive`
+
+Arquivamento lógico (*soft delete*). Corpo: `{ "reason": string (mín. 5 caracteres), "archivedBy": string }`.
+
+**Resposta 200:** `{ "prescription": Prescription }`
+
+**Resposta 404:** prescrição inexistente
+
+**Resposta 409:** já arquivada
 
 ---
 

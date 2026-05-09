@@ -6,6 +6,7 @@ const NAV: { to: string; label: string; showBadge?: boolean }[] = [
   { to: '/chat', label: '💬 Chat com Assistente' },
   { to: '/flow', label: '🔀 Fluxo de Decisão' },
   { to: '/exams', label: '🧪 Exames' },
+  { to: '/prescriptions', label: '💊 Prescrições' },
   { to: '/suggested-actions', label: '📋 Ações Sugeridas' },
   { to: '/alerts', label: '🔔 Alertas', showBadge: true },
 ];

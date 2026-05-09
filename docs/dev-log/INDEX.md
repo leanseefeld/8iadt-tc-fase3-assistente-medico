@@ -60,6 +60,10 @@ Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `c
 - **comorb-backend-endpoint** — agent:copilot — Migração de comorbidades: endpoint backend `GET /api/assistant/comorbidities` (lista em memória, sem banco), schema Pydantic `schemas/comorbidities.py`, frontend via `clinicalApi.comorbidities.ts`, check-in remove constante local, 22 opções expandidas. Proxy Vite para `/api`. — Implementação completa, 10/10 testes backend ✅.
 - **padrao-criar-novas-tabelas** — agent:copilot — Documentação completa em `docs/dev-log/padrao-criar-novas-tabelas.md`: 7 passos (Model, Schema, Repository, Service, API, Migração, Registro); convenções nomes (tabelas, colunas, IDs, aliases); exemplo prático `Medications`; checklist implementação; boas práticas para IA. — Referência estruturada para novas entidades.
 
+### 2026-05-09
+
+- **prescricoes-rce-soft-delete** — agent:cursor — Prescrições RCE: tabela `prescriptions`, API `GET/POST /patients/{id}/prescriptions`, `GET/PATCH archive /prescriptions/{id}`, migração `20260509_1100`, testes `test_prescriptions_endpoint_contract.py`; UI `/prescriptions`, login fake (médico na TopBar), impressão CSS, integração «Criar prescrição» nas ações sugeridas; colunas `chat_thread_id` / `decision_flow_run_id` para auditoria futura. — Revisão: `69a118e` Cria guardrail de sugestões impróprias
+
 ### 2026-05-03
 
 - **guardrail-respostas** — agent:cursor — Novo nó `guardrail` no pipeline LangGraph (generate→guardrail→END): classifica via LLM (SEGURO/AVISO/BLOQUEAR), fallback por keywords regex, regeneração com `_STRICT_SYSTEM_PROMPT`, log estruturado JSON em `assistente_medico.guardrail`; `guardrail_status`/`guardrail_reason` no estado, schema e evento SSE `guardrail` em `api/chat.py`. — Revisão: `8537de3` Merge pull request #2 from leanseefeld/task/adicionar-memória-de-conversa-do-chat

@@ -11,7 +11,15 @@ from sqlmodel import SQLModel
 
 from assistente_medico_api.deps import get_session
 from assistente_medico_api.main import create_app
-from assistente_medico_api.models import AgentLogEntry, Alert, Exam, Patient, SuggestedItem, VitalSigns  # noqa: F401
+from assistente_medico_api.models import (
+    AgentLogEntry,
+    Alert,
+    Exam,
+    Patient,
+    Prescription,
+    SuggestedItem,
+    VitalSigns,
+)  # noqa: F401
 
 
 @pytest_asyncio.fixture

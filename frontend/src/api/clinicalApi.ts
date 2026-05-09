@@ -12,16 +12,19 @@ import * as patientsHttp from '@/api/clinicalApi.patients.http';
 import * as examsHttp from '@/api/clinicalApi.exams.http';
 import * as suggestedItemsHttp from '@/api/clinicalApi.suggestedItems.http';
 import * as alertsHttp from '@/api/clinicalApi.alerts.http';
+import * as prescriptionsHttp from '@/api/clinicalApi.prescriptions.http';
 import type {
   PatchPatientBody,
   ReAdmitOverrides,
 } from '@/api/clinicalApi.types';
+import type { PrescriptionCreateBody } from '@/types/prescription';
 import { quickQuestionsForCid } from '@/mocks/internal/chatMocks';
 import type { AssistantChatRequestOptions } from '@/api/clinicalApi.http';
 
 export type { AssistantChatRequestOptions, AssistantMessageHistoryItem } from '@/api/clinicalApi.http';
 export type { ChatStreamHandlers } from '@/api/sseChat';
 export type { PatchPatientBody, ReAdmitOverrides } from '@/api/clinicalApi.types';
+export type { Prescription, PrescriptionCreateBody } from '@/types/prescription';
 
 function parseMedicationLines(text?: string): string[] {
   if (!text?.trim()) {
@@ -148,6 +151,32 @@ export async function getUnresolvedAlertCountMock() {
 
 export async function getAlertsForPatientMock(patientId: string) {
   return alertsHttp.getAlertsHttp({ patientId });
+}
+
+export async function getPrescriptionsMock(
+  patientId: string,
+  includeArchived = false,
+) {
+  return prescriptionsHttp.getPrescriptionsHttp(patientId, includeArchived);
+}
+
+export async function createPrescriptionMock(
+  patientId: string,
+  body: PrescriptionCreateBody,
+) {
+  return prescriptionsHttp.createPrescriptionHttp(patientId, body);
+}
+
+export async function getPrescriptionByIdMock(id: string) {
+  return prescriptionsHttp.getPrescriptionByIdHttp(id);
+}
+
+export async function archivePrescriptionMock(
+  id: string,
+  reason: string,
+  archivedBy: string,
+) {
+  return prescriptionsHttp.archivePrescriptionHttp(id, reason, archivedBy);
 }
 
 export async function addAlertMock(

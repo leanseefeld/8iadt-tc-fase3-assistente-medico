@@ -5,6 +5,7 @@ from assistente_medico_api.models.alert import Alert
 from assistente_medico_api.models.attachment import ExamAttachment
 from assistente_medico_api.models.exam import Exam
 from assistente_medico_api.models.patient import Patient, VitalSigns
+from assistente_medico_api.models.prescription import Prescription
 from assistente_medico_api.models.suggested_item import SuggestedItem
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "ExamAttachment",
     "Exam",
     "Patient",
+    "Prescription",
     "VitalSigns",
     "SuggestedItem",
 ]

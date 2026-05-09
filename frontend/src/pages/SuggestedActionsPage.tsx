@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { FileText } from 'lucide-react';
 import { patchPatientMock } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
@@ -21,6 +21,7 @@ const TYPE_HEADINGS: Record<SuggestedActionType, string> = {
 };
 
 export function SuggestedActionsPage() {
+  const navigate = useNavigate();
   const { admittedPatients, activePatientId } = useAppSession();
   const { patient, refetch } = usePatientDetail(activePatientId);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -175,10 +176,27 @@ export function SuggestedActionsPage() {
                             </>
                           )}
                         </span>
-                        <div className="flex gap-1">
+                        <div className="flex flex-wrap gap-1">
                           {item.status !== 'rejected' &&
                           item.status !== 'accepted' ? (
                             <>
+                              {item.type === 'prescription' ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    navigate('/prescriptions', {
+                                      state: {
+                                        fromSuggestion: {
+                                          description: item.description,
+                                        },
+                                      },
+                                    })
+                                  }
+                                  className="rounded border border-teal-600 px-2 py-0.5 text-xs text-teal-800"
+                                >
+                                  Criar prescrição
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 onClick={() =>
