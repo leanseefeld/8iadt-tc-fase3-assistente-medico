@@ -60,6 +60,11 @@ Monorepo com **frontend** SPA (“Assistente Médico IA”), Docker e fachada `c
 - **comorb-backend-endpoint** — agent:copilot — Migração de comorbidades: endpoint backend `GET /api/assistant/comorbidities` (lista em memória, sem banco), schema Pydantic `schemas/comorbidities.py`, frontend via `clinicalApi.comorbidities.ts`, check-in remove constante local, 22 opções expandidas. Proxy Vite para `/api`. — Implementação completa, 10/10 testes backend ✅.
 - **padrao-criar-novas-tabelas** — agent:copilot — Documentação completa em `docs/dev-log/padrao-criar-novas-tabelas.md`: 7 passos (Model, Schema, Repository, Service, API, Migração, Registro); convenções nomes (tabelas, colunas, IDs, aliases); exemplo prático `Medications`; checklist implementação; boas práticas para IA. — Referência estruturada para novas entidades.
 
+### 2026-05-03
+
+- **guardrail-respostas** — agent:cursor — Novo nó `guardrail` no pipeline LangGraph (generate→guardrail→END): classifica via LLM (SEGURO/AVISO/BLOQUEAR), fallback por keywords regex, regeneração com `_STRICT_SYSTEM_PROMPT`, log estruturado JSON em `assistente_medico.guardrail`; `guardrail_status`/`guardrail_reason` no estado, schema e evento SSE `guardrail` em `api/chat.py`. — Revisão: `8537de3` Merge pull request #2 from leanseefeld/task/adicionar-memória-de-conversa-do-chat
+- **guardrail-sse-fix** — agent:cursor — Corrige guardrail no caminho SSE: `chat_history` movido de `generate_node` para `guardrail_node` (usa `final_answer`); evento SSE `guardrail` inclui `answer`; `sseChat.ts` substitui texto acumulado se `status != safe`; `guardrail_reason` exposto na resposta JSON; imports `main.py` reorganizados. — Revisão: `8537de3` Merge pull request #2 from leanseefeld/task/adicionar-memória-de-conversa-do-chat
+
 ### 2026-04-21
 
 - **run-local-python-agnostico-shell** — agent:cursor — Novo `run-local.py` centraliza setup/migrations/seed/start backend+frontend em background com logs, e wrappers `run-local.bat`, `run-local.sh` e `run-local.ps1` passam a delegar para Python. — Revisão: `03996f3` Ajuste na tabela duplicada
