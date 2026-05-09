@@ -1,0 +1,24 @@
+/* Layout A4 ao imprimir (protótipo, não substitui PDF oficial da ANVISA). */
+@media print {
+  .prescriptions-no-print {
+    display: none !important;
+  }
+
+  .prescriptions-print-root {
+    visibility: visible !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 12mm;
+    background: white;
+    color: black;
+    font-size: 11pt;
+    line-height: 1.35;
+  }
+
+  body {
+    background: white;
+  }
+}

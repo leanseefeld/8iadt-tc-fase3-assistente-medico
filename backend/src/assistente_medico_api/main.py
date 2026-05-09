@@ -16,6 +16,7 @@ from assistente_medico_api.api.cids import router as cids_router
 from assistente_medico_api.api.comorbidities import router as comorbidities_router
 from assistente_medico_api.api.medications import router as medications_router
 from assistente_medico_api.api.patients import router as patients_router
+from assistente_medico_api.api.prescriptions import router as prescriptions_router
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
 
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(medications_router, prefix="/api")
     app.include_router(patients_router, prefix="/api")
     app.include_router(alerts_router, prefix="/api")
+    app.include_router(prescriptions_router, prefix="/api")
     return app
 
 

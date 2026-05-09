@@ -9,6 +9,7 @@ import { DashboardPage } from '@/pages/DashboardPage';
 import { DecisionFlowPage } from '@/pages/DecisionFlowPage';
 import { ExamsPage } from '@/pages/ExamsPage';
 import { SuggestedActionsPage } from '@/pages/SuggestedActionsPage';
+import { PrescriptionsPage } from '@/pages/PrescriptionsPage';
 
 export function App() {
   return (
@@ -26,6 +27,10 @@ export function App() {
               <Route path="/chat" element={<ChatPage />} />
               <Route path="/flow" element={<DecisionFlowPage />} />
               <Route path="/exams" element={<ExamsPage />} />
+              <Route
+                path="/prescriptions"
+                element={<PrescriptionsPage />}
+              />
               <Route
                 path="/suggested-actions"
                 element={<SuggestedActionsPage />}

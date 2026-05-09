@@ -12,6 +12,9 @@ import {
   getUnresolvedAlertCountMock,
 } from '@/api/clinicalApi';
 import type { Patient } from '@/types/domain';
+import { MOCK_DOCTORS } from '@/mocks/internal/doctors';
+
+const ACTIVE_DOCTOR_STORAGE_KEY = 'assistenteMedico.activeDoctorId';
 
 export interface AppSessionContextValue {
   activePatientId: string | null;
@@ -23,6 +26,10 @@ export interface AppSessionContextValue {
   /** Após editar CID: banner na Página 3 até o médico reexecutar o fluxo */
   pendingFlowReview: boolean;
   setPendingFlowReview: (v: boolean) => void;
+  /** Login fake: médico selecionado na barra superior */
+  activeDoctorId: string;
+  setActiveDoctorId: (id: string) => void;
+  activeDoctor: (typeof MOCK_DOCTORS)[number] | null;
 }
 
 const AppSessionContext = createContext<AppSessionContextValue | null>(null);
@@ -32,6 +39,33 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
   const [admittedPatients, setAdmittedPatients] = useState<Patient[]>([]);
   const [unresolvedAlertCount, setUnresolvedAlertCount] = useState(0);
   const [pendingFlowReview, setPendingFlowReview] = useState(false);
+  const [activeDoctorId, setActiveDoctorIdState] = useState<string>(() => {
+    if (MOCK_DOCTORS.length === 0) {
+      return '';
+    }
+    try {
+      const stored = localStorage.getItem(ACTIVE_DOCTOR_STORAGE_KEY);
+      if (stored && MOCK_DOCTORS.some((d) => d.id === stored)) {
+        return stored;
+      }
+    } catch {
+      /* ignore */
+    }
+    return MOCK_DOCTORS[0].id;
+  });
+
+  const setActiveDoctorId = useCallback((id: string) => {
+    setActiveDoctorIdState(id);
+    try {
+      localStorage.setItem(ACTIVE_DOCTOR_STORAGE_KEY, id);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const activeDoctor = useMemo(() => {
+    return MOCK_DOCTORS.find((d) => d.id === activeDoctorId) ?? MOCK_DOCTORS[0] ?? null;
+  }, [activeDoctorId]);
 
   const refreshAdmittedPatients = useCallback(async () => {
     const list = await getPatientsMock({ status: 'admitted' });
@@ -63,6 +97,9 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
       unresolvedAlertCount,
       pendingFlowReview,
       setPendingFlowReview,
+      activeDoctorId,
+      setActiveDoctorId,
+      activeDoctor,
     }),
     [
       activePatientId,
@@ -71,6 +108,9 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
       refreshAlertBadge,
       unresolvedAlertCount,
       pendingFlowReview,
+      activeDoctorId,
+      setActiveDoctorId,
+      activeDoctor,
     ],
   );
 
