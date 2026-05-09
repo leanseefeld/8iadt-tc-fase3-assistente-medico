@@ -13,7 +13,7 @@ from langchain_ollama import ChatOllama
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.retrieve import format_context_block
-from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
+from assistente_medico_api.graph.state import ChatRAGState
 
 # Persona e limites de segurança para o assistente (pt-BR).
 _SYSTEM_PROMPT = """\
@@ -85,13 +85,6 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
             chunks.append(str(piece))
 
     ans = "".join(chunks)
-    uq = (state.get("query") or "").strip()
-    hist = list(state.get("chat_history") or [])
-    if uq:
-        hist = hist + [
-            {"role": "user", "content": uq},
-            {"role": "assistant", "content": ans},
-        ]
-        if len(hist) > CHAT_HISTORY_MAX_ITEMS:
-            hist = hist[-CHAT_HISTORY_MAX_ITEMS:]
-    return {"answer": ans, "chat_history": hist}
+    # Histórico atualizado no guardrail_node, que conhece a resposta final
+    # (pode ter sido substituída ou modificada pelo guardrail).
+    return {"answer": ans}

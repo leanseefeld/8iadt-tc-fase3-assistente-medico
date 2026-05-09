@@ -28,3 +28,5 @@ class ChatRAGState(TypedDict, total=False):
     sources: list[str]
     reasoning_steps: list[str]
     answer: str
+    guardrail_status: str  # "safe" | "warned" | "blocked" | "regenerated"
+    guardrail_reason: str

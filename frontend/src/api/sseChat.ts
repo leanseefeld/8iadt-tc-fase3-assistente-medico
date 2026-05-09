@@ -3,11 +3,17 @@
  * Formato alinhado a sse-starlette: blocos separados por linha em branco.
  */
 
-import type { ChatResponse } from '@/types/domain';
+import type { ChatResponse, GuardrailStatus } from '@/types/domain';
 
 export interface ChatStreamHandlers {
   onToken?: (delta: string) => void;
   onMeta?: (sources: string[], reasoning: string[]) => void;
+  /**
+   * Chamado quando o guardrail termina de avaliar a resposta.
+   * Se `status` não for "safe", `answer` contém o texto final correto
+   * (com disclaimer ou mensagem segura) que deve substituir o acumulado.
+   */
+  onGuardrail?: (status: GuardrailStatus, answer: string) => void;
   onError?: (message: string) => void;
 }
 
@@ -54,6 +60,7 @@ export async function consumeAssistantChatSse(
   let sources: string[] = [];
   let reasoning: string[] = [];
   let threadId = '';
+  let guardrailStatus: GuardrailStatus | undefined;
 
   // --- Loop: acumula bytes, fatia em blocos SSE terminados em linha em branco ---
   for (;;) {
@@ -93,6 +100,18 @@ export async function consumeAssistantChatSse(
         const steps = payload.steps;
         reasoning = Array.isArray(steps) ? (steps as string[]) : [];
         handlers?.onMeta?.(sources, reasoning);
+      } else if (event === 'guardrail') {
+        const status = payload.status as GuardrailStatus | undefined;
+        const answer = typeof payload.answer === 'string' ? payload.answer : '';
+        if (status) {
+          guardrailStatus = status;
+          // Substituir texto acumulado pela versão final sempre que o guardrail
+          // modificou a resposta (disclaimer adicionado, regeneração ou bloqueio).
+          if (status !== 'safe' && answer) {
+            text = answer;
+          }
+          handlers?.onGuardrail?.(status, answer);
+        }
       } else if (event === 'error') {
         const detail =
           typeof payload.detail === 'string' ? payload.detail : 'Erro no assistente.';
@@ -107,5 +126,11 @@ export async function consumeAssistantChatSse(
     }
   }
 
-  return { text, sources, reasoning, ...(threadId ? { threadId } : {}) };
+  return {
+    text,
+    sources,
+    reasoning,
+    ...(threadId ? { threadId } : {}),
+    ...(guardrailStatus ? { guardrailStatus } : {}),
+  };
 }

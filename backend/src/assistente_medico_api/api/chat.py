@@ -120,6 +120,8 @@ async def post_chat(
             sources=list(final.get("sources") or []),
             reasoning=list(final.get("reasoning_steps") or []),
             thread_id=thread_id,
+            guardrail_status=final.get("guardrail_status") or None,
+            guardrail_reason=final.get("guardrail_reason") or None,
         )
 
     # --- Caminho SSE: astream_events emite on_chat_model_stream por token ---
@@ -140,8 +142,26 @@ async def post_chat(
                         "data": json.dumps({"steps": output.get("reasoning_steps") or []}),
                     }
 
-                # Token do LLM dentro do nó generate.
-                elif kind == "on_chat_model_stream":
+                # Guardrail terminou → envia status e resposta final.
+                # Se o status não for "safe", o frontend substitui o texto
+                # acumulado pelos tokens já exibidos (AVISO appenda disclaimer;
+                # BLOQUEAR/regenerated substitui por mensagem segura).
+                elif kind == "on_chain_end" and event.get("name") == "guardrail":
+                    output = event["data"].get("output") or {}
+                    yield {
+                        "event": "guardrail",
+                        "data": json.dumps(
+                            {
+                                "status": output.get("guardrail_status"),
+                                "reason": output.get("guardrail_reason"),
+                                "answer": output.get("answer"),
+                            }
+                        ),
+                    }
+
+                # Token do LLM dentro do nó generate — filtra por nó para não vazar
+                # tokens internos do guardrail (classificador, regeneração).
+                elif kind == "on_chat_model_stream" and event.get("metadata", {}).get("langgraph_node") == "generate":
                     chunk = event["data"].get("chunk")
                     piece = getattr(chunk, "content", None) if chunk else None
                     if isinstance(piece, list):
