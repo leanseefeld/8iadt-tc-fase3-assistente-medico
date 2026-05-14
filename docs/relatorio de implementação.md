@@ -186,3 +186,15 @@ Resumo do plano executável para o arquivo `docs/rename-medicamentos-2024.pdf`:
 5. Validar com testes de contrato e amostragem manual de qualidade antes de publicar.
 
 Detalhamento completo por fase, entradas, saídas e critérios de validação em [docs/plano-extracao-rename.md](./plano-extracao-rename.md).
+
+# Fine Tuning
+
+Interagindo com o assistente usando Gemma4 sem fine-tuning, as respostas tem um tom inconsistente - às vezes muito formal, às vezes muito distante ("com os dados fornecidos"). Parte do problema foi resolvido mudando as instruções do agente e indicando que foi o próprio agente que iniciou a pesquisa nos documentos PCDT e ele deve apenas continuar a responder a mensagem com base nos resultados. Além do mais, os documentos PCDT são muito específicos e não agregam tanto no conhecimento do agente quanto um dataset destinado a conhecimentos médicos.
+
+É aqui que entra o fine-tuning do modelo com o MedQuAD, como forma tanto de melhorar o tom de resposta do modelo quanto seu repertório técnico em medicina.
+O MedQuAD é hospedado em um [repositório GitHub](https://github.com/abachaa/MedQuAD), separado em pastas para as diferentes fontes de perguntas e respostas.
+
+Apesar da vasta quantidade de pares de perguntas e respostas, há seções sem respostas ou com respostas incorretas ou incompletas. Os autores, no entanto, realizaram uma avaliação manual das perguntas do [TREC-2017 LiveQA medical task](https://github.com/abachaa/LiveQA_MedicalTask_TREC2017/tree/master/TestDataset) e classificaram as respostas do próprio dataset em: 1-Incorrect, 2-Related, 3-Incomplete, and 4-Excellent.
+O resultado desta classificação foi disponibilizado no arquivo [QA-TestSet-LiveQA-Med-Qrels-2479-Answers.zip](https://github.com/abachaa/MedQuAD/blob/master/QA-TestSet-LiveQA-Med-Qrels-2479-Answers.zip), que foi manualmente extraído para a pasta `llm/fine-tuning/assets` copiado para o repositório deste trabalho.
+
+Criado o notebook [data-prep.ipynb](../llm/fine-tuning/data-prep.ipynb) para tratar e traduzir o dataset filtrado.
