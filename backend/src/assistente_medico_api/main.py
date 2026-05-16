@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import logging
-import sys
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
 from assistente_medico_api.api.alerts import router as alerts_router
+from assistente_medico_api.api.cids import router as cids_router
 from assistente_medico_api.api.chat import router as chat_router
 from assistente_medico_api.api.cids import router as cids_router
 from assistente_medico_api.api.comorbidities import router as comorbidities_router
