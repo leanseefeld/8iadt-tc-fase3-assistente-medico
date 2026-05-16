@@ -13,20 +13,33 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+import sys
 from typing import Any, cast
 
 import streamlit as st
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+for src_path in (REPO_ROOT / "backend" / "src", REPO_ROOT / "llm" / "src"):
+    src = str(src_path)
+    if src not in sys.path:
+        sys.path.insert(0, src)
+
 IMPORT_ERROR: ModuleNotFoundError | None = None
 try:
     from langchain_core.documents import Document
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from langchain_ollama import ChatOllama
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
+    from assistente_medico_api.graph.nodes.generate import _build_messages, generate_node
+    from assistente_medico_api.graph.nodes.retrieve import (
+        format_context_block,
+        format_source_label,
+        retrieve_node,
+    )
+    from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
     from pcdt_ingest.embed import (
         CHROMA_COLLECTION_PCDT,
         build_ollama_embeddings,
@@ -37,10 +50,35 @@ try:
 except ModuleNotFoundError as exc:
     IMPORT_ERROR = exc
     Document = Any  # type: ignore[assignment]
+    AIMessage = Any  # type: ignore[assignment]
     HumanMessage = Any  # type: ignore[assignment]
     SystemMessage = Any  # type: ignore[assignment]
-    ChatOllama = Any  # type: ignore[assignment]
     CHROMA_COLLECTION_PCDT = "pcdt"
+
+    class Settings:  # type: ignore[no-redef]
+        pass
+
+    def resolve_chroma_persist_dir(settings: Any) -> Path:  # type: ignore[no-redef]
+        path = getattr(settings, "chroma_persist_dir", None)
+        return Path(path) if path else vectorstore_chroma_dir()
+
+    def _build_messages(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    async def generate_node(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    def format_context_block(docs: list[Any]) -> str:  # type: ignore[no-redef]
+        return ""
+
+    def format_source_label(doc: Any) -> str:  # type: ignore[no-redef]
+        return "PCDT ? (pp. ?-?)"
+
+    def retrieve_node(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    async def rewrite_query_node(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
     def vectorstore_chroma_dir() -> Path:
         return Path.cwd().parent / "vectorstore" / "chroma"
@@ -63,7 +101,6 @@ class InspectorSettings:
     chroma_persist_dir: str
     chroma_collection: str
     retrieval_k: int
-    llm_temperature: float
     llm_stream_timeout_s: float
 
 
@@ -76,64 +113,18 @@ class Timing:
 
 
 def _default_settings() -> InspectorSettings:
-    # Alinha defaults com backend/src/assistente_medico_api/config.py (prefixo MEDICO_)
-    base_url = (os.environ.get("MEDICO_OLLAMA_BASE_URL") or os.environ.get("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").strip()
-    embed_model = (os.environ.get("MEDICO_OLLAMA_EMBED_MODEL") or "nomic-embed-text").strip()
-    chat_model = (os.environ.get("MEDICO_OLLAMA_CHAT_MODEL") or "gemma4:e4b-it-q4_K_M").strip()
-    chroma_dir = os.environ.get("MEDICO_CHROMA_PERSIST_DIR") or str(vectorstore_chroma_dir())
-    collection = (os.environ.get("MEDICO_CHROMA_COLLECTION") or CHROMA_COLLECTION_PCDT).strip()
-    k = int(os.environ.get("MEDICO_RETRIEVAL_K") or "6")
-    timeout_s = float(os.environ.get("MEDICO_LLM_STREAM_TIMEOUT_S") or "120")
+    backend_env = REPO_ROOT / "backend" / ".env"
+    backend_cfg = Settings(_env_file=backend_env if backend_env.exists() else None)
+    chroma_dir = resolve_chroma_persist_dir(backend_cfg)
     return InspectorSettings(
-        ollama_base_url=base_url,
-        ollama_embed_model=embed_model,
-        ollama_chat_model=chat_model,
-        chroma_persist_dir=chroma_dir,
-        chroma_collection=collection,
-        retrieval_k=k,
-        llm_temperature=0.2,
-        llm_stream_timeout_s=timeout_s,
+        ollama_base_url=backend_cfg.ollama_base_url,
+        ollama_embed_model=backend_cfg.ollama_embed_model,
+        ollama_chat_model=backend_cfg.ollama_chat_model,
+        chroma_persist_dir=str(chroma_dir),
+        chroma_collection=backend_cfg.chroma_collection,
+        retrieval_k=backend_cfg.retrieval_k,
+        llm_stream_timeout_s=backend_cfg.llm_stream_timeout_s,
     )
-
-
-def _format_source_label(doc: Document) -> str:
-    meta = doc.metadata or {}
-    stem = meta.get("source_stem", "?")
-    p0 = meta.get("page_start", "?")
-    p1 = meta.get("page_end", "?")
-    return f"PCDT {stem} (pp. {p0}-{p1})"
-
-
-def _format_context_block(docs: list[Document]) -> str:
-    parts: list[str] = []
-    for i, doc in enumerate(docs, start=1):
-        meta = doc.metadata or {}
-        stem = meta.get("source_stem", "?")
-        p0 = meta.get("page_start", "?")
-        p1 = meta.get("page_end", "?")
-        header = f"[{i}] PCDT stem={stem} págs. {p0}-{p1}"
-        parts.append(f"{header}\n{(doc.page_content or '').strip()}")
-    return "\n\n---\n\n".join(parts)
-
-
-_SYSTEM_PROMPT = """\
-Você é um assistente clínico de apoio a médicos no Brasil.
-Use o contexto dos Protocolos Clínicos e Diretrizes Terapêuticas (PCDT) fornecido abaixo quando for relevante.
-Cite as fontes pelo identificador [n] correspondente ao trecho.
-Recomende mas não prescreva medicamentos, doses ou esquemas terapêuticos específicos: o médico responsável decide.
-Se o contexto não for suficiente, diga claramente e evite inventar dados clínicos.
-Responda em português do Brasil, de forma objetiva e profissional.\
-"""
-
-
-def _build_prompt_messages(*, query: str, docs: list[Document]) -> list[Any]:
-    context = _format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
-    human = (
-        f"Pergunta do médico:\n{query}\n\n"
-        f"Contexto (trechos PCDT):\n{context}\n\n"
-        "Responda com base no contexto quando aplicável."
-    )
-    return [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human)]
 
 
 def _vec_stats(vec: list[float]) -> dict[str, float]:
@@ -160,6 +151,18 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _backend_settings(cfg: InspectorSettings, *, chat_model: str | None = None) -> Settings:
+    return Settings(
+        ollama_base_url=cfg.ollama_base_url,
+        ollama_embed_model=cfg.ollama_embed_model,
+        ollama_chat_model=chat_model or cfg.ollama_chat_model,
+        chroma_persist_dir=Path(cfg.chroma_persist_dir),
+        chroma_collection=cfg.chroma_collection,
+        retrieval_k=int(cfg.retrieval_k),
+        llm_stream_timeout_s=float(cfg.llm_stream_timeout_s),
+    )
+
+
 def _is_ollama_memory_error(exc: Exception) -> bool:
     txt = str(exc).lower()
     return (
@@ -171,11 +174,41 @@ def _is_ollama_memory_error(exc: Exception) -> bool:
 
 def _load_store(cfg: InspectorSettings):
     embeddings = build_ollama_embeddings(model=cfg.ollama_embed_model, base_url=cfg.ollama_base_url)
+    settings = _backend_settings(cfg)
     return open_chroma_vectorstore(
-        persist_directory=Path(cfg.chroma_persist_dir),
+        persist_directory=resolve_chroma_persist_dir(settings),
         embedding_function=embeddings,
         collection_name=cfg.chroma_collection,
     )
+
+
+class InspectableStore:
+    """Wrapper para capturar os scores sem alterar o retrieve_node do backend."""
+
+    def __init__(self, store: Any) -> None:
+        self._store = store
+        self.last_pairs: list[tuple[Document, float]] = []
+
+    def similarity_search_with_score(self, query: str, k: int = 6):
+        pairs = self._store.similarity_search_with_score(query, k=k)
+        self.last_pairs = list(pairs)
+        return pairs
+
+
+def _message_to_payload(message: Any) -> dict[str, str]:
+    if isinstance(message, SystemMessage):
+        role = "system"
+    elif isinstance(message, HumanMessage):
+        role = "user"
+    elif isinstance(message, AIMessage):
+        role = "assistant"
+    else:
+        role = "message"
+    return {"role": role, "content": str(getattr(message, "content", str(message)))}
+
+
+def _run_async(coro):
+    return asyncio.run(coro)
 
 
 def _render_educational_tips(*, query: str, has_docs: bool, scores: list[float]) -> None:
@@ -233,11 +266,11 @@ def main() -> None:
             chroma_persist_dir=st.text_input("Chroma persist dir", value=cfg0.chroma_persist_dir),
             chroma_collection=st.text_input("Chroma collection", value=cfg0.chroma_collection),
             retrieval_k=st.number_input("k (retrieval)", min_value=1, max_value=50, value=int(cfg0.retrieval_k), step=1),
-            llm_temperature=st.slider("Temperatura", min_value=0.0, max_value=1.0, value=float(cfg0.llm_temperature), step=0.05),
             llm_stream_timeout_s=st.number_input("Timeout LLM (s)", min_value=5.0, max_value=600.0, value=float(cfg0.llm_stream_timeout_s), step=5.0),
         )
         auto_fallback_model = st.checkbox("Fallback automático para modelo leve", value=True)
-        fallback_model_name = st.text_input("Modelo fallback (leve)", value="llama3.2:3b")
+        fallback_model_name = st.text_input("Modelo fallback (leve)", value="gemma4:e2b-it-q4_K_M")
+        st.caption("A temperatura segue o backend: `0.2` fixa em `_build_llm`.")
         st.caption("Dica: o path default do Chroma é `vectorstore/chroma` na raiz do repositório.")
 
     tab_run, tab_vectorstore, tab_export = st.tabs(["Executar & inspecionar", "Vectorstore", "Exportar JSON"])
@@ -251,6 +284,12 @@ def main() -> None:
                 "Texto do médico (query)",
                 height=140,
                 value="Quais são os critérios de inclusão para sgb?",
+            )
+            history_raw = st.text_area(
+                "Histórico JSON opcional",
+                height=110,
+                value="[]",
+                help='Mesmo formato do backend: [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]',
             )
             run_mode = st.radio(
                 "Modo de execução",
@@ -266,9 +305,9 @@ def main() -> None:
 
         with col_r:
             st.subheader("Flow diagram (atual)")
-            flow_text = "embed_query  →  retrieve  →  context_assembly  →  prompt_preview"
+            flow_text = "backend.rewrite  →  backend.retrieve  →  backend.prompt_preview"
             if run_generate:
-                flow_text = f"{flow_text}  →  generate"
+                flow_text = f"{flow_text}  →  backend.generate"
             st.code(flow_text, language="text")
             st.subheader("Performance (última execução)")
             last = st.session_state.get("last_run")
@@ -292,6 +331,29 @@ def main() -> None:
             generation_fallback_used = False
             prompt_messages: list[dict[str, str]] | None = None
             context_text: str | None = None
+            final_state: dict[str, Any] = {
+                "query": query,
+                "patient_id": "",
+                "chat_history": [],
+                "retrieved_docs": [],
+                "sources": [],
+                "reasoning_steps": [],
+                "answer": "",
+                "retrieval_query": "",
+            }
+            backend_settings = _backend_settings(cfg)
+
+            try:
+                parsed_history = json.loads(history_raw or "[]")
+                if not isinstance(parsed_history, list):
+                    raise ValueError("o histórico precisa ser uma lista")
+                final_state["chat_history"] = [
+                    {"role": str(t.get("role")), "content": str(t.get("content", "")).strip()}
+                    for t in parsed_history
+                    if isinstance(t, dict) and str(t.get("role")) in {"user", "assistant"} and str(t.get("content", "")).strip()
+                ]
+            except Exception as exc:
+                errors.append(f"Histórico JSON inválido; executando sem histórico: {exc!s}")
 
             # --- Load store ---
             try:
@@ -321,36 +383,35 @@ def main() -> None:
                 except Exception as exc:
                     errors.append(f"Falha ao analisar embedding via Ollama: {exc!s}")
 
-            # --- Retrieve ---
+            # --- Backend rewrite + retrieve ---
             if store is not None and query.strip():
                 try:
+                    rewrite_out = cast(dict[str, Any], _run_async(rewrite_query_node(cast(Any, final_state), backend_settings)))
+                    final_state.update(rewrite_out)
+
+                    inspectable_store = InspectableStore(store)
                     t0 = time.perf_counter()
-                    retrieved = cast(list[tuple[Document, float]], store.similarity_search_with_score(query, k=int(cfg.retrieval_k)))
+                    retrieve_out = retrieve_node(cast(Any, final_state), store=cast(Any, inspectable_store), settings=backend_settings)
                     timing = Timing(
                         embed_ms=timing.embed_ms,
                         retrieve_ms=(time.perf_counter() - t0) * 1000.0,
                         assemble_ms=timing.assemble_ms,
                         generate_ms=timing.generate_ms,
                     )
+                    final_state.update(retrieve_out)
+                    retrieved = inspectable_store.last_pairs
                 except Exception as exc:
-                    errors.append(f"Falha no retrieve (similarity_search_with_score): {exc!s}")
+                    errors.append(f"Falha no retrieve do backend: {exc!s}")
 
-            docs = [d for d, _ in retrieved]
+            docs = cast(list[Document], final_state.get("retrieved_docs") or [d for d, _ in retrieved])
             scores = [float(s) for _, s in retrieved]
 
-            # --- Assemble context + prompt preview ---
+            # --- Backend context + prompt preview ---
             try:
                 t0 = time.perf_counter()
-                context_text = _format_context_block(docs)
-                messages = _build_prompt_messages(query=query, docs=docs)
-                prompt_messages = []
-                for m in messages:
-                    if isinstance(m, SystemMessage):
-                        prompt_messages.append({"role": "system", "content": m.content})
-                    elif isinstance(m, HumanMessage):
-                        prompt_messages.append({"role": "user", "content": m.content})
-                    else:
-                        prompt_messages.append({"role": "message", "content": getattr(m, "content", str(m))})
+                context_text = format_context_block(docs)
+                messages = _build_messages(cast(Any, final_state))
+                prompt_messages = [_message_to_payload(m) for m in messages]
                 timing = Timing(
                     embed_ms=timing.embed_ms,
                     retrieve_ms=timing.retrieve_ms,
@@ -360,29 +421,14 @@ def main() -> None:
             except Exception as exc:
                 errors.append(f"Falha ao montar contexto/prompt: {exc!s}")
 
-            # --- Generate (optional) ---
+            # --- Backend generate (optional) ---
             if run_generate and query.strip():
                 try:
-                    import httpx
-
-                    timeout = httpx.Timeout(float(cfg.llm_stream_timeout_s), connect=10.0)
-                    llm = ChatOllama(
-                        model=cfg.ollama_chat_model,
-                        base_url=cfg.ollama_base_url,
-                        temperature=float(cfg.llm_temperature),
-                        async_client_kwargs={"timeout": timeout},
-                        client_kwargs={"timeout": timeout},
-                    )
                     t0 = time.perf_counter()
-                    pieces: list[str] = []
                     with st.status("Gerando resposta (streaming)...", expanded=False):
-                        for chunk in llm.stream(_build_prompt_messages(query=query, docs=docs)):
-                            piece = getattr(chunk, "content", None)
-                            if isinstance(piece, list):
-                                piece = "".join(str(p) for p in piece)
-                            if piece:
-                                pieces.append(str(piece))
-                    answer_text = "".join(pieces)
+                        generate_out = cast(dict[str, Any], _run_async(generate_node(cast(Any, final_state), backend_settings)))
+                    final_state.update(generate_out)
+                    answer_text = str(final_state.get("answer") or "")
                     generation_model_used = cfg.ollama_chat_model
                     timing = Timing(
                         embed_ms=timing.embed_ms,
@@ -393,30 +439,20 @@ def main() -> None:
                 except Exception as exc:
                     if auto_fallback_model and _is_ollama_memory_error(exc) and fallback_model_name.strip():
                         try:
-                            import httpx
-
-                            timeout = httpx.Timeout(float(cfg.llm_stream_timeout_s), connect=10.0)
-                            llm = ChatOllama(
-                                model=fallback_model_name.strip(),
-                                base_url=cfg.ollama_base_url,
-                                temperature=float(cfg.llm_temperature),
-                                async_client_kwargs={"timeout": timeout},
-                                client_kwargs={"timeout": timeout},
-                            )
+                            fallback_name = fallback_model_name.strip()
+                            fallback_settings = _backend_settings(cfg, chat_model=fallback_name)
                             t0 = time.perf_counter()
-                            pieces = []
                             with st.status(
-                                f"Modelo principal sem memória; tentando fallback `{fallback_model_name.strip()}`...",
+                                f"Modelo principal sem memória; tentando fallback `{fallback_name}`...",
                                 expanded=False,
                             ):
-                                for chunk in llm.stream(_build_prompt_messages(query=query, docs=docs)):
-                                    piece = getattr(chunk, "content", None)
-                                    if isinstance(piece, list):
-                                        piece = "".join(str(p) for p in piece)
-                                    if piece:
-                                        pieces.append(str(piece))
-                            answer_text = "".join(pieces)
-                            generation_model_used = fallback_model_name.strip()
+                                generate_out = cast(
+                                    dict[str, Any],
+                                    _run_async(generate_node(cast(Any, final_state), fallback_settings)),
+                                )
+                            final_state.update(generate_out)
+                            answer_text = str(final_state.get("answer") or "")
+                            generation_model_used = fallback_name
                             generation_fallback_used = True
                             timing = Timing(
                                 embed_ms=timing.embed_ms,
@@ -426,32 +462,38 @@ def main() -> None:
                             )
                             errors.append(
                                 "Modelo principal sem memória; resposta gerada com fallback "
-                                f"`{fallback_model_name.strip()}`."
+                                f"`{fallback_name}`."
                             )
                         except Exception as fallback_exc:
                             errors.append(
-                                "Falha na geração (ChatOllama): "
+                                "Falha na geração do backend: "
                                 f"{exc!s}. Fallback `{fallback_model_name.strip()}` também falhou: {fallback_exc!s}"
                             )
                     else:
-                        errors.append(f"Falha na geração (ChatOllama): {exc!s}")
+                        errors.append(f"Falha na geração do backend: {exc!s}")
 
             payload: dict[str, Any] = {
                 "timestamp": _now_iso(),
                 "settings": asdict(cfg),
-                "input": {"query": query},
+                "input": {"query": query, "chat_history": final_state.get("chat_history") or []},
                 "mode": {"rag_focus_mode": rag_focus_mode},
                 "embedding": embed_info,
+                "backend_state": {
+                    "retrieval_query": final_state.get("retrieval_query") or "",
+                    "sources": final_state.get("sources") or [],
+                    "reasoning_steps": final_state.get("reasoning_steps") or [],
+                },
                 "retrieve": {
                     "k": int(cfg.retrieval_k),
                     "results": [
                         {
                             "rank": i + 1,
                             "score": float(score),
-                            "source_label": _format_source_label(doc),
+                            "source_label": format_source_label(doc),
                             "doc_id": getattr(doc, "id", None),
                             "metadata": doc.metadata,
                             "content_preview": (doc.page_content or "").strip()[:500],
+                            "content": (doc.page_content or "").strip(),
                         }
                         for i, (doc, score) in enumerate(retrieved)
                     ],
@@ -480,6 +522,17 @@ def main() -> None:
                     st.markdown(f"- {e}")
 
             st.divider()
+            backend_state = cast(dict[str, Any], payload.get("backend_state") or {})
+            st.subheader("✅ Estado do backend")
+            st.json(
+                {
+                    "retrieval_query": backend_state.get("retrieval_query") or "",
+                    "sources": backend_state.get("sources") or [],
+                    "reasoning_steps": backend_state.get("reasoning_steps") or [],
+                },
+                expanded=False,
+            )
+
             st.subheader("✅ Retrieve detalhado (docs + score)")
             rows = cast(list[dict[str, Any]], (payload.get("retrieve") or {}).get("results") or [])
             if not rows:
@@ -505,7 +558,7 @@ def main() -> None:
                     for r in rows:
                         st.markdown(f"**#{r['rank']} — score={r['score']!r} — {r['source_label']}**")
                         st.json(r.get("metadata") or {}, expanded=False)
-                        st.text((r.get("content_preview") or "").strip())
+                        st.text((r.get("content") or r.get("content_preview") or "").strip())
                         st.divider()
 
             st.subheader("✅ Context assembly (como o contexto é montado)")
@@ -607,4 +660,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

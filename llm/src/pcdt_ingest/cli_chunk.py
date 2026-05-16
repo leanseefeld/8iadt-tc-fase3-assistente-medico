@@ -8,6 +8,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from pcdt_ingest.clean.cleaner import CLEANED_PAGE_JSONL_SUFFIX, default_cleaned_processed_dir
 from pcdt_ingest.chunk import chunk_one_stem, default_chunks_dir
 from pcdt_ingest.extract import PAGE_JSONL_SUFFIX, default_processed_dir
 from pcdt_ingest.logutil import configure_logging, get_logger
@@ -51,19 +52,21 @@ def _load_manifest_stems(root: Path) -> list[str]:
     return sorted(stems)
 
 
-def _list_sidecar_stems(processed_dir: Path) -> list[str]:
-    """Stems que têm ``{stem}.pages.jsonl`` em ``processed_dir``."""
-    out: list[str] = []
+def _list_sidecar_stems(processed_dir: Path, cleaned_dir: Path) -> list[str]:
+    """Stems com sidecar extraído; prefere ``*.pages.cleaned.jsonl`` no processamento."""
+    out: set[str] = set()
+    for f in sorted(cleaned_dir.glob(f"*{CLEANED_PAGE_JSONL_SUFFIX}")):
+        out.add(f.name[: -len(CLEANED_PAGE_JSONL_SUFFIX)])
     for f in sorted(processed_dir.glob(f"*{PAGE_JSONL_SUFFIX}")):
-        stem = f.name[: -len(PAGE_JSONL_SUFFIX)]
-        out.append(stem)
-    return out
+        out.add(f.name[: -len(PAGE_JSONL_SUFFIX)])
+    return sorted(out)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Lê llm/data/processed/pcdt/<nome>.pages.jsonl e grava "
+            "Lê llm/data/processed/pcdt_cleaned/<nome>.pages.cleaned.jsonl quando existir "
+            "ou llm/data/processed/pcdt/<nome>.pages.jsonl como fallback, e grava "
             "llm/data/chunks/pcdt/<nome>.chunks.jsonl (metadata: seção, páginas, etc.)."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -106,13 +109,14 @@ def main(argv: list[str] | None = None) -> int:
     ensure_data_dirs()
     root = data_root()
     processed_dir = default_processed_dir()
+    cleaned_dir = default_cleaned_processed_dir()
     chunks_dir = default_chunks_dir()
     manifests_dir = root / DIR_MANIFESTS
 
     if args.only_manifest:
         stems = _load_manifest_stems(root)
     else:
-        stems = _list_sidecar_stems(processed_dir)
+        stems = _list_sidecar_stems(processed_dir, cleaned_dir)
 
     if args.max_files is not None:
         stems = stems[: max(0, args.max_files)]
@@ -125,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         row = chunk_one_stem(
             stem,
             processed_dir=processed_dir,
+            cleaned_dir=cleaned_dir,
             chunks_dir=chunks_dir,
             data_base=root,
             force=args.force,

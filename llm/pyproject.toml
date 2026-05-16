@@ -32,6 +32,7 @@ dependencies = [
 download-pcdt = "pcdt_ingest.cli_pcdt:main"
 download-clinical-exams = "pcdt_ingest.cli_exams:main"
 extract-pcdt-markdown = "pcdt_ingest.cli_extract:main"
+clean-pcdt = "pcdt_ingest.cli_clean:main"
 chunk-pcdt = "pcdt_ingest.cli_chunk:main"
 build-vectorstore = "pcdt_ingest.cli_embed:main"
 view-pcdt-chunks = "pcdt_ingest.cli_view_pcdt_chunks:main"

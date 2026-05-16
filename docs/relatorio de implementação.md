@@ -187,6 +187,30 @@ Resumo do plano executável para o arquivo `docs/rename-medicamentos-2024.pdf`:
 
 Detalhamento completo por fase, entradas, saídas e critérios de validação em [docs/plano-extracao-rename.md](./plano-extracao-rename.md).
 
+## Evoluindo a Pipeline RAG
+
+Continuando a evolução do projeto, foi verificado que os textos extraídos do PCDT's precisam passar por um processo de limpeza e tratamento, para geração do chunks e assim remover ruídos.
+
+Foi feita uma análise tanto no painel de visualização do chunks (`view-pcdt-chunks`) quanto no analisador em `rag_inspector_app.py`, que simula as buscas feitas pelo backend deste aplicação, para entender os tipos de ruídos mais comuns e pensar em estratégias de tratamento.
+
+A seguir, estão listados os tipos de ruídos mais comuns encontrados e as estratégias propostas para tratamento:
+
+Texto apenas com valor que representa a conversação de imagem do PDF, sem valor semântico para o modelo:
+
+
+![Imagem: tabela com dados de estudo clínico](./assets/chunk.imagem.png)
+
+Leitura de tabelas transformada em texto, mas sem estruturação adequada, dificultando a compreensão do conteúdo:
+
+![Imagem: tabela com dados de estudo clínico, mas sem formatação](./assets/chunk_tabela.png)
+
+Chunk apenas com texto de rodapé, referência ou assinatura, sem valor para o modelo:
+
+![Imagem: assinatura de PCDT](./assets/chunk_assinatura.png)
+
+Para tratar estes ruídos, removemos placeholders de imagens, assinatura administrativas, números de páginas remanescentes, normalizar texto (espaços, quebras de linha, acentos), melhorar textos extraído de tabelas, remover cabeçalhos e rodapés repetidos, template de fichas para o preenchimento do paciente ou sobre o paciente, entre outros tratamentos de limpeza.
+Essas textos serão salvos em `*.pages.cleaned.jsonl` para serem consumidos pelo `cli_chunk`
+
 # Fine Tuning
 
 Interagindo com o assistente usando Gemma4 sem fine-tuning, as respostas tem um tom inconsistente - às vezes muito formal, às vezes muito distante ("com os dados fornecidos"). Parte do problema foi resolvido mudando as instruções do agente e indicando que foi o próprio agente que iniciou a pesquisa nos documentos PCDT e ele deve apenas continuar a responder a mensagem com base nos resultados. Além do mais, os documentos PCDT são muito específicos e não agregam tanto no conhecimento do agente quanto um dataset destinado a conhecimentos médicos.

@@ -118,10 +118,10 @@ def main() -> int:
         run_checked([str(venv_python), "-m", "alembic", "upgrade", "head"], repo_root / "backend")
         run_checked([str(venv_python), "scripts/seed_patients.py"], repo_root / "backend")
 
-    # Variáveis de ambiente para os modelos
+    # Variáveis de ambiente para os modelos (somente nomes de modelo aqui)
     medico_vars = {
         "MEDICO_OLLAMA_EMBED_MODEL": "nomic-embed-text",
-        "MEDICO_OLLAMA_CHAT_MODEL": "gemma4:e4b-it-q4_K_M"
+        "MEDICO_OLLAMA_CHAT_MODEL": "gemma4:e4b-it-q4_K_M",
     }
 
     if args.build_vectorstore:
@@ -131,8 +131,17 @@ def main() -> int:
             print("Por favor, certifique-se de que o Ollama está instalado e aberto.")
             return 1
 
-        # Garante que os modelos necessários estão baixados
-        for model in medico_vars.values():
+        # Lê a base URL do Ollama (pode ser definida via OLLAMA_BASE_URL no shell)
+        ollama_base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+
+        # Adiciona a base URL ao conjunto de variáveis que serão propagadas para
+        # os subprocessos (como pcdt_ingest). Não incluímos essa string na lista
+        # de 'models_to_pull' abaixo para evitar executar `ollama pull` na URL.
+        medico_vars["MEDICO_OLLAMA_BASE_URL"] = ollama_base
+
+        # Garante que os modelos necessários estão baixados (somente os nomes de modelo)
+        models_to_pull = [v for k, v in medico_vars.items() if k.endswith("MODEL")]
+        for model in models_to_pull:
             print(f"✔ Garantindo modelo '{model}'...")
             run_checked(["ollama", "pull", model], repo_root)
 
@@ -140,14 +149,19 @@ def main() -> int:
 
         llm_env = os.environ.copy()
         llm_env.update(medico_vars)
+        # Alguns utilitários/CLI (pcdt_ingest) leem OLLAMA_BASE_URL diretamente,
+        # portanto garanta que a variável sem prefixo também esteja presente
+        # no ambiente passado aos subprocessos.
+        llm_env["OLLAMA_BASE_URL"] = ollama_base
         llm_src = str(repo_root / "llm" / "src")
         llm_env["PYTHONPATH"] = f"{llm_src}{os.pathsep}{llm_env.get('PYTHONPATH', '')}"
 
         steps = [
-            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--force"]),
+            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--max-files", "10", "--force"]),
             ("extract-pcdt-markdown", ["pcdt_ingest.cli_extract", "--workers", "6", "--force"]),
+            ("clean-pcdt-extracted", ["pcdt_ingest.cli_clean", "--verbose", "--force"]),
             ("chunk-pcdt", ["pcdt_ingest.cli_chunk", "--workers", "6", "--force"]),
-            ("build-vectorstore", ["pcdt_ingest.cli_embed", "--force"])
+            ("build-vectorstore", ["pcdt_ingest.cli_embed", "--max-files", "10","--force", "--verbose"])
         ]
 
         for display_name, module_info in steps:

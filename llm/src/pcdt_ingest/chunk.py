@@ -9,6 +9,7 @@ from typing import Any
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
+from pcdt_ingest.clean.cleaner import CLEANED_PAGE_JSONL_SUFFIX, default_cleaned_processed_dir
 from pcdt_ingest.extract import PAGE_JSONL_SUFFIX, PageRecord, read_pages_jsonl
 from pcdt_ingest.logutil import get_logger
 from pcdt_ingest.paths import DIR_RAW_PCDT, DIR_CHUNKS_PCDT, data_root
@@ -263,7 +264,7 @@ def chunk_sidecar_file(
     """
     Lê ``{stem}.pages.jsonl``, grava ``{stem}.chunks.jsonl`` e devolve documentos + caminho.
     """
-    stem = pages_jsonl.name[: -len(PAGE_JSONL_SUFFIX)]
+    stem = sidecar_stem(pages_jsonl)
     if not pages_jsonl.is_file():
         raise FileNotFoundError(pages_jsonl)
 
@@ -287,16 +288,21 @@ def chunk_one_stem(
     chunks_dir: Path,
     data_base: Path,
     force: bool,
+    cleaned_dir: Path | None = None,
     **chunk_kw: Any,
 ) -> dict[str, Any]:
     """
-    Processa um stem: lê ``processed_dir/<stem>.pages.jsonl``, escreve ``chunks_dir/<stem>.chunks.jsonl``.
+    Processa um stem: prefere ``cleaned_dir/<stem>.pages.cleaned.jsonl`` quando existir,
+    senão lê ``processed_dir/<stem>.pages.jsonl``. Escreve ``chunks_dir/<stem>.chunks.jsonl``.
     Retorna linha de manifesto.
     """
     from pcdt_ingest.manifest import now_iso
 
     ts = now_iso()
-    pages_path = processed_dir / f"{stem}{PAGE_JSONL_SUFFIX}"
+    cleaned_base = cleaned_dir or default_cleaned_processed_dir()
+    cleaned_pages_path = cleaned_base / f"{stem}{CLEANED_PAGE_JSONL_SUFFIX}"
+    raw_pages_path = processed_dir / f"{stem}{PAGE_JSONL_SUFFIX}"
+    pages_path = cleaned_pages_path if cleaned_pages_path.is_file() else raw_pages_path
     out_path = chunks_dir / f"{stem}{CHUNK_JSONL_SUFFIX}"
     rel_pages = pages_path.resolve().relative_to(data_base.resolve()).as_posix()
     rel_chunks = out_path.resolve().relative_to(data_base.resolve()).as_posix()
@@ -354,3 +360,12 @@ def chunk_one_stem(
         "chunk_count": len(docs),
         "chunked_at": ts,
     }
+
+
+def sidecar_stem(path: Path) -> str:
+    """Extrai stem de ``*.pages.jsonl`` ou ``*.pages.cleaned.jsonl``."""
+    if path.name.endswith(CLEANED_PAGE_JSONL_SUFFIX):
+        return path.name[: -len(CLEANED_PAGE_JSONL_SUFFIX)]
+    if path.name.endswith(PAGE_JSONL_SUFFIX):
+        return path.name[: -len(PAGE_JSONL_SUFFIX)]
+    return path.stem

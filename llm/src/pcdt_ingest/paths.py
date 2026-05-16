@@ -10,6 +10,7 @@ DIR_RAW_PCDT = Path("raw") / "pcdt"
 DIR_RAW_CLINICAL_EXAMS = Path("raw") / "clinical_exams"
 DIR_MANIFESTS = Path("manifests")
 DIR_PROCESSED_PCDT = Path("processed") / "pcdt"
+DIR_PROCESSED_PCDT_CLEANED = Path("processed") / "pcdt_cleaned"
 DIR_CHUNKS_PCDT = Path("chunks") / "pcdt"
 DIR_SFT_SAMPLES = Path("sft") / "samples"
 
@@ -18,6 +19,7 @@ DATA_SUBDIRS: tuple[Path, ...] = (
     DIR_RAW_CLINICAL_EXAMS,
     DIR_MANIFESTS,
     DIR_PROCESSED_PCDT,
+    DIR_PROCESSED_PCDT_CLEANED,
     DIR_CHUNKS_PCDT,
     DIR_SFT_SAMPLES,
 )
@@ -29,6 +31,7 @@ MANIFEST_PCDT_RUN = "pcdt_run.json"
 MANIFEST_CLINICAL_EXAMS_INDEX = "clinical_exams_index.jsonl"
 MANIFEST_CLINICAL_EXAMS_RUN = "clinical_exams_run.json"
 MANIFEST_PCDT_MD_EXTRACT = "pcdt_md_extract.jsonl"
+MANIFEST_PCDT_CLEAN = "pcdt_clean_index.jsonl"
 MANIFEST_PCDT_CHUNK = "pcdt_chunk_index.jsonl"
 MANIFEST_PCDT_EMBED = "pcdt_embed_index.jsonl"
 

@@ -7,6 +7,8 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 class Settings(BaseSettings):
     """Parâmetros de tempo de execução (prefixo MEDICO_)."""
@@ -36,3 +38,18 @@ class Settings(BaseSettings):
         default=120.0,
         description="Timeout (segundos) para o streaming do nó de geração via Ollama.",
     )
+
+
+def resolve_runtime_path(path: Path) -> Path:
+    """Resolve paths relativos da configuração a partir da raiz do repositório."""
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def resolve_chroma_persist_dir(settings: Settings) -> Path:
+    """Retorna o diretório Chroma efetivo usado pelo backend."""
+    if settings.chroma_persist_dir is not None:
+        return resolve_runtime_path(settings.chroma_persist_dir)
+
+    from pcdt_ingest.paths import vectorstore_chroma_dir
+
+    return vectorstore_chroma_dir()

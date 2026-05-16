@@ -33,6 +33,7 @@ Veja as subseções seguintes para explicação de cada comando - incluindo form
 download-pcdt
 download-clinical-exams # Opcional: caso queira o dataset Albert Einstein
 extract-pcdt-markdown --workers 6
+clean-pcdt --workers 6
 chunk-pcdt --workers 6
 build-vectorstore
 ```
@@ -66,9 +67,44 @@ extract-pcdt-markdown --with-combined-md
 
 Manifesto desta extração: `llm/data/manifests/pcdt_md_extract.jsonl` (uma linha por PDF processado, com caminhos relativos a `llm/data/`, `wrote_combined_md`, `status`, etc.).
 
+### Limpeza dos sidecars extraídos (PCDT)
+
+Após a extração, a etapa de limpeza lê `processed/pcdt/<nome>.pages.jsonl` e grava `processed/pcdt_cleaned/<nome>.pages.cleaned.jsonl`. O conteúdo gravado preserva o mesmo formato de entrada (`page`, `markdown` e demais campos originais), alterando apenas o `markdown` para a versão limpa. Assim, os sidecars brutos continuam segregados em `processed/pcdt/` e os limpos ficam em `processed/pcdt_cleaned/`.
+
+A limpeza remove ruídos comuns da extração de PDFs diagramados:
+
+- placeholders de imagem (`picture`, `intentionally omitted`, `pixmap`, `<IMAGE`, `image omitted`);
+- assinaturas administrativas conhecidas;
+- números de página isolados;
+- headers/footers repetidos detectados pelas primeiras/últimas linhas das páginas;
+- quebras de palavra por hífen no fim de linha;
+- `<br>` e quebras internas em tabelas Markdown;
+- excesso de espaços, caracteres invisíveis e linhas vazias;
+- páginas administrativas iniciais antes do início clínico quando detectável.
+
+Uso padrão:
+
+```bash
+clean-pcdt
+clean-pcdt --max-files 10
+clean-pcdt --force
+clean-pcdt --workers 4
+clean-pcdt --dry-run --verbose
+```
+
+Opções úteis:
+
+```bash
+clean-pcdt --header-footer-threshold 0.6
+clean-pcdt --min-words 8
+clean-pcdt --input llm/data/processed/pcdt/arquivo.pages.jsonl --output /tmp/arquivo.pages.cleaned.jsonl
+```
+
+No modo `--dry-run`, nenhum arquivo é gravado; a CLI apenas mostra o resumo de páginas analisadas, páginas ignoradas e linhas removidas. Em execução normal, o manifesto fica em `llm/data/manifests/pcdt_clean_index.jsonl`.
+
 ### Fragmentação de chunks (PCDT)
 
-Após ler `processed/pcdt/<nome>.pages.jsonl`, gera `chunks/pcdt/<nome>.chunks.jsonl` (uma linha por chunk: `text` + `metadata` com `source_stem`, `source_pdf`, `section`, `header_1`/`header_2`, `page_start`/`page_end`, `chunk_index`, etc.). Usa LangChain (`MarkdownHeaderTextSplitter` + `RecursiveCharacterTextSplitter`).
+Após ler `processed/pcdt_cleaned/<nome>.pages.cleaned.jsonl` quando existir, ou `processed/pcdt/<nome>.pages.jsonl` como fallback, gera `chunks/pcdt/<nome>.chunks.jsonl` (uma linha por chunk: `text` + `metadata` com `source_stem`, `source_pdf`, `section`, `header_1`/`header_2`, `page_start`/`page_end`, `chunk_index`, etc.). Usa LangChain (`MarkdownHeaderTextSplitter` + `RecursiveCharacterTextSplitter`).
 
 ```bash
 chunk-pcdt
