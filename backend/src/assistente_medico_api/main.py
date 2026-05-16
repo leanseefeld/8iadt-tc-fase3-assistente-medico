@@ -2,20 +2,37 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from assistente_medico_api.api.alerts import router as alerts_router
-from assistente_medico_api.api.cids import router as cids_router
 from assistente_medico_api.api.chat import router as chat_router
+from assistente_medico_api.api.cids import router as cids_router
 from assistente_medico_api.api.comorbidities import router as comorbidities_router
 from assistente_medico_api.api.medications import router as medications_router
 from assistente_medico_api.api.patients import router as patients_router
-from langgraph.checkpoint.memory import MemorySaver
-
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
+
+
+def _configure_guardrail_logger() -> None:
+    """Garante que o logger de guardrail emite para stdout independente do uvicorn."""
+    logger = logging.getLogger("assistente_medico.guardrail")
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(levelname)s [guardrail] %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+
+_configure_guardrail_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

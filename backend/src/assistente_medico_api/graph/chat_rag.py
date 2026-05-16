@@ -7,6 +7,7 @@ from langgraph.graph import END, StateGraph
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.generate import generate_node
+from assistente_medico_api.graph.nodes.guardrail import guardrail_node
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
 from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
 from assistente_medico_api.graph.state import ChatRAGState
@@ -30,14 +31,19 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=No
     async def _generate(state: ChatRAGState) -> dict:
         return await generate_node(state, settings)
 
+    async def _guardrail(state: ChatRAGState) -> dict:
+        return await guardrail_node(state, settings)
+
     workflow = StateGraph(ChatRAGState)
     workflow.add_node("rewrite", _rewrite)
     workflow.add_node("retrieve", _retrieve)
     workflow.add_node("generate", _generate)
+    workflow.add_node("guardrail", _guardrail)
     workflow.set_entry_point("rewrite")
     workflow.add_edge("rewrite", "retrieve")
     workflow.add_edge("retrieve", "generate")
-    workflow.add_edge("generate", END)
+    workflow.add_edge("generate", "guardrail")
+    workflow.add_edge("guardrail", END)
 
     compiled = workflow.compile(checkpointer=checkpointer)
 

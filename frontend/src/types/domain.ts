@@ -93,12 +93,16 @@ export interface Patient {
   agentLog: AgentLogEntry[];
 }
 
+export type GuardrailStatus = 'safe' | 'warned' | 'blocked' | 'regenerated';
+
 export interface ChatResponse {
   text: string;
   sources: string[];
   reasoning: string[];
   /** Presente quando o backend devolve o id do thread (LangGraph checkpointer). */
   threadId?: string;
+  /** Status do guardrail de segurança clínica. Ausente se não aplicável. */
+  guardrailStatus?: GuardrailStatus;
 }
 
 export interface DecisionFlowResponse {

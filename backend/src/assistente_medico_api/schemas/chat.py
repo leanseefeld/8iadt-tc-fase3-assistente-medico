@@ -48,6 +48,16 @@ class ChatResponseJson(BaseModel):
     sources: list[str]
     reasoning: list[str]
     thread_id: str = Field(serialization_alias="threadId")
+    guardrail_status: str | None = Field(
+        default=None,
+        serialization_alias="guardrailStatus",
+        description="Status do guardrail: safe | warned | blocked | regenerated.",
+    )
+    guardrail_reason: str | None = Field(
+        default=None,
+        serialization_alias="guardrailReason",
+        description="Motivo da classificação do guardrail.",
+    )
 
 
 class DecisionFlowRequest(BaseModel):
