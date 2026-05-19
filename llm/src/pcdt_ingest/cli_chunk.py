@@ -8,7 +8,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from pcdt_ingest.chunk import chunk_one_stem, default_chunks_dir
+from pcdt_ingest.clean.cleaner import CLEANED_PAGE_JSONL_SUFFIX, default_cleaned_processed_dir
+from pcdt_ingest.chunk import chunk_one_stem, default_chunks_dir, sidecar_stem
 from pcdt_ingest.extract import PAGE_JSONL_SUFFIX, default_processed_dir
 from pcdt_ingest.logutil import configure_logging, get_logger
 from pcdt_ingest.manifest import write_jsonl
@@ -19,6 +20,7 @@ from pcdt_ingest.paths import (
     data_root,
     ensure_data_dirs,
 )
+from pcdt_ingest.pipeline_config import get_config
 
 _log = get_logger("cli_chunk")
 
@@ -51,19 +53,21 @@ def _load_manifest_stems(root: Path) -> list[str]:
     return sorted(stems)
 
 
-def _list_sidecar_stems(processed_dir: Path) -> list[str]:
-    """Stems que têm ``{stem}.pages.jsonl`` em ``processed_dir``."""
-    out: list[str] = []
+def _list_sidecar_stems(processed_dir: Path, cleaned_dir: Path) -> list[str]:
+    """Stems com sidecar extraído; prefere ``*.pages.cleaned.jsonl`` no processamento."""
+    out: set[str] = set()
+    for f in sorted(cleaned_dir.glob(f"*{CLEANED_PAGE_JSONL_SUFFIX}")):
+        out.add(sidecar_stem(f))
     for f in sorted(processed_dir.glob(f"*{PAGE_JSONL_SUFFIX}")):
-        stem = f.name[: -len(PAGE_JSONL_SUFFIX)]
-        out.append(stem)
-    return out
+        out.add(sidecar_stem(f))
+    return sorted(out)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Lê llm/data/processed/pcdt/<nome>.pages.jsonl e grava "
+            "Lê llm/data/processed/pcdt_cleaned/<nome>.pages.cleaned.jsonl quando existir "
+            "ou llm/data/processed/pcdt/<nome>.pages.jsonl como fallback, e grava "
             "llm/data/chunks/pcdt/<nome>.chunks.jsonl (metadata: seção, páginas, etc.)."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -96,23 +100,62 @@ def main(argv: list[str] | None = None) -> int:
         metavar="N",
         help="Threads para processar vários stems em paralelo.",
     )
+    parser.add_argument(
+        "--chunk-strategy",
+        choices=["recursive", "semantic"],
+        default=str(get_config("CHUNK_STRATEGY", "recursive")),
+        help="Estratégia de chunking: recursive mantém o modo antigo; semantic usa SemanticChunker por seção.",
+    )
+    parser.add_argument(
+        "--semantic-breakpoint-percentile",
+        type=int,
+        default=int(get_config("SEMANTIC_BREAKPOINT_PERCENTILE", 85)),
+        help="Percentil de breakpoint usado pelo SemanticChunker quando --chunk-strategy semantic.",
+    )
+    parser.add_argument(
+        "--chunk-tokens",
+        type=int,
+        default=int(get_config("CHUNK_TOKENS", 400)),
+        help="Tamanho alvo de chunk em tokens estimados.",
+    )
+    parser.add_argument(
+        "--overlap-tokens",
+        type=int,
+        default=int(get_config("CHUNK_OVERLAP_TOKENS", 50)),
+        help="Sobreposição entre chunks em tokens estimados.",
+    )
     args = parser.parse_args(argv)
 
     if args.workers < 1:
         print("Erro: --workers deve ser >= 1.", file=sys.stderr)
         return 2
-
     configure_logging(quiet=args.quiet)
+    if args.chunk_strategy == "semantic":
+        semantic_max_workers = int(get_config("SEMANTIC_MAX_WORKERS", 1))
+        if args.workers > semantic_max_workers:
+            _log.warning(
+                "Chunking semântico usa embeddings via Ollama; reduzindo workers de %s para %s.",
+                args.workers,
+                semantic_max_workers,
+            )
+            args.workers = semantic_max_workers
+        elif args.workers > 1:
+            _log.info(
+                "Chunking semântico com workers=%s; o Ollama receberá chamadas concorrentes de embedding.",
+                args.workers,
+            )
+
     ensure_data_dirs()
     root = data_root()
     processed_dir = default_processed_dir()
+    cleaned_dir = default_cleaned_processed_dir()
     chunks_dir = default_chunks_dir()
     manifests_dir = root / DIR_MANIFESTS
 
     if args.only_manifest:
         stems = _load_manifest_stems(root)
     else:
-        stems = _list_sidecar_stems(processed_dir)
+        stems = _list_sidecar_stems(processed_dir, cleaned_dir)
 
     if args.max_files is not None:
         stems = stems[: max(0, args.max_files)]
@@ -120,14 +163,28 @@ def main(argv: list[str] | None = None) -> int:
     if not stems:
         print("Nenhum ficheiro .pages.jsonl encontrado.", file=sys.stderr)
         return 1
+    _log.info(
+        "chunk-pcdt: %s documentos strategy=%s workers=%s chunk_tokens=%s overlap_tokens=%s",
+        len(stems),
+        args.chunk_strategy,
+        args.workers,
+        args.chunk_tokens,
+        args.overlap_tokens,
+    )
 
     def _run_one(stem: str) -> dict:
+        _log.info("%s: iniciando fragmentação", stem)
         row = chunk_one_stem(
             stem,
             processed_dir=processed_dir,
+            cleaned_dir=cleaned_dir,
             chunks_dir=chunks_dir,
             data_base=root,
             force=args.force,
+            chunk_strategy=args.chunk_strategy,
+            semantic_breakpoint_percentile=args.semantic_breakpoint_percentile,
+            chunk_tokens=args.chunk_tokens,
+            overlap_tokens=args.overlap_tokens,
         )
         _log.info("%s: %s (%s chunks)", stem, row.get("status"), row.get("chunk_count"))
         return row

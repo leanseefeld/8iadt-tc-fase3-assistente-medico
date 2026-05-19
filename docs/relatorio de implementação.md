@@ -201,3 +201,81 @@ Criado o notebook [data-prep.ipynb](../llm/fine-tuning/data-prep.ipynb) para tra
 
 O ideal seria escolher um dataset mais consistente e robusto, e com linguajar mais próximo do que se espera de uma interação direta com o conteúdo (conversa) ao invés de expositiva (lista de FAQs, seções de artigos ou mesmo artigos inteiros). Para o propósito deste trabalho acadêmico, entretanto, optamos por continuar com o dataset sugerido.
 
+
+Criado o notebook [data-prep.ipynb](../llm/fine-tuning/data-prep.ipynb) para tratar e traduzir o dataset filtrado.
+
+## Evoluindo a Pipeline RAG
+
+Continuando a evolução do projeto, foi verificado que os textos extraídos do PCDT's precisam passar por um processo de limpeza e tratamento, para geração do chunks e assim remover ruídos.
+
+Foi feita uma análise tanto no painel de visualização do chunks (`view-pcdt-chunks`) quanto no analisador em `rag_inspector_app.py`, que simula as buscas feitas pelo backend deste aplicação, para entender os tipos de ruídos mais comuns e pensar em estratégias de tratamento.
+
+A seguir, estão listados os tipos de ruídos mais comuns encontrados e as estratégias propostas para tratamento:
+
+Texto apenas com valor que representa a conversação de imagem do PDF, sem valor semântico para o modelo:
+
+
+![Imagem: tabela com dados de estudo clínico](./assets/chunk_imagem.png)
+
+Leitura de tabelas transformada em texto, mas sem estruturação adequada, dificultando a compreensão do conteúdo:
+
+![Imagem: tabela com dados de estudo clínico, mas sem formatação](./assets/chunk_tabela.png)
+
+Chunk apenas com texto de rodapé, referência ou assinatura, sem valor para o modelo:
+
+![Imagem: assinatura de PCDT](./assets/chunks_assinatura.png)
+
+Para tratar estes ruídos, removemos placeholders de imagens, assinatura administrativas, números de páginas remanescentes, normalizar texto (espaços, quebras de linha, acentos), melhorar textos extraído de tabelas, remover cabeçalhos e rodapés repetidos, template de fichas para o preenchimento do paciente ou sobre o paciente, entre outros tratamentos de limpeza.
+Essas textos serão salvos em `*.pages.cleaned.jsonl` para serem consumidos pelo `cli_chunk`
+
+### Estratégia para limpeza de texto
+
+Foi adicionada uma etapa de limpeza de texto, que é executada após a extração do Markdown e antes da geração dos chunks. Esta etapa é implementada em `cli_clean.py` e pode ser executada com o comando:
+```sh
+clean-pcdt-extracted
+```
+Nesta etapa, o conteúdo extraído é processado para remover ruídos e melhorar a qualidade do texto. As seguintes estratégias de limpeza foram implementadas:
+1. **Remoção de placeholders de imagens**: Identificar e remover textos que indicam a presença de imagens, como "Figura 1", "Gráfico 2", etc., que não possuem valor semântico para o modelo.
+2. **Limpeza de tabelas**: Melhorar a formatação de textos extraídos de tabelas, identificando padrões de tabulação e organizando o conteúdo de forma mais estruturada
+3. **Remoção de rodapés e assinaturas**: Identificar e remover textos que correspondem a rodapés, assinaturas ou informações administrativas que não agregam valor ao modelo.
+4. **Normalização de texto**: Realizar normalização de espaços, quebras de linha e acentos para melhorar a legibilidade do texto.
+5. **Remoção de cabeçalhos e rodapés repetidos**: Identificar e remover textos que correspondem a cabeçalhos ou rodapés que se repetem em várias páginas do documento.
+6. **Remoção de templates de fichas**: Identificar e remover textos que correspondem a templates de fichas para preenchimento de informações do paciente, que não possuem valor semântico para o modelo.
+7. **Remoção de números de páginas**: Identificar e remover textos que correspondem a números de páginas remanescentes, que não agregam valor ao modelo.
+
+Os textos limpos estão em `data/processed/pcdt/*.pages.cleaned.jsonl` e serão usados para a geração dos chunks, substituindo os arquivos `.pages.jsonl` gerados na etapa de extração. O processo de chunking permanece o mesmo, mas agora com um texto de melhor qualidade, o que deve resultar em chunks mais relevantes e úteis para o modelo. Além disso, se compará-los com os texto bruto, é possível verificar uma melhoria significativa na qualidade e relevância dos chunks, bem como, é possível perceber o quanto de dados foi removido, pois se mantem o histórico de páginas no arquivo `.pages.cleaned.jsonl` e é possível comparar com o arquivo `.pages.jsonl` para verificar a quantidade de texto removida.
+
+
+### Chunks após limpeza de texto
+
+Apos a limpeza de texto, os chunks gerados apresentam uma qualidade significativamente melhor, com menos ruídos e informações irrelevantes. Porém, a geração de chunks ainda apresenta desafios, como a identificação correta de seções e cabeçalhos, e atualmente não existe uma implementação de overlap entre os chunks, o que pode resultar em perda de contexto importante para o modelo. A implementação de uma estratégia de overlap, onde parte do conteúdo de um chunk é repetida no próximo chunk, pode ajudar a manter o contexto e melhorar a relevância dos chunks gerados. 
+
+Evidência:
+
+Chunck de acidentes escorpionicos com parte do texto:
+
+![Imagem: acidente escopiônico - parte 1](./assets/chunk_apos_limpeza_2.png)
+
+A outra parte do texto com uma quebra abrupta de contexto:
+
+![Imagem: acidente escopiônico - parte 2](./assets/chunk_apos_limpeza.png)
+
+Como constatação do falha que pode ocasionar, fiz a pergunta `"Qual é um fator expressivo no crescimento do escorpionismo em ambiente doméstico?"`, sistema de retrieve retorna o chunk acima, mas a resposta gerada é incompleta e não tem o contexto necessário para ser compreendida, pois a parte do texto que fala sobre o fator expressivo no crescimento do escorpionismo em ambiente doméstico foi cortada, e o modelo (gemma4:e2b fine tunning) não tem acesso a essa informação para gerar uma resposta completa e relevante.
+
+![Imagem: acidente escopiônico - parte 3](./assets/visualizador_escorpiao_1.png)
+
+![Imagem: acidente escopiônico - parte 3](./assets/visualizador_escorpiao_2.png)
+
+
+Diante disso, vamos implementar a estratégia de chunks semânticos e evoluir nas explorações.
+
+### Chunks Semânticos
+
+A estratégia de chunks semânticos tem como objetivo identificar os blocos de texto que possuem um mesmo tema ou assunto. Ressaltando que a estratégia de chunking recursivo foi mantida, sendo a escolha de qual método usar feita de forma dinâmica, passando via argumento da execução do CLI.
+
+Porém, essa estratégia ainda estava falhando quando o tamanho do chunk ultrapassava o limite de tokens, e o modelo de embedding não conseguia processar o chunk, mesmo com a redução do limite de tokens para 400. Para resolver esse problema, foi implementada uma estratégia de fallback, onde se o chunk ultrapassar o limite de tokens, ele será dividido em partes menores usando a estratégia de chunking recursivo. O que estava ocasionando em quebrar de textos sem valor semântico completo, conforme imagem abaixo:
+
+![Imagem: acidente escopiônico - parte 4](./assets/chunk_semantico_max_token.png)
+
+Dessa forma, implementamos a divisão por sentença, usando o `nltk`, e unimos em sentenças até atingir o limite de tokens, garantindo que o chunk gerado tenha um valor semântico completo. Além disso, adicionamento heurísticas para melhorar a coerência textual dos fragmentos.
+

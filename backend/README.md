@@ -21,7 +21,7 @@ Na raiz do repositório:
 
 ```bash
 source .venv/bin/activate
-pip install -e llm/
+pip install -e llm
 pip install -e backend/
 ```
 

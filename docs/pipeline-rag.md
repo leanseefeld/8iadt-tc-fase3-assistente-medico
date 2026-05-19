@@ -15,8 +15,8 @@ Este documento descreve uma linha de implementação sugerida após a ingestão 
 ## Estágios RAG (PCDT e, se aplicável, texto derivado de exames)
 
 1. **Extrair**: PDF → sidecar JSONL por página (`processed/pcdt/<nome>.pages.jsonl`, comando `extract-pcdt-markdown`); Markdown combinado opcional com `--with-combined-md`.
-2. **Limpar**: normalizar espaços, remover cabeçalhos/rodapés repetidos; idioma `pt-BR` na metadata.
-3. **Fragmentar**: `chunk-pcdt` gera `chunks/pcdt/<nome>.chunks.jsonl` a partir dos sidecars; metadata inclui seção (`section`, `header_*`), `page_start`/`page_end`, `chunk_index` (ver plano de chunking).
+2. **Limpar**: normalizar espaços, remover cabeçalhos/rodapés repetidos, sumários ruidosos, formulários e tabelas OCR malformadas; idioma `pt-BR` na metadata.
+3. **Fragmentar**: `chunk-pcdt` gera `chunks/pcdt/<nome>.chunks.jsonl` a partir dos sidecars limpos quando existem. A fragmentação costura páginas antes de dividir texto, calcula `page_start`/`page_end` por spans globais e normaliza títulos PCDT para preencher melhor `section` e `header_*`. O modo padrão vem de `llm/config.py` e pode ser sobrescrito por `--chunk-strategy recursive|semantic`; o modo `semantic` usa `SemanticChunker` por seção lógica com `nomic-embed-text` via Ollama. A metadata inclui `chunk_strategy` e `disease`.
 4. **Embeddings**: lotes com o modelo de embedding escolhido.
 5. **Recuperação**: busca híbrida (BM25 + denso) costuma funcionar bem em documentos longos normativos.
 

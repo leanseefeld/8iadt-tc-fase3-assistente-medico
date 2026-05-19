@@ -659,13 +659,19 @@
           return String(val);
         }
 
-        const SHOWN_BEFORE_OTHERS = new Set(["header_1", "header_2", "section"]);
+        const SHOWN_BEFORE_OTHERS = new Set([
+          "header_1",
+          "header_2",
+          "section",
+          "disease",
+        ]);
 
         function renderChunk(chunk) {
           const meta = chunk.metadata || {};
           const h1 = meta.header_1;
           const h2 = meta.header_2;
           const sec = meta.section;
+          const disease = meta.disease;
           const text = chunk.text ?? "";
 
           const otherKeys = Object.keys(meta).filter((k) => !SHOWN_BEFORE_OTHERS.has(k));
@@ -698,6 +704,12 @@
             <section>
               <h3>Seção</h3>
               <div class="field-block">${sec != null && String(sec).trim() ? escapeHtml(String(sec)) : "—"}</div>
+            </section>
+            <section>
+              <h3>Doença / condição</h3>
+              <div class="field-block">
+                ${disease != null && String(disease).trim() ? escapeHtml(String(disease)) : "—"}
+              </div>
             </section>
             <section>
               <h3>Texto</h3>
@@ -849,14 +861,25 @@
           const pdfHref = pdfHrefFromStem(stem);
           const chunkedAt = row.chunked_at != null ? String(row.chunked_at) : "—";
 
+          // construir links para inspeção rápida
+          const chunksRel = row.chunks_jsonl_relative_path || null;
+          const chunksHref = chunksRel ? hrefFromDataRelative(chunksRel) : null;
+          const pagesRel = row.pages_jsonl_relative_path || null;
+          const pagesHref = pagesRel ? hrefFromDataRelative(pagesRel) : null;
+          const cleanedRel = row.cleaned_pages_jsonl_relative_path || null;
+          const cleanedHref = cleanedRel ? hrefFromDataRelative(cleanedRel) : null;
+
           let inner = `
             <div class="doc-head">
               <h2>${escapeHtml(stem)}</h2>
               <div class="meta-grid">
                 <div><span>Estado:</span> ${escapeHtml(String(status))}</div>
                 <div><span>Chunks (manifest):</span> ${row.chunk_count != null ? row.chunk_count : "—"}</div>
+                <div><span>Arquivo de chunks:</span> ${chunksHref ? `<a class="pdf-link" href="${escapeAttr(chunksHref)}" target="_blank" rel="noopener">${escapeHtml(chunksRel)}</a>` : "—"}</div>
                 <div><span>Fragmentado em:</span> ${escapeHtml(chunkedAt)}</div>
                 <div><span>PDF:</span> <a class="pdf-link" href="${escapeAttr(pdfHref)}" target="_blank" rel="noopener">Abrir PDF</a></div>
+                <div><span>Pages sidecar (raw):</span> ${pagesHref ? `<a href="${escapeAttr(pagesHref)}" target="_blank" rel="noopener">${escapeHtml(pagesRel)}</a>` : "—"}</div>
+                <div><span>Pages sidecar (cleaned):</span> ${cleanedHref ? `<a href="${escapeAttr(cleanedHref)}" target="_blank" rel="noopener">${escapeHtml(cleanedRel)}</a>` : "—"}</div>
               </div>
           `;
 
@@ -874,6 +897,14 @@
             const chunks = await loadChunksForRow(row);
             const lineCount = chunks.length;
             if (status === "skipped") {
+              // mostrar links úteis também no caso 'skipped'
+              const chunksRel2 = row.chunks_jsonl_relative_path || null;
+              const chunksHref2 = chunksRel2 ? hrefFromDataRelative(chunksRel2) : null;
+              const pagesRel2 = row.pages_jsonl_relative_path || null;
+              const pagesHref2 = pagesRel2 ? hrefFromDataRelative(pagesRel2) : null;
+              const cleanedRel2 = row.cleaned_pages_jsonl_relative_path || null;
+              const cleanedHref2 = cleanedRel2 ? hrefFromDataRelative(cleanedRel2) : null;
+
               inner = `
               <div class="doc-head">
                 <h2>${escapeHtml(stem)}</h2>
@@ -881,8 +912,11 @@
                   <div><span>Estado:</span> skipped (ficheiro existente, não regenerado)</div>
                   <div><span>Chunks no ficheiro:</span> ${lineCount}</div>
                   <div><span>Chunks (manifest):</span> ${row.chunk_count != null ? row.chunk_count : 0}</div>
+                  <div><span>Arquivo de chunks:</span> ${chunksHref2 ? `<a class="pdf-link" href="${escapeAttr(chunksHref2)}" target="_blank" rel="noopener">${escapeHtml(chunksRel2)}</a>` : "—"}</div>
                   <div><span>Fragmentado em:</span> ${escapeHtml(chunkedAt)}</div>
                   <div><span>PDF:</span> <a class="pdf-link" href="${escapeAttr(pdfHref)}" target="_blank" rel="noopener">Abrir PDF</a></div>
+                  <div><span>Pages sidecar (raw):</span> ${pagesHref2 ? `<a href="${escapeAttr(pagesHref2)}" target="_blank" rel="noopener">${escapeHtml(pagesRel2)}</a>` : "—"}</div>
+                  <div><span>Pages sidecar (cleaned):</span> ${cleanedHref2 ? `<a href="${escapeAttr(cleanedHref2)}" target="_blank" rel="noopener">${escapeHtml(cleanedRel2)}</a>` : "—"}</div>
                 </div>
               </div>`;
             }
