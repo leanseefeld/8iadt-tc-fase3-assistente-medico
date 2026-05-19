@@ -13,13 +13,14 @@ from langchain_ollama import OllamaEmbeddings
 
 from pcdt_ingest.logutil import get_logger
 from pcdt_ingest.chunk import read_chunks_jsonl
+from pcdt_ingest.pipeline_config import get_config
 
 _log = get_logger("embed")
 
-CHROMA_COLLECTION_PCDT = "pcdt"
-DEFAULT_OLLAMA_EMBED_MODEL = "nomic-embed-text"
-DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-DEFAULT_ADD_BATCH_SIZE = 64
+CHROMA_COLLECTION_PCDT = str(get_config("CHROMA_COLLECTION_PCDT", "pcdt"))
+DEFAULT_OLLAMA_EMBED_MODEL = str(get_config("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
+DEFAULT_OLLAMA_BASE_URL = str(get_config("OLLAMA_BASE_URL", "http://127.0.0.1:11434"))
+DEFAULT_ADD_BATCH_SIZE = int(get_config("EMBED_ADD_BATCH_SIZE", 64))
 
 # Tolerância para comparar ``st_mtime`` com valor vindo do JSONL do manifesto de embed.
 _MTIME_EPS = 1e-6

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import http.client
 from pathlib import Path
+from types import ModuleType
 
 
 def command_exists(command_name: str) -> bool:
@@ -29,6 +30,26 @@ def is_ollama_running() -> bool:
 
 def resolve_repo_root() -> Path:
     return Path(__file__).resolve().parent
+
+
+def load_llm_config(repo_root: Path) -> ModuleType | None:
+    config_path = repo_root / "llm" / "config.py"
+    if not config_path.is_file():
+        return None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("run_local_llm_config", config_path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def config_value(config: ModuleType | None, name: str, default):
+    if config is None:
+        return default
+    return getattr(config, name, default)
 
 
 def resolve_venv_python(repo_root: Path) -> Path:
@@ -84,9 +105,40 @@ def start_service(command: list[str], cwd: Path, env: dict | None = None) -> int
 
 
 def parse_args() -> argparse.Namespace:
+    repo_root = resolve_repo_root()
+    llm_config = load_llm_config(repo_root)
     parser = argparse.ArgumentParser(description="Sobe backend + frontend localmente.")
     parser.add_argument("--setup", action="store_true", help="Instala dependências Python e Node.")
+    parser.add_argument(
+        "--setup-semantic",
+        action="store_true",
+        help="Instala dependências opcionais do chunking semântico.",
+    )
     parser.add_argument("--build-vectorstore", action="store_true", help="Executa a pipeline RAG completa.")
+    parser.add_argument(
+        "--chunk-strategy",
+        choices=["recursive", "semantic"],
+        default=str(config_value(llm_config, "CHUNK_STRATEGY", "recursive")),
+        help="Estratégia usada na etapa chunk-pcdt quando --build-vectorstore estiver ativo.",
+    )
+    parser.add_argument(
+        "--semantic-breakpoint-percentile",
+        type=int,
+        default=int(config_value(llm_config, "SEMANTIC_BREAKPOINT_PERCENTILE", 85)),
+        help="Percentil de breakpoint do SemanticChunker quando --chunk-strategy semantic.",
+    )
+    parser.add_argument(
+        "--chunk-tokens",
+        type=int,
+        default=int(config_value(llm_config, "CHUNK_TOKENS", 400)),
+        help="Tamanho alvo de chunk em tokens estimados na etapa chunk-pcdt.",
+    )
+    parser.add_argument(
+        "--overlap-tokens",
+        type=int,
+        default=int(config_value(llm_config, "CHUNK_OVERLAP_TOKENS", 50)),
+        help="Sobreposição entre chunks em tokens estimados na etapa chunk-pcdt.",
+    )
     parser.add_argument("--skip-migrations", action="store_true", help="Pula migrations e seed.")
     parser.add_argument("--backend-port", type=int, default=8000, help="Porta do backend FastAPI.")
     parser.add_argument("--frontend-port", type=int, default=5173, help="Porta do frontend Vite.")
@@ -95,7 +147,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.setup_semantic:
+        args.setup = True
     repo_root = resolve_repo_root()
+    llm_config = load_llm_config(repo_root)
     venv_python = resolve_venv_python(repo_root)
 
     if not command_exists("node"):
@@ -108,6 +163,10 @@ def main() -> int:
         run_checked([str(venv_python), "-m", "pip", "install", "-e", str(repo_root / "llm")], repo_root)
         run_checked([str(venv_python), "-m", "pip", "install", "-e", str(repo_root / "backend")], repo_root)
 
+        if args.setup_semantic:
+            print("Instalando dependências opcionais do chunking semântico...")
+            run_checked([str(venv_python), "-m", "pip", "install", "-e", f"{repo_root / 'llm'}[semantic]"], repo_root)
+
         print("Instalando dependências do frontend...")
         run_checked(["npm", "install"], repo_root / "frontend")
 
@@ -118,10 +177,10 @@ def main() -> int:
         run_checked([str(venv_python), "-m", "alembic", "upgrade", "head"], repo_root / "backend")
         run_checked([str(venv_python), "scripts/seed_patients.py"], repo_root / "backend")
 
-    # Variáveis de ambiente para os modelos
+    # Variáveis de ambiente para os modelos (somente nomes de modelo aqui)
     medico_vars = {
-        "MEDICO_OLLAMA_EMBED_MODEL": "nomic-embed-text",
-        "MEDICO_OLLAMA_CHAT_MODEL": "gemma4:e4b-it-q4_K_M"
+        "MEDICO_OLLAMA_EMBED_MODEL": str(config_value(llm_config, "OLLAMA_EMBED_MODEL", "nomic-embed-text")),
+        "MEDICO_OLLAMA_CHAT_MODEL": "gemma4:e4b-it-q4_K_M",
     }
 
     if args.build_vectorstore:
@@ -131,23 +190,58 @@ def main() -> int:
             print("Por favor, certifique-se de que o Ollama está instalado e aberto.")
             return 1
 
-        # Garante que os modelos necessários estão baixados
-        for model in medico_vars.values():
+        # Lê a base URL do Ollama (pode ser definida via OLLAMA_BASE_URL no shell)
+        ollama_base = os.environ.get(
+            "OLLAMA_BASE_URL",
+            str(config_value(llm_config, "OLLAMA_BASE_URL", "http://127.0.0.1:11434")),
+        )
+
+        medico_vars["MEDICO_OLLAMA_BASE_URL"] = ollama_base
+
+        # Garante que os modelos necessários estão baixados (somente os nomes de modelo)
+        models_to_pull = [v for k, v in medico_vars.items() if k.endswith("MODEL")]
+        for model in models_to_pull:
             print(f"✔ Garantindo modelo '{model}'...")
             run_checked(["ollama", "pull", model], repo_root)
 
         print("\nIniciando pipeline de ingestão de dados (RAG)...")
+        chunk_workers = "6"
+        if args.chunk_strategy == "semantic":
+            semantic_max_workers = int(config_value(llm_config, "SEMANTIC_MAX_WORKERS", 1))
+            chunk_workers = str(semantic_max_workers)
+            print(
+                "Chunking semântico selecionado. "
+                f"Usando workers={chunk_workers} conforme llm/config.py."
+            )
 
         llm_env = os.environ.copy()
         llm_env.update(medico_vars)
+        llm_env["OLLAMA_BASE_URL"] = ollama_base
         llm_src = str(repo_root / "llm" / "src")
         llm_env["PYTHONPATH"] = f"{llm_src}{os.pathsep}{llm_env.get('PYTHONPATH', '')}"
 
         steps = [
-            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--max-files", "20", "--force"]),
+            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--max-files", "15", "--force"]),
             ("extract-pcdt-markdown", ["pcdt_ingest.cli_extract", "--workers", "6", "--force"]),
-            ("chunk-pcdt", ["pcdt_ingest.cli_chunk", "--workers", "6", "--force"]),
-            ("build-vectorstore", ["pcdt_ingest.cli_embed", "--force"])
+            ("clean-pcdt-extracted", ["pcdt_ingest.cli_clean", "--verbose", "--force"]),
+            (
+                "chunk-pcdt",
+                [
+                    "pcdt_ingest.cli_chunk",
+                    "--workers",
+                    chunk_workers,
+                    "--force",
+                    "--chunk-strategy",
+                    args.chunk_strategy,
+                    "--semantic-breakpoint-percentile",
+                    str(args.semantic_breakpoint_percentile),
+                    "--chunk-tokens",
+                    str(args.chunk_tokens),
+                    "--overlap-tokens",
+                    str(args.overlap_tokens),
+                ],
+            ),
+            ("build-vectorstore", ["pcdt_ingest.cli_embed", "--max-files", "15","--force", "--verbose"])
         ]
 
         for display_name, module_info in steps:

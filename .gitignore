@@ -85,3 +85,6 @@ assistente_medico.db
 
 # Logs e artefatos temporários
 uploads/
+
+# Configurações de ambiente local (exemplo: streamlit, VSCode, etc.)
+.streamlit

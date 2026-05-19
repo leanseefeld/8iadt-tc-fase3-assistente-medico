@@ -25,6 +25,12 @@ dependencies = [
     "pytest>=8.0",
     "ruff>=0.6",
     "tqdm>=4.67",
+    "streamlit>=1.40",
+]
+
+[project.optional-dependencies]
+semantic = [
+    "langchain-experimental>=0.3",
 ]
 
 [project.scripts]
@@ -34,6 +40,7 @@ extract-pcdt-markdown = "pcdt_ingest.cli_extract:main"
 chunk-pcdt = "pcdt_ingest.cli_chunk:main"
 build-vectorstore = "pcdt_ingest.cli_embed:main"
 view-pcdt-chunks = "pcdt_ingest.cli_view_pcdt_chunks:main"
+clean-pcdt-extracted = "pcdt_ingest.cli_clean:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
