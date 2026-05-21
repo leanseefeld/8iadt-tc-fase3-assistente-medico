@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -18,6 +18,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -29,6 +30,26 @@ class Settings(BaseSettings):
     )
     chroma_collection: str = "pcdt"
     retrieval_k: int = 6
+    rag_retrieve_candidates_k: int = Field(
+        default=30,
+        validation_alias=AliasChoices("MEDICO_RAG_RETRIEVE_CANDIDATES_K", "RAG_RETRIEVE_CANDIDATES_K"),
+        description="Número inicial de candidatos recuperados antes do reranking.",
+    )
+    rag_retrieve_final_k: int = Field(
+        default=6,
+        validation_alias=AliasChoices("MEDICO_RAG_RETRIEVE_FINAL_K", "RAG_RETRIEVE_FINAL_K"),
+        description="Número final de documentos enviados ao prompt após reranking.",
+    )
+    rag_audit_jsonl: Path = Field(
+        default=Path("../llm/data/audit/rag_interactions.jsonl"),
+        validation_alias=AliasChoices("MEDICO_RAG_AUDIT_JSONL", "RAG_AUDIT_JSONL"),
+        description="Arquivo JSONL local para auditoria das interações RAG.",
+    )
+    rag_audit_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MEDICO_RAG_AUDIT_ENABLED", "RAG_AUDIT_ENABLED"),
+        description="Ativa escrita de auditoria RAG em JSONL.",
+    )
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(
         default=Path("./uploads"),

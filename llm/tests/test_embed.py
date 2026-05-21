@@ -14,8 +14,10 @@ from pcdt_ingest.embed import (
     filter_pcdt_chunk_manifest_rows,
     mtime_unchanged_vs_embed_manifest,
     ollama_single_embed_with_token_count,
+    split_oversized_documents_for_chroma,
 )
 from pcdt_ingest.chunk import parse_chunks_jsonl_line, read_chunks_jsonl
+from langchain_core.documents import Document
 
 
 def test_filter_pcdt_chunk_manifest_rows(tmp_path: Path) -> None:
@@ -64,6 +66,28 @@ def test_chroma_safe_metadata_list_to_json_string() -> None:
     assert safe["page_range"] == "[1, 3]"
     assert safe["n"] == 1
     assert safe["flag"] is True
+
+
+def test_split_oversized_documents_for_chroma_preserves_normal_doc() -> None:
+    doc = Document(page_content="texto curto", metadata={"source_stem": "s"}, id="s:0")
+
+    got = split_oversized_documents_for_chroma([doc], max_chars=100)
+
+    assert got == [doc]
+
+
+def test_split_oversized_documents_for_chroma_creates_parts_with_parent_metadata() -> None:
+    text = "Primeira parte clínica. " * 80
+    doc = Document(page_content=text, metadata={"source_stem": "s", "chunk_index": 1}, id="s:1")
+
+    got = split_oversized_documents_for_chroma([doc], max_chars=500)
+
+    assert len(got) > 1
+    assert got[0].id == "s:1:part0"
+    assert got[0].metadata["parent_chunk_id"] == "s:1"
+    assert got[0].metadata["chunk_part_index"] == 0
+    assert got[0].metadata["chunk_part_count"] == len(got)
+    assert all(len(part.page_content) <= 500 for part in got)
 
 
 @pytest.mark.parametrize(

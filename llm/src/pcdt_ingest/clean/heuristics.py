@@ -85,7 +85,18 @@ _SEARCH_STRATEGY_RE = re.compile(
 )
 _SEARCH_STRATEGY_CAPTION_RE = re.compile(r"\bQuadro\b.*estrat[eé]gia de busca", re.IGNORECASE)
 _LONE_ANNEX_RE = re.compile(r"^\s{0,3}#{0,6}\s*\*{0,2}ANEXO\s*\*{0,2}\s*$", re.IGNORECASE)
+_TOC_HEADING_RE = re.compile(r"^\s{0,3}#{0,6}\s*\*{0,2}(SUM[ÁA]RIO|[ÍI]NDICE)\s*\*{0,2}\s*$", re.IGNORECASE)
 _TOC_DOT_LEADER_RE = re.compile(r"\.{6,}.*(?:\b\d{1,4}\b|ERRO!\s*INDICADOR\s+N[AÃ]O\s+DEFINIDO)", re.IGNORECASE)
+_TOC_TABLE_ENTRY_RE = re.compile(
+    r"^\s*\|?.{0,120}?(?:INTRODU[CÇ][AÃ]O|DIAGN[ÓO]STICO|TRATAMENTO|MONITORAMENTO|REFER[ÊE]NCIAS|ANEXO|AP[ÊE]NDICE)"
+    r".{0,120}?\|\s*(?:\d{1,4}|ERRO!\s*INDICADOR\s+N[AÃ]O\s+DEFINIDO)\s*\|?\s*$",
+    re.IGNORECASE,
+)
+_TRAILING_SECTION_HEADING_RE = re.compile(
+    r"^\s{0,3}#{0,6}\s*\*{0,2}(?:\d{1,2}\.?\s+)?"
+    r"REFER[ÊE]NCIAS\b",
+    re.IGNORECASE,
+)
 _BROKEN_BOLD_WORD_RE = re.compile(r"\*\*[A-Za-zÀ-ÿ]{1,15}\*\*\s+\*\*[a-zà-ÿ][^*]{0,30}\*\*")
 
 _CLINICAL_START_RE = re.compile(
@@ -152,7 +163,20 @@ def is_toc_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
-    return bool(_TOC_DOT_LEADER_RE.search(stripped))
+    return bool(_TOC_DOT_LEADER_RE.search(stripped) or _TOC_TABLE_ENTRY_RE.search(stripped))
+
+
+def is_toc_heading_line(line: str) -> bool:
+    return bool(_TOC_HEADING_RE.fullmatch(line.strip()))
+
+
+def is_trailing_nonclinical_section_heading(line: str) -> bool:
+    stripped = line.strip()
+    plain = re.sub(r"^\s{0,3}#{1,6}\s*", "", stripped).strip()
+    plain = plain.strip("*_` ")
+    if is_pcdt_title_line(plain) or re.match(r"^ANEXO\s+(?:PROTOCOLO CL[IÍ]NICO|DIRETRIZES TERAP[EÊ]UTICAS)\b", plain, re.IGNORECASE):
+        return False
+    return bool(_TRAILING_SECTION_HEADING_RE.search(stripped))
 
 
 def is_broken_table_header_line(line: str) -> bool:
@@ -286,8 +310,6 @@ def is_useful_title(line: str) -> bool:
         "EXCLUSÃO",
         "EXCLUSAO",
         "CASOS ESPECIAIS",
-        "REFERÊNCIAS",
-        "REFERENCIAS",
     )
     return any(term in key for term in clinical_terms)
 
@@ -426,6 +448,7 @@ def cleaning_flag_for_reason(reason: str) -> str:
         "empty_table_row": "removed_empty_table_row",
         "lone_annex": "removed_lone_annex",
         "toc_line": "removed_toc_line",
+        "toc_heading": "removed_toc_heading",
     }[reason]
 
 

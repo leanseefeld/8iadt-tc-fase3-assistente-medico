@@ -221,7 +221,8 @@ def main() -> int:
         llm_env["PYTHONPATH"] = f"{llm_src}{os.pathsep}{llm_env.get('PYTHONPATH', '')}"
 
         steps = [
-            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--max-files", "15", "--force"]),
+            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--force"]),
+            ("build-conitec-catalog", ["pcdt_ingest.cli_conitec_catalog"]),
             ("extract-pcdt-markdown", ["pcdt_ingest.cli_extract", "--workers", "6", "--force"]),
             ("clean-pcdt-extracted", ["pcdt_ingest.cli_clean", "--verbose", "--force"]),
             (
@@ -241,7 +242,7 @@ def main() -> int:
                     str(args.overlap_tokens),
                 ],
             ),
-            ("build-vectorstore", ["pcdt_ingest.cli_embed", "--max-files", "15","--force", "--verbose"])
+            ("build-vectorstore", ["pcdt_ingest.cli_embed", "--force", "--verbose"])
         ]
 
         for display_name, module_info in steps:

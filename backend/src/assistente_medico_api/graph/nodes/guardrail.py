@@ -11,6 +11,8 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from assistente_medico_api.config import Settings
+from assistente_medico_api.config import resolve_runtime_path
+from assistente_medico_api.graph.rag_enhancement import append_audit_jsonl
 from assistente_medico_api.graph.nodes.generate import _build_llm
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
@@ -314,9 +316,24 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
         if len(hist) > CHAT_HISTORY_MAX_ITEMS:
             hist = hist[-CHAT_HISTORY_MAX_ITEMS:]
 
+    audit_id = ""
+    audit_payload = dict(state.get("rag_audit_payload") or {})
+    if audit_payload:
+        audit_payload["answer"] = final_answer
+        audit_id = str(audit_payload.get("audit_id") or "")
+        if getattr(settings, "rag_audit_enabled", True):
+            try:
+                append_audit_jsonl(audit_payload, resolve_runtime_path(settings.rag_audit_jsonl))
+                steps.append(f"Auditoria RAG: interação registrada ({audit_id}).")
+            except Exception as audit_exc:
+                _logger.warning("rag_audit_write_failed; erro=%s", audit_exc)
+                steps.append("Auditoria RAG: falha ao registrar, resposta preservada.")
+
     return {
         "answer": final_answer,
         "chat_history": hist,
+        "audit_id": audit_id,
+        "rag_audit_payload": audit_payload,
         "guardrail_status": guardrail_status,
         "guardrail_reason": reason,
         "reasoning_steps": steps,

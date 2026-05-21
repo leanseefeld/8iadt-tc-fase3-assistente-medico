@@ -39,6 +39,7 @@ Veja as subseções seguintes para explicação de cada comando - incluindo form
 
 ```bash
 download-pcdt
+build-conitec-catalog
 download-clinical-exams # Opcional: caso queira o dataset Albert Einstein
 extract-pcdt-markdown --workers 6
 clean-pcdt-extracted --workers 6
@@ -54,6 +55,33 @@ download-pcdt --quiet
 ```
 
 Manifestos PCDT: `llm/data/manifests/pcdt_index.jsonl`, `llm/data/manifests/pcdt_run.json`.
+
+### Catálogo Conitec PCDT/CID/medicamentos
+
+O campo `disease` dos chunks pode ser enriquecido a partir da planilha oficial da Conitec com diretrizes, CID-10 e medicamentos. O comando abaixo baixa a planilha apenas quando executado explicitamente e gera um cache local em `llm/data/processed/conitec/pcdt_catalog.jsonl`:
+
+```bash
+build-conitec-catalog
+python -m pcdt_ingest.cli_conitec_catalog --input /caminho/medicamentos_cid_pcdt_atual-1.xlsx
+python -m pcdt_ingest.cli_conitec_catalog --output llm/data/processed/conitec/pcdt_catalog.jsonl
+```
+
+Se o catálogo local existir, `chunk-pcdt` o carrega automaticamente. Também é possível apontar outro JSONL ou desativar o enriquecimento:
+
+```bash
+chunk-pcdt --force --conitec-catalog llm/data/processed/conitec/pcdt_catalog.jsonl
+chunk-pcdt --no-conitec-catalog
+```
+
+Para reprocessar a base RAG após atualizar o catálogo, rode:
+
+```bash
+build-conitec-catalog
+chunk-pcdt --force --workers 6
+build-vectorstore --force
+```
+
+O matching compara o nome do PDF com a `Diretriz` normalizada da planilha, removendo datas e termos genéricos como `pcdt`, `protocolo`, `diretriz` e `relatorio`. Quando não há match confiável, a heurística antiga de doença continua sendo usada.
 
 ### Extração Markdown (PCDT)
 
@@ -85,9 +113,11 @@ A limpeza remove ruídos comuns da extração de PDFs diagramados:
 - assinaturas administrativas conhecidas;
 - números de página isolados;
 - headers/footers repetidos detectados pelas primeiras/últimas linhas das páginas;
+- tabelas de índice/sumário e linhas com dot leaders;
 - quebras de palavra por hífen no fim de linha;
 - `<br>` e quebras internas em tabelas Markdown;
 - sumários/índices com pontilhado, legendas de figuras e tabelas de estratégia de busca bibliográfica;
+- seções finais não clínicas, como `REFERÊNCIAS`, `ANEXO(S)` e `APÊNDICE(S)`, incluindo páginas seguintes;
 - formulários de assinatura, checkboxes de medicamentos e notas administrativas isoladas;
 - tabelas OCR malformadas com cabeçalhos quebrados/repetidos;
 - excesso de espaços, caracteres invisíveis e linhas vazias;
@@ -146,13 +176,16 @@ Metadata principal dos chunks:
 - `section`, `header_1`, `header_2`;
 - `page_start`, `page_end`, `page_range`;
 - `chunk_index`, `chunk_strategy`;
-- `disease`.
+- `disease`, `disease_normalized`, `metadata_source`;
+- quando houver match no catálogo Conitec: `diretriz`, `formato`, `cid10_codes`, `cid10_descriptions`, `medicamentos`, `portarias`, `datas_portaria`, `descricao_siglas`;
+
+Esses metadados permitem filtrar ou expandir buscas por doença, CID-10 e medicamento. Por exemplo, um PDF `20210428_pcdt_artrite_reativa.pdf` passa a receber `disease = "Artrite Reativa"` e `metadata_source = "conitec_xlsx"` quando a diretriz está no catálogo. Perguntas com siglas como `HIV` também podem ser expandidas via função `expand_query_terms` em `pcdt_ingest.reference_data.conitec_catalog`, retornando diretrizes, descrições CID-10, medicamentos e siglas relacionadas para melhorar recall.
 
 Manifesto: `llm/data/manifests/pcdt_chunk_index.jsonl`.
 
 #### Visualizador de chunks PCDT (browser)
 
-Interface HTML estática em `[tools/pcdt-chunks-viewer/index.html](tools/pcdt-chunks-viewer/index.html)` (lista documentos a partir de `pcdt_chunk_index.jsonl`, navegação por chunk, PDF, modo raw/preview Markdown).
+Interface HTML estática em `[tools/pcdt-chunks-viewer/index.html](tools/pcdt-chunks-viewer/index.html)` (lista documentos a partir de `pcdt_chunk_index.jsonl`, navegação por chunk, PDF, modo raw/preview Markdown). O detalhe de cada chunk destaca os campos do catálogo Conitec quando presentes: `metadata_source`, `disease_normalized`, `diretriz`, `formato`, `cid10_codes`, `cid10_descriptions`, `medicamentos`, `portarias`, `datas_portaria` e `descricao_siglas`.
 
 Após `pip install -e .`, o comando a seguir sobe um servidor HTTP na raiz do pacote `llm/` e exibe a URL para o acessar o visualizador:
 
@@ -187,6 +220,18 @@ chroma browse pcdt --local             # terminal 2 — TUI da coleção
 ```
 
 Se o `browse` não funcionar, tente `chroma browse pcdt --local --path vectorstore/chroma`.
+
+### RAG Inspector
+
+O app Streamlit `scripts/rag_inspector_app.py` permite depurar retrieve, prompt, geração e tempos sem iniciar backend/frontend:
+
+```bash
+cd llm
+ollama pull llama3.2:3b
+streamlit run scripts/rag_inspector_app.py
+```
+
+O Inspector usa `llama3.2:3b` como modelo de chat padrão para geração. O campo continua editável na sidebar, mas não há fallback automático para outro modelo; se a geração falhar, o erro do modelo selecionado é exibido diretamente.
 
 ### Dataset COVID Albert Einstein
 

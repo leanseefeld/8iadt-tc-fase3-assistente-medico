@@ -38,6 +38,11 @@ from pcdt_ingest.extract import PAGE_JSONL_SUFFIX, PageRecord, read_pages_jsonl
 from pcdt_ingest.logutil import get_logger
 from pcdt_ingest.paths import DIR_RAW_PCDT, DIR_CHUNKS_PCDT, data_root
 from pcdt_ingest.pipeline_config import get_config
+from pcdt_ingest.reference_data.conitec_catalog import (
+    heuristic_metadata,
+    match_source_to_disease,
+    metadata_from_catalog_entry,
+)
 
 _log = get_logger("chunk")
 
@@ -81,11 +86,15 @@ _MAIN_SECTION_TITLES = {
 
 _TITLE_REGEXES = [
     re.compile(
-        r"\bProtocolo\s+Cl[ií]nico\s+e\s+Diretrizes\s+Terap[eê]uticas\s+d(?:a|e|o|as|os)\s+(.+?)(?:\n|$)",
+        r"\bProtocolo\s+Cl[iíÍ]nico\s+e\s+Diretrizes\s+Terap[eéêÉÊ]uticas\s+d(?:a|e|o|as|os)\s+(.+?)(?:\n|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bProtocolo\s+Cl[iíÍ]nico\s+e\s+Diretrizes\s+Terap[eéêÉÊ]uticas\s+(?:[-–—]\s*)?(.+?)(?:\n|$)",
         re.IGNORECASE,
     ),
     re.compile(r"\bPCDT\s+d(?:a|e|o|as|os)\s+(.+?)(?:\n|$)", re.IGNORECASE),
-    re.compile(r"\bDiretrizes\s+Terap[eê]uticas\s+d(?:a|e|o|as|os)\s+(.+?)(?:\n|$)", re.IGNORECASE),
+    re.compile(r"\bDiretrizes\s+Terap[eéêÉÊ]uticas\s+d(?:a|e|o|as|os)\s+(.+?)(?:\n|$)", re.IGNORECASE),
 ]
 
 
@@ -278,6 +287,7 @@ def _split_section_recursive(
     global_start: int,
     rec: RecursiveCharacterTextSplitter,
     chunk_size: int,
+    chunk_overlap: int = 0,
 ) -> list[tuple[str, dict[str, Any], int, int]]:
     """
     Parte o texto da seção em chunks; devolve lista de
@@ -291,14 +301,19 @@ def _split_section_recursive(
     # Primeiro, tente fragmentar respeitando limites de sentença e agrupando
     # sentenças em blocos que caibam em `chunk_size`. Isso evita cortes
     # no meio de uma frase causados pelo Recursive splitter.
-    pieces = _group_sentences_into_pieces(section_text, chunk_size=chunk_size)
+    pieces = _group_sentences_into_pieces(section_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     out: list[tuple[str, dict[str, Any], int, int]] = []
     search_at = 0
     if pieces:
         # Mapear cada piece de volta ao texto da seção
         mini_search_at = 0
         for piece in pieces:
-            s, e, mini_search_at = _find_piece_span(section_text, piece, search_at=mini_search_at)
+            s, e, mini_search_at = _find_piece_span(
+                section_text,
+                piece,
+                search_at=mini_search_at,
+                overlap=chunk_overlap,
+            )
             out.append((piece, base_meta, global_start + s, global_start + e))
         # aplicar merge adjacente conservador antes de devolver
         return _merge_adjacent_out_items(out)
@@ -382,7 +397,20 @@ def _join_semantic_chunks(left: str, right: str) -> str:
     return f"{left} {right}"
 
 
-def _group_sentences_into_pieces(text: str, chunk_size: int) -> list[str]:
+def _tail_for_overlap(text: str, overlap: int) -> str:
+    if overlap <= 0 or not text:
+        return ""
+    tail = text[-overlap:].lstrip()
+    boundary = re.search(r"(?<=[.!?…])\s+", tail)
+    if boundary and boundary.end() < len(tail):
+        return tail[boundary.end() :].lstrip()
+    space = tail.find(" ")
+    if 0 <= space < len(tail) - 1:
+        return tail[space + 1 :].lstrip()
+    return tail
+
+
+def _group_sentences_into_pieces(text: str, chunk_size: int, chunk_overlap: int = 0) -> list[str]:
     """Split `text` into sentences and group sentences into pieces <= chunk_size.
 
     Returns empty list when sentence-based grouping is not applicable (single sentence
@@ -406,7 +434,9 @@ def _group_sentences_into_pieces(text: str, chunk_size: int) -> list[str]:
             buf = candidate
             continue
         pieces.append(buf)
-        buf = sent
+        tail = _tail_for_overlap(buf, min(chunk_overlap, max(0, chunk_size // 2)))
+        with_overlap = _join_semantic_chunks(tail, sent) if tail else sent
+        buf = with_overlap if len(with_overlap) <= chunk_size + max(0, chunk_overlap) else sent
     if buf:
         pieces.append(buf)
     return pieces
@@ -508,7 +538,13 @@ def _split_section_semantic(
         semantic_chunks = _split_text_with_semantic_splitter(semantic_splitter, section_text)
     except Exception as exc:
         _log.warning("SemanticChunker falhou em seção; usando recursive fallback. erro=%s", exc)
-        return _split_section_recursive(section_doc, global_start=global_start, rec=rec, chunk_size=chunk_size)
+        return _split_section_recursive(
+            section_doc,
+            global_start=global_start,
+            rec=rec,
+            chunk_size=chunk_size,
+            chunk_overlap=getattr(rec, "chunk_overlap", 0),
+        )
     semantic_chunks = _merge_semantic_fragments(semantic_chunks, chunk_size=chunk_size)
     # Passe adicional para evitar que quebras semânticas fragmentem frases
     # Ex.: "...disponibilidade de" + "alimentos..." => juntar
@@ -611,6 +647,78 @@ def _merge_adjacent_out_items(out: list[tuple[str, dict[str, Any], int, int]]) -
     return merged
 
 
+def _split_text_strict_with_offsets(text: str, *, max_chars: int) -> list[tuple[str, int, int]]:
+    """Divide texto em partes com tamanho máximo rígido, preservando offsets locais aproximados."""
+    stripped = text.strip()
+    if not stripped:
+        return []
+    if max_chars < 1 or len(stripped) <= max_chars:
+        start = text.find(stripped)
+        start = max(0, start)
+        return [(stripped, start, start + len(stripped))]
+
+    pieces: list[tuple[str, int, int]] = []
+    cursor = 0
+    text_len = len(text)
+    while cursor < text_len:
+        while cursor < text_len and text[cursor].isspace():
+            cursor += 1
+        if cursor >= text_len:
+            break
+
+        hard_end = min(text_len, cursor + max_chars)
+        if hard_end >= text_len:
+            end = text_len
+        else:
+            window = text[cursor:hard_end]
+            cut = max(
+                window.rfind("\n\n"),
+                window.rfind(". "),
+                window.rfind("; "),
+                window.rfind(" | "),
+                window.rfind(" "),
+            )
+            if cut < max_chars * 0.55:
+                end = hard_end
+            else:
+                end = cursor + cut + 1
+
+        piece = text[cursor:end].strip()
+        if piece:
+            local_start = cursor + max(0, text[cursor:end].find(piece))
+            pieces.append((piece, local_start, local_start + len(piece)))
+        cursor = max(end, cursor + 1)
+
+    return pieces
+
+
+def _enforce_chunk_item_limits(
+    items: list[tuple[str, dict[str, Any], int, int]],
+    *,
+    chunk_size: int,
+) -> list[tuple[str, dict[str, Any], int, int]]:
+    """Garante que nenhum item bruto ultrapasse ``chunk_size`` antes da criação dos Documents."""
+    if chunk_size < 1:
+        return items
+    out: list[tuple[str, dict[str, Any], int, int]] = []
+    split_count = 0
+    for text, meta, g0, g1 in items:
+        if len(text.strip()) <= chunk_size:
+            out.append((text, meta, g0, g1))
+            continue
+        parts = _split_text_strict_with_offsets(text, max_chars=chunk_size)
+        split_count += max(0, len(parts) - 1)
+        span_len = max(1, g1 - g0)
+        text_len = max(1, len(text))
+        for piece, local_start, local_end in parts:
+            part_g0 = g0 + int(span_len * (local_start / text_len))
+            part_g1 = g0 + int(span_len * (local_end / text_len))
+            out.append((piece, meta, part_g0, max(part_g0 + 1, part_g1)))
+    if split_count:
+        _log.info("chunks acima do limite divididos após merge: partes_adicionais=%s limite_chars=%s", split_count, chunk_size)
+    return out
+
+
 def _clean_disease_candidate(value: str) -> str:
     text = re.sub(r"[*_`#]", "", value)
     text = re.sub(r"\([^)]*(?:CID|CONITEC|PCDT)[^)]*\)", "", text, flags=re.IGNORECASE)
@@ -659,6 +767,7 @@ def _apply_filename_repairs(text: str) -> str:
         "deficincia": "deficiencia",
         "deficiênciaferro": "deficiência ferro",
         "deficienciaferro": "deficiencia ferro",
+        "doencarenalcronica": "doenca renal cronica",
         "c1esterase": "c1 esterase",
     }
     out = text
@@ -738,6 +847,7 @@ def chunk_pages_to_documents(
     chars_per_token: int = _CHARS_PER_TOKEN,
     chunk_strategy: str = _DEFAULT_CHUNK_STRATEGY,
     semantic_breakpoint_percentile: int = _DEFAULT_SEMANTIC_BREAKPOINT_PERCENTILE,
+    conitec_catalog: dict[str, dict[str, Any]] | None = None,
 ) -> list[Document]:
     """
     Produz ``Document`` LangChain por chunk com metadata alinhada ao schema do plano.
@@ -764,6 +874,12 @@ def chunk_pages_to_documents(
         full_text=full_text,
         first_pages_text=first_pages_text,
     )
+    catalog_entry = (
+        match_source_to_disease(source_stem, conitec_catalog or {}, candidate_texts=[disease])
+        if conitec_catalog
+        else None
+    )
+    disease_meta = metadata_from_catalog_entry(catalog_entry) if catalog_entry else heuristic_metadata(disease)
 
     headers_to_split_on = headers_to_split_on or _DEFAULT_HEADER_SPLITS
     md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
@@ -792,8 +908,7 @@ def chunk_pages_to_documents(
 
     aligned = _align_sections_to_full_text(normalized_text, section_docs)
 
-    documents: list[Document] = []
-    chunk_index = 0
+    chunk_items: list[tuple[str, dict[str, Any], int, int]] = []
 
     for section_number, (section_doc, g_sec_start, _g_sec_end) in enumerate(aligned, start=1):
         section_name = _section_breadcrumb(section_doc.metadata)
@@ -820,6 +935,7 @@ def chunk_pages_to_documents(
                 global_start=g_sec_start,
                 rec=rec,
                 chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
             )
         if chunk_strategy == "semantic":
             _log.info(
@@ -831,24 +947,45 @@ def chunk_pages_to_documents(
             )
         for piece_text, sec_meta, g0, g1 in triples:
             original_g0, original_g1 = _map_normalized_span_to_original(normalized_to_original, g0, g1)
-            ps, pe = page_range_for_char_span(page_spans, original_g0, original_g1)
-            h1 = sec_meta.get("header_1")
-            h2 = sec_meta.get("header_2")
-            meta: dict[str, Any] = {
-                "source_stem": source_stem,
-                "source_pdf": source_pdf_rel,
-                "section": _section_breadcrumb(sec_meta),
-                "header_1": h1 if h1 is not None else None,
-                "header_2": h2 if h2 is not None else None,
-                "page_start": ps,
-                "page_end": pe,
-                "page_range": [ps, pe],
-                "chunk_index": chunk_index,
-                "chunk_strategy": chunk_strategy,
-                "disease": disease,
-            }
-            documents.append(Document(page_content=piece_text, metadata=meta))
-            chunk_index += 1
+            chunk_items.append((piece_text, sec_meta, original_g0, original_g1))
+
+    chunk_items = _enforce_chunk_item_limits(chunk_items, chunk_size=chunk_size)
+
+    documents: list[Document] = []
+    for chunk_index, (piece_text, sec_meta, original_g0, original_g1) in enumerate(chunk_items):
+        text_with_overlap = piece_text
+        effective_g0 = original_g0
+        if chunk_index > 0 and chunk_overlap > 0:
+            prev_text, _prev_meta, prev_g0, prev_g1 = chunk_items[chunk_index - 1]
+            if _section_breadcrumb(_prev_meta) == _section_breadcrumb(sec_meta):
+                overlap_prefix = _tail_for_overlap(prev_text, chunk_overlap)
+                if overlap_prefix:
+                    effective_g0 = max(prev_g0, prev_g1 - len(overlap_prefix))
+                    candidate_with_overlap = (
+                        text_with_overlap
+                        if text_with_overlap.startswith(overlap_prefix)
+                        else _join_semantic_chunks(overlap_prefix, text_with_overlap)
+                    )
+                    if len(candidate_with_overlap) <= chunk_size:
+                        text_with_overlap = candidate_with_overlap
+
+        ps, pe = page_range_for_char_span(page_spans, effective_g0, original_g1)
+        h1 = sec_meta.get("header_1")
+        h2 = sec_meta.get("header_2")
+        meta: dict[str, Any] = {
+            "source_stem": source_stem,
+            "source_pdf": source_pdf_rel,
+            "section": _section_breadcrumb(sec_meta),
+            "header_1": h1 if h1 is not None else None,
+            "header_2": h2 if h2 is not None else None,
+            "page_start": ps,
+            "page_end": pe,
+            "page_range": [ps, pe],
+            "chunk_index": chunk_index,
+            "chunk_strategy": chunk_strategy,
+            **disease_meta,
+        }
+        documents.append(Document(page_content=text_with_overlap, metadata=meta))
 
     _log.info("%s: chunking concluído chunks=%s", source_stem, len(documents))
     return documents
@@ -966,6 +1103,7 @@ def chunk_one_stem(
     from pcdt_ingest.manifest import now_iso
 
     ts = now_iso()
+    conitec_catalog_mtime = chunk_kw.pop("conitec_catalog_mtime", None)
     cleaned_base = cleaned_dir or default_cleaned_processed_dir()
     cleaned_pages_path = cleaned_base / f"{stem}{CLEANED_PAGE_JSONL_SUFFIX}"
     raw_pages_path = processed_dir / f"{stem}{PAGE_JSONL_SUFFIX}"
@@ -1000,6 +1138,10 @@ def chunk_one_stem(
         not force
         and out_path.is_file()
         and out_path.stat().st_mtime >= pages_path.stat().st_mtime
+        and (
+            conitec_catalog_mtime is None
+            or out_path.stat().st_mtime >= float(conitec_catalog_mtime)
+        )
     ):
         _log.info("%s: chunks atualizados; pulando", stem)
         return {

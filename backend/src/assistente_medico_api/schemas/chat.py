@@ -48,6 +48,11 @@ class ChatResponseJson(BaseModel):
     sources: list[str]
     reasoning: list[str]
     thread_id: str = Field(serialization_alias="threadId")
+    audit_id: str | None = Field(
+        default=None,
+        serialization_alias="auditId",
+        description="Identificador do registro de auditoria RAG, quando disponível.",
+    )
     guardrail_status: str | None = Field(
         default=None,
         serialization_alias="guardrailStatus",

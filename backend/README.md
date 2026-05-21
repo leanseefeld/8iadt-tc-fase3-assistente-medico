@@ -10,8 +10,10 @@ Serviço HTTP em FastAPI: orquestração LangGraph para **chat com RAG** sobre P
    pip install -e llm/
   ```
 3. **Ollama** em execução com `nomic-embed-text` e `gemma4:e4b-it-q4_K_M` (ou ajuste `MEDICO_OLLAMA_`*).
-4. Vector store populado (a partir da raiz do repositório):
+4. Vector store populado (a partir da raiz do repositório). A pipeline atual pode gerar o catálogo Conitec antes dos chunks, enriquecendo documentos indexados com metadados de diretriz, CID-10 e medicamentos:
   ```bash
+   build-conitec-catalog
+   chunk-pcdt --force
    build-vectorstore
   ```
 
@@ -49,6 +51,10 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `MEDICO_CHROMA_PERSIST_DIR` | *(opcional)*             | Caminho absoluto do Chroma; se omitido, usa `vectorstore/chroma` na raiz do repositório |
 | `MEDICO_CHROMA_COLLECTION`  | `pcdt`                   | Nome da coleção                                                                         |
 | `MEDICO_RETRIEVAL_K`        | `6`                      | Top-k na recuperação                                                                    |
+| `RAG_RETRIEVE_CANDIDATES_K` ou `MEDICO_RAG_RETRIEVE_CANDIDATES_K` | `30` | Quantidade inicial de candidatos Chroma antes do reranking |
+| `RAG_RETRIEVE_FINAL_K` ou `MEDICO_RAG_RETRIEVE_FINAL_K` | `6` | Quantidade final de documentos enviados ao prompt |
+| `RAG_AUDIT_JSONL` ou `MEDICO_RAG_AUDIT_JSONL` | `../llm/data/audit/rag_interactions.jsonl` | Arquivo JSONL de auditoria RAG |
+| `RAG_AUDIT_ENABLED` ou `MEDICO_RAG_AUDIT_ENABLED` | `true` | Liga/desliga escrita da auditoria RAG |
 | `MEDICO_DATABASE_URL`       | `sqlite+aiosqlite:///./assistente_medico.db` | URL do banco (SQLite assíncrono por padrão)                              |
 | `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para `assistente_medico.jsonl` |
 | `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível efetivo dos loggers `assistente_medico.*` (ex.: `DEBUG`, `INFO`)                    |
@@ -77,6 +83,41 @@ Consulta rápida (exemplos):
 ```bash
 grep '"event":"guardrail_blocked"' logs/assistente_medico.jsonl
 grep '"event":"chat_response_done"' logs/assistente_medico.jsonl | head
+```
+
+## Recuperação RAG
+
+O fluxo de recuperação do chat agora é:
+
+```text
+pergunta -> expansão Conitec -> Chroma k=30 -> reranking heurístico -> top 6 -> prompt -> auditoria
+```
+
+A expansão usa apenas o catálogo local `llm/data/processed/conitec/pcdt_catalog.jsonl`; a planilha da Conitec não é baixada em tempo de requisição. Quando a pergunta contém doença, CID-10, medicamento ou sigla, a consulta recebe termos relacionados do catálogo, como diretriz, descrições CID e medicamentos.
+
+O reranking é heurístico e explicável. Ele mantém a posição original do Chroma como sinal forte, mas aplica boosts para CID exato, doença/diretriz, medicamento, seção compatível com a intenção da pergunta e termos exatos. Perguntas clínicas recebem penalização leve para seções administrativas, referências e metodologia.
+
+O prompt enviado ao LLM inclui metadados ricos por documento:
+
+- diretriz e doença;
+- CID-10;
+- medicamentos relacionados, com limite de itens;
+- seção;
+- portaria e data;
+- fonte e páginas;
+- score final e motivos do ranking.
+
+A resposta continua citando documentos pelo identificador `[n]`. A política de segurança de doses/posologia permanece sob o guardrail existente.
+
+Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com pergunta, query expandida, entidades encontradas, `k` inicial/final, documentos usados, scores e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta.
+
+Exemplos rápidos para testar:
+
+```text
+Quais critérios de inclusão para insuficiência adrenal?
+O que o PCDT fala sobre E27.1?
+HIV criança
+Tratamento com hidrocortisona
 ```
 
 ## Configurar SQLite

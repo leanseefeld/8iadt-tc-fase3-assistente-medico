@@ -21,6 +21,7 @@ CHROMA_COLLECTION_PCDT = str(get_config("CHROMA_COLLECTION_PCDT", "pcdt"))
 DEFAULT_OLLAMA_EMBED_MODEL = str(get_config("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
 DEFAULT_OLLAMA_BASE_URL = str(get_config("OLLAMA_BASE_URL", "http://127.0.0.1:11434"))
 DEFAULT_ADD_BATCH_SIZE = int(get_config("EMBED_ADD_BATCH_SIZE", 64))
+DEFAULT_MAX_EMBED_CHARS = int(get_config("EMBED_MAX_CHARS", 3200))
 
 # Tolerância para comparar ``st_mtime`` com valor vindo do JSONL do manifesto de embed.
 _MTIME_EPS = 1e-6
@@ -89,6 +90,71 @@ def documents_for_chroma(documents: list[Document]) -> list[Document]:
             raise ValueError("documento sem id estável; chamar assign_stable_chunk_ids antes")
         meta = chroma_safe_metadata(doc.metadata)
         out.append(Document(page_content=doc.page_content, metadata=meta, id=doc.id))
+    return out
+
+
+def _split_text_for_embedding(text: str, *, max_chars: int = DEFAULT_MAX_EMBED_CHARS) -> list[str]:
+    """Divide textos acima do limite operacional do embedding sem mexer nos chunks em disco."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return []
+    if max_chars < 500 or len(stripped) <= max_chars:
+        return [stripped]
+
+    pieces: list[str] = []
+    remaining = stripped
+    while len(remaining) > max_chars:
+        window = remaining[:max_chars]
+        cut = max(
+            window.rfind("\n\n"),
+            window.rfind(". "),
+            window.rfind("; "),
+            window.rfind(" | "),
+            window.rfind(" "),
+        )
+        if cut < max_chars * 0.55:
+            cut = max_chars
+        piece = remaining[:cut].strip()
+        if piece:
+            pieces.append(piece)
+        remaining = remaining[cut:].strip()
+    if remaining:
+        pieces.append(remaining)
+    return pieces
+
+
+def split_oversized_documents_for_chroma(
+    documents: list[Document],
+    *,
+    max_chars: int = DEFAULT_MAX_EMBED_CHARS,
+) -> list[Document]:
+    """
+    Cria subdocumentos apenas para Chroma quando um chunk é grande demais para o embedding.
+
+    O id original continua preservado para chunks normais. Para chunks divididos, os ids
+    recebem sufixo ``:partN`` e metadados de auditoria indicam o chunk original.
+    """
+    out: list[Document] = []
+    for doc in documents:
+        if not doc.id:
+            raise ValueError("documento sem id estável; chamar assign_stable_chunk_ids antes")
+        pieces = _split_text_for_embedding(doc.page_content, max_chars=max_chars)
+        if len(pieces) <= 1:
+            out.append(doc)
+            continue
+        _log.warning(
+            "chunk grande dividido para embedding: id=%s chars=%s partes=%s max_chars=%s",
+            doc.id,
+            len(doc.page_content or ""),
+            len(pieces),
+            max_chars,
+        )
+        for idx, piece in enumerate(pieces):
+            meta = dict(doc.metadata)
+            meta["parent_chunk_id"] = doc.id
+            meta["chunk_part_index"] = idx
+            meta["chunk_part_count"] = len(pieces)
+            out.append(Document(page_content=piece, metadata=meta, id=f"{doc.id}:part{idx}"))
     return out
 
 
@@ -218,7 +284,8 @@ def embed_one_stem(
 
     # --- Substituir vetores deste documento antes de inserir lotes ---
     delete_vectors_for_source_stem(store, source_stem)
-    ready = documents_for_chroma(docs)
+    split_docs = split_oversized_documents_for_chroma(docs)
+    ready = documents_for_chroma(split_docs)
     add_documents_batched(
         store,
         ready,

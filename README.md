@@ -16,6 +16,7 @@ python run-local.py --setup
 O script faz:
 - instala dependências Python (`llm` e `backend`) e Node (`frontend`);
 - aplica migrations e seed do banco;
+- quando usado com `--build-vectorstore`, executa a pipeline RAG incluindo catálogo Conitec, limpeza dos PCDTs, chunking e Chroma;
 - sobe backend em `http://localhost:8000/docs`;
 - sobe frontend em `http://localhost:5173`;
 - imprime os logs dos serviços diretamente no console.
@@ -31,6 +32,9 @@ python run-local.py --setup
 
 # inclui build do vectorstore (requer ollama)
 python run-local.py --build-vectorstore
+
+# no build do vectorstore, o catálogo Conitec é gerado antes dos chunks
+# para enriquecer metadados de doença, diretriz, CID-10 e medicamentos
 
 # instala dependências opcionais para chunking semântico
 python run-local.py --setup --setup-semantic

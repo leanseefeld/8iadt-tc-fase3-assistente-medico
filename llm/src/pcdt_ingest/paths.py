@@ -11,6 +11,7 @@ DIR_RAW_CLINICAL_EXAMS = Path("raw") / "clinical_exams"
 DIR_MANIFESTS = Path("manifests")
 DIR_PROCESSED_PCDT = Path("processed") / "pcdt"
 DIR_PROCESSED_PCDT_CLEANED = Path("processed") / "pcdt_cleaned"
+DIR_PROCESSED_CONITEC = Path("processed") / "conitec"
 DIR_CHUNKS_PCDT = Path("chunks") / "pcdt"
 DIR_SFT_SAMPLES = Path("sft") / "samples"
 
@@ -20,6 +21,7 @@ DATA_SUBDIRS: tuple[Path, ...] = (
     DIR_MANIFESTS,
     DIR_PROCESSED_PCDT,
     DIR_PROCESSED_PCDT_CLEANED,
+    DIR_PROCESSED_CONITEC,
     DIR_CHUNKS_PCDT,
     DIR_SFT_SAMPLES,
 )

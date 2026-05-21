@@ -23,6 +23,8 @@ _SYSTEM_PROMPT = """\
 Você é um assistente clínico de apoio a médicos no Brasil.
 Você realizou uma busca por Protocolos Clínicos e Diretrizes Terapêuticas (PCDT) para responder a mensagem.
 Cite os resultados pelo identificador [n] correspondente ao trecho.
+Use exclusivamente os documentos recuperados abaixo. Quando responder, mencione a diretriz, a seção e as páginas quando disponíveis.
+Se os documentos não contiverem informação suficiente, diga isso claramente.
 Recomende mas não prescreva medicamentos, doses ou esquemas terapêuticos específicos: o médico responsável decide.
 Se os resultados da busca não forem suficientes, diga que documentos relevantes não foram encontrados.
 Evite inventar dados clínicos.
@@ -39,8 +41,8 @@ def _build_messages(state: ChatRAGState) -> list:
     # Bloco PCDT só na pergunta corrente (turno final do utilizador).
     final_human = (
         f"Pergunta do médico:\n{user_text}\n\n"
-        f"Resultado da busca (trechos PCDT):\n{context}\n\n"
-        "Responda com base nos resultados encontrados quando aplicável."
+        f"Contexto (trechos PCDT):\n{context}\n\n"
+        "Responda com base exclusivamente nos documentos recuperados quando aplicável."
     )
     out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
     for turn in state.get("chat_history") or []:

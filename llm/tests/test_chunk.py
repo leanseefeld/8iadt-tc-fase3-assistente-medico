@@ -46,6 +46,21 @@ def test_infer_disease_name_from_title_regex() -> None:
     assert disease == "Esclerose Múltipla"
 
 
+def test_infer_disease_name_from_title_without_preposition() -> None:
+    disease = infer_disease_name(
+        source_stem="pcdt_anemia_doencarenalcronica",
+        source_pdf_rel="raw/pcdt/pcdt_anemia_doencarenalcronica.pdf",
+        full_text=(
+            "PROTOCOLO CLÍNICO E DIRETRIZES TERAPÊUTICAS "
+            "ANEMIA NA DOENÇA RENAL CRÔNICA - ALFAEPOETINA\n"
+            "1. INTRODUÇÃO"
+        ),
+        first_pages_text=None,
+    )
+
+    assert disease == "ANEMIA NA DOENÇA RENAL CRÔNICA - ALFAEPOETINA"
+
+
 def test_infer_disease_name_from_source_stem() -> None:
     disease = infer_disease_name(
         source_stem="pcdt_artrite_reumatoide_2024",
@@ -124,6 +139,33 @@ def test_recursive_chunk_can_cross_page_boundary_and_has_metadata() -> None:
     assert meta["header_1"] == "INTRODUÇÃO"
 
 
+def test_recursive_sentence_chunking_honors_overlap() -> None:
+    pages = [
+        PageRecord(
+            page=1,
+            markdown=(
+                "1 INTRODUÇÃO\n"
+                "Primeira sentença clínica com dados relevantes para o caso. "
+                "Segunda sentença clínica com monitoramento e tratamento descritos. "
+                "Terceira sentença clínica com critérios e acompanhamento detalhados."
+            ),
+        ),
+    ]
+
+    docs = chunk_pages_to_documents(
+        pages,
+        source_stem="pcdt_doenca_teste",
+        source_pdf_rel="raw/pcdt/pcdt_doenca_teste.pdf",
+        chunk_tokens=75,
+        overlap_tokens=25,
+        chars_per_token=1,
+        chunk_strategy="recursive",
+    )
+
+    assert len(docs) >= 2
+    assert "relevantes para o caso." in docs[1].page_content
+
+
 def test_semantic_strategy_uses_single_splitter_and_metadata(monkeypatch) -> None:
     class FakeSemanticSplitter:
         def __init__(self) -> None:
@@ -170,6 +212,82 @@ def test_semantic_strategy_uses_single_splitter_and_metadata(monkeypatch) -> Non
     assert meta["section"] == "DIAGNÓSTICO"
 
 
+def test_semantic_chunks_do_not_overlap_across_sections(monkeypatch) -> None:
+    class FakeSemanticSplitter:
+        def split_text(self, text: str) -> list[str]:
+            return [text]
+
+    monkeypatch.setattr("pcdt_ingest.chunk.build_semantic_splitter", lambda **_kwargs: FakeSemanticSplitter())
+    pages = [
+        PageRecord(
+            page=1,
+            markdown=(
+                "## METODOLOGIA DE BUSCA E AVALIAÇÃO DA LITERATURA\n"
+                "Foram consultadas bases bibliográficas e diretrizes clínicas relevantes.\n\n"
+                "## INTRODUÇÃO\n"
+                "A anemia é uma complicação frequente da doença renal crônica."
+            ),
+        ),
+    ]
+
+    docs = chunk_pages_to_documents(
+        pages,
+        source_stem="pcdt_irc_ferro",
+        source_pdf_rel="raw/pcdt/pcdt_irc_ferro.pdf",
+        chunk_tokens=200,
+        overlap_tokens=12,
+        chars_per_token=1,
+        chunk_strategy="semantic",
+    )
+
+    intro = next(doc for doc in docs if doc.metadata["section"] == "INTRODUÇÃO")
+    assert intro.page_content.startswith("A anemia é uma complicação")
+    assert "relevantes." not in intro.page_content
+
+
+def test_semantic_chunks_get_final_overlap_inside_same_section(monkeypatch) -> None:
+    class FakeSemanticSplitter:
+        def split_text(self, text: str) -> list[str]:
+            return [
+                (
+                    "Primeiro bloco clínico com histórico, achados laboratoriais, avaliação inicial, "
+                    "sintomas relevantes e necessidade de acompanhamento longitudinal."
+                ),
+                (
+                    "Segundo bloco clínico com conduta, seguimento, doses, exames, monitoramento "
+                    "e reavaliação periódica."
+                ),
+            ]
+
+    monkeypatch.setattr("pcdt_ingest.chunk.build_semantic_splitter", lambda **_kwargs: FakeSemanticSplitter())
+    pages = [
+        PageRecord(
+            page=1,
+            markdown=(
+                "## INTRODUÇÃO\n"
+                "Primeiro bloco clínico com histórico, achados laboratoriais, avaliação inicial, "
+                "sintomas relevantes e necessidade de acompanhamento longitudinal. "
+                "Segundo bloco clínico com conduta, seguimento, doses, exames, monitoramento "
+                "e reavaliação periódica."
+            ),
+        ),
+    ]
+
+    docs = chunk_pages_to_documents(
+        pages,
+        source_stem="pcdt_irc_ferro",
+        source_pdf_rel="raw/pcdt/pcdt_irc_ferro.pdf",
+        chunk_tokens=200,
+        overlap_tokens=12,
+        chars_per_token=1,
+        chunk_strategy="semantic",
+    )
+
+    assert len(docs) == 2
+    assert docs[1].page_content.startswith("ongitudinal.")
+    assert docs[1].metadata["section"] == "INTRODUÇÃO"
+
+
 def test_semantic_strategy_merges_tiny_biomedical_fragments(monkeypatch) -> None:
     class FragmentingSemanticSplitter:
         def split_text(self, _text: str) -> list[str]:
@@ -202,3 +320,75 @@ def test_semantic_strategy_merges_tiny_biomedical_fragments(monkeypatch) -> None
 
     assert len(docs) == 1
     assert "_Y. enterocolítica_ e _Y. pseudotuberculosis_" in docs[0].page_content
+
+
+def test_semantic_chunks_are_strictly_capped_after_merges(monkeypatch) -> None:
+    class OversizedSemanticSplitter:
+        def split_text(self, _text: str) -> list[str]:
+            return [
+                "A" * 90,
+                "continua " + ("B" * 90),
+                "continua " + ("C" * 90),
+            ]
+
+    monkeypatch.setattr("pcdt_ingest.chunk.build_semantic_splitter", lambda **_kwargs: OversizedSemanticSplitter())
+    pages = [
+        PageRecord(
+            page=1,
+            markdown=(
+                "## TRATAMENTO\n"
+                + "A" * 90
+                + " continua "
+                + "B" * 90
+                + " continua "
+                + "C" * 90
+            ),
+        ),
+    ]
+
+    docs = chunk_pages_to_documents(
+        pages,
+        source_stem="pcdt_teste_limite",
+        source_pdf_rel="raw/pcdt/pcdt_teste_limite.pdf",
+        chunk_tokens=100,
+        overlap_tokens=0,
+        chars_per_token=1,
+        chunk_strategy="semantic",
+    )
+
+    assert len(docs) > 1
+    assert all(len(doc.page_content) <= 100 for doc in docs)
+
+
+def test_final_overlap_never_exceeds_chunk_token_limit(monkeypatch) -> None:
+    class TwoChunkSemanticSplitter:
+        def split_text(self, _text: str) -> list[str]:
+            return [
+                "Primeiro bloco com conteúdo clínico suficiente para formar uma cauda longa.",
+                "Segundo bloco com conteúdo clínico que já está próximo do limite permitido.",
+            ]
+
+    monkeypatch.setattr("pcdt_ingest.chunk.build_semantic_splitter", lambda **_kwargs: TwoChunkSemanticSplitter())
+    pages = [
+        PageRecord(
+            page=1,
+            markdown=(
+                "## TRATAMENTO\n"
+                "Primeiro bloco com conteúdo clínico suficiente para formar uma cauda longa. "
+                "Segundo bloco com conteúdo clínico que já está próximo do limite permitido."
+            ),
+        ),
+    ]
+
+    docs = chunk_pages_to_documents(
+        pages,
+        source_stem="pcdt_teste_overlap_limite",
+        source_pdf_rel="raw/pcdt/pcdt_teste_overlap_limite.pdf",
+        chunk_tokens=80,
+        overlap_tokens=40,
+        chars_per_token=1,
+        chunk_strategy="semantic",
+    )
+
+    assert docs
+    assert all(len(doc.page_content) <= 80 for doc in docs)

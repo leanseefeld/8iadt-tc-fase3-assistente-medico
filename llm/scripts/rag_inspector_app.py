@@ -98,7 +98,7 @@ except ModuleNotFoundError as exc:
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
 
-DEFAULT_FALLBACK_CHAT_MODEL = "gemma4:e2b"
+DEFAULT_INSPECTOR_CHAT_MODEL = "llama3.2:3b"
 
 
 @dataclass(frozen=True)
@@ -131,7 +131,7 @@ def _default_settings() -> InspectorSettings:
     return InspectorSettings(
         ollama_base_url=backend_cfg.ollama_base_url,
         ollama_embed_model=backend_cfg.ollama_embed_model,
-        ollama_chat_model=backend_cfg.ollama_chat_model,
+        ollama_chat_model=DEFAULT_INSPECTOR_CHAT_MODEL,
         chroma_persist_dir=str(chroma_dir),
         chroma_collection=backend_cfg.chroma_collection,
         retrieval_k=backend_cfg.retrieval_k,
@@ -163,24 +163,15 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _backend_settings(cfg: InspectorSettings, *, chat_model: str | None = None) -> Settings:
+def _backend_settings(cfg: InspectorSettings) -> Settings:
     return Settings(
         ollama_base_url=cfg.ollama_base_url,
         ollama_embed_model=cfg.ollama_embed_model,
-        ollama_chat_model=chat_model or cfg.ollama_chat_model,
+        ollama_chat_model=cfg.ollama_chat_model,
         chroma_persist_dir=Path(cfg.chroma_persist_dir),
         chroma_collection=cfg.chroma_collection,
         retrieval_k=int(cfg.retrieval_k),
         llm_stream_timeout_s=float(cfg.llm_stream_timeout_s),
-    )
-
-
-def _is_ollama_memory_error(exc: Exception) -> bool:
-    txt = str(exc).lower()
-    return (
-        "requires more system memory" in txt
-        or "status code: 500" in txt and "memory" in txt
-        or "insufficient memory" in txt
     )
 
 
@@ -289,15 +280,20 @@ def main() -> None:
         cfg = InspectorSettings(
             ollama_base_url=st.text_input("Ollama base URL", value=cfg0.ollama_base_url),
             ollama_embed_model=st.text_input("Modelo de embedding", value=cfg0.ollama_embed_model),
-            ollama_chat_model=st.text_input("Modelo de chat", value=cfg0.ollama_chat_model),
+            ollama_chat_model=st.text_input(
+                "Modelo de chat",
+                value=cfg0.ollama_chat_model,
+                help="Padrão do Inspector: llama3.2:3b. Baixe com `ollama pull llama3.2:3b`.",
+            ),
             chroma_persist_dir=st.text_input("Chroma persist dir", value=cfg0.chroma_persist_dir),
             chroma_collection=st.text_input("Chroma collection", value=cfg0.chroma_collection),
             retrieval_k=st.number_input("k (retrieval)", min_value=1, max_value=50, value=int(cfg0.retrieval_k), step=1),
             llm_stream_timeout_s=st.number_input("Timeout LLM (s)", min_value=5.0, max_value=600.0, value=float(cfg0.llm_stream_timeout_s), step=5.0),
         )
-        auto_fallback_model = st.checkbox("Fallback automático para modelo leve", value=True)
-        fallback_model_name = st.text_input("Modelo fallback (nome)", value=DEFAULT_FALLBACK_CHAT_MODEL)
-        st.caption("Dica: o path default do Chroma é `vectorstore/chroma` na raiz do repositório.")
+        st.caption(
+            "Dica: o path default do Chroma é `vectorstore/chroma` na raiz do repositório. "
+            "O Inspector usa `llama3.2:3b` por padrão para geração."
+        )
 
     tab_run, tab_vectorstore, tab_export = st.tabs(["Executar & inspecionar", "Vectorstore", "Exportar JSON"])
 
@@ -382,7 +378,6 @@ def main() -> None:
             retrieved: list[tuple[Document, float]] = []
             answer_text: str | None = None
             generation_model_used: str | None = None
-            generation_fallback_used = False
             prompt_messages: list[dict[str, str]] | None = None
             context_text: str | None = None
             final_state: dict[str, Any] = {
@@ -474,35 +469,7 @@ def main() -> None:
                     generation_model_used = cfg.ollama_chat_model
                     timing = replace(timing, generate_ms=(time.perf_counter() - t0) * 1000.0)
                 except Exception as exc:
-                    if auto_fallback_model and _is_ollama_memory_error(exc) and fallback_model_name.strip():
-                        try:
-                            fallback_name = fallback_model_name.strip()
-                            fallback_settings = _backend_settings(cfg, chat_model=fallback_name)
-                            t0 = time.perf_counter()
-                            with st.status(
-                                f"Modelo principal sem memória; tentando fallback `{fallback_name}`...",
-                                expanded=False,
-                            ):
-                                generate_out = cast(
-                                    dict[str, Any],
-                                    _run_async(generate_node(cast(Any, final_state), fallback_settings)),
-                                )
-                            final_state.update(generate_out)
-                            answer_text = str(final_state.get("answer") or "")
-                            generation_model_used = fallback_name
-                            generation_fallback_used = True
-                            timing = replace(timing, generate_ms=(time.perf_counter() - t0) * 1000.0)
-                            errors.append(
-                                "Modelo principal sem memória; resposta gerada com fallback "
-                                f"`{fallback_name}`."
-                            )
-                        except Exception as fallback_exc:
-                            errors.append(
-                                "Falha na geração do backend: "
-                                f"{exc!s}. Fallback `{fallback_model_name.strip()}` também falhou: {fallback_exc!s}"
-                            )
-                    else:
-                        errors.append(f"Falha na geração do backend: {exc!s}")
+                    errors.append(f"Falha na geração do backend com `{cfg.ollama_chat_model}`: {exc!s}")
 
             if run_guardrail and answer_text:
                 try:
@@ -562,7 +529,6 @@ def main() -> None:
                     "answer": answer_text or "",
                     "model_requested": cfg.ollama_chat_model,
                     "model_used": generation_model_used or "",
-                    "fallback_used": generation_fallback_used,
                 },
                 "timing": asdict(timing),
                 "errors": errors,
@@ -663,10 +629,7 @@ def main() -> None:
                 st.info("Geração LLM desabilitada nesta execução (modo foco RAG ou opção manual).")
             else:
                 if requested:
-                    if gen.get("fallback_used"):
-                        st.caption(f"Modelo solicitado: `{requested}` | modelo usado: `{used}` (fallback)")
-                    else:
-                        st.caption(f"Modelo usado: `{used or requested}`")
+                    st.caption(f"Modelo usado: `{used or requested}`")
                 if backend_state.get("guardrail_status"):
                     st.caption(
                         "Guardrail: "

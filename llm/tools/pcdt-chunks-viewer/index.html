@@ -272,14 +272,40 @@
         background: var(--surface);
         border: 1px solid var(--border);
         border-radius: 5px;
-        padding: 0.38rem 0.5rem;
+        padding: 0.24rem 0.4rem;
         font-size: 0.78rem;
         white-space: pre-wrap;
         word-break: break-word;
-        line-height: 1.36;
+        line-height: 1.28;
       }
       .field-block--tight {
-        padding: 0.3rem 0.45rem;
+        padding: 0.22rem 0.38rem;
+      }
+      .field-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.22rem;
+      }
+      .field-chip {
+        display: inline-block;
+        max-width: 100%;
+        padding: 0.1rem 0.32rem;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg);
+        word-break: break-word;
+      }
+      .source-label {
+        display: inline-block;
+        margin-left: 0.35rem;
+        padding: 0.08rem 0.28rem;
+        border-radius: 3px;
+        background: rgba(88, 166, 255, 0.12);
+        color: var(--accent);
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        vertical-align: middle;
       }
       .chunk-text {
         max-height: min(52vh, 30rem);
@@ -659,11 +685,48 @@
           return String(val);
         }
 
+        function hasMetadataValue(val) {
+          if (val === null || val === undefined) return false;
+          if (Array.isArray(val)) return val.some((v) => hasMetadataValue(v));
+          return String(val).trim().length > 0;
+        }
+
+        function normalizeToArray(val) {
+          if (!hasMetadataValue(val)) return [];
+          if (Array.isArray(val)) {
+            return val
+              .map((v) => String(v ?? "").trim())
+              .filter(Boolean);
+          }
+          return String(val)
+            .split("|")
+            .map((v) => v.trim())
+            .filter(Boolean);
+        }
+
+        function renderMetadataList(val) {
+          const values = normalizeToArray(val);
+          if (!values.length) return "—";
+          return `<div class="field-list">${values
+            .map((v) => `<span class="field-chip">${escapeHtml(v)}</span>`)
+            .join("")}</div>`;
+        }
+
         const SHOWN_BEFORE_OTHERS = new Set([
           "header_1",
           "header_2",
           "section",
           "disease",
+          "disease_normalized",
+          "diretriz",
+          "formato",
+          "cid10_codes",
+          "cid10_descriptions",
+          "medicamentos",
+          "portarias",
+          "datas_portaria",
+          "descricao_siglas",
+          "metadata_source",
         ]);
 
         function renderChunk(chunk) {
@@ -672,6 +735,14 @@
           const h2 = meta.header_2;
           const sec = meta.section;
           const disease = meta.disease;
+          const diretriz = meta.diretriz;
+          const formato = meta.formato;
+          const cid10Codes = meta.cid10_codes;
+          const cid10Descriptions = meta.cid10_descriptions;
+          const medicamentos = meta.medicamentos;
+          const portarias = meta.portarias;
+          const datasPortaria = meta.datas_portaria;
+          const descricaoSiglas = meta.descricao_siglas;
           const text = chunk.text ?? "";
 
           const otherKeys = Object.keys(meta).filter((k) => !SHOWN_BEFORE_OTHERS.has(k));
@@ -706,16 +777,63 @@
               <div class="field-block">${sec != null && String(sec).trim() ? escapeHtml(String(sec)) : "—"}</div>
             </section>
             <section>
-              <h3>Doença / condição</h3>
-              <div class="field-block">
-                ${disease != null && String(disease).trim() ? escapeHtml(String(disease)) : "—"}
-              </div>
-            </section>
-            <section>
               <h3>Texto</h3>
               <p class="chunk-wordcount">Palavras: ${wc}</p>
               ${textBodyHtml}
             </section>
+            <section>
+              <h3>Doença / condição</h3>
+              <div class="field-block">${disease != null && String(disease).trim() ? escapeHtml(String(disease)) : "—"}</div>
+            </section>
+            ${
+              hasMetadataValue(diretriz) || hasMetadataValue(formato)
+                ? `<section>
+              <h3>Diretriz Conitec</h3>
+              <div class="field-block">
+                ${hasMetadataValue(diretriz) ? escapeHtml(String(diretriz)) : "—"}
+                ${hasMetadataValue(formato) ? `<br><small>Formato: ${escapeHtml(formatMetadataValue(formato))}</small>` : ""}
+              </div>
+            </section>`
+                : ""
+            }
+            ${
+              hasMetadataValue(cid10Codes) || hasMetadataValue(cid10Descriptions)
+                ? `<section>
+              <h3>CID-10</h3>
+              <div class="field-block">
+                ${renderMetadataList(cid10Codes)}
+                ${hasMetadataValue(cid10Descriptions) ? `<div style="margin-top:0.35rem">${renderMetadataList(cid10Descriptions)}</div>` : ""}
+              </div>
+            </section>`
+                : ""
+            }
+            ${
+              hasMetadataValue(medicamentos)
+                ? `<section>
+              <h3>Medicamentos</h3>
+              <div class="field-block">${renderMetadataList(medicamentos)}</div>
+            </section>`
+                : ""
+            }
+            ${
+              hasMetadataValue(portarias) || hasMetadataValue(datasPortaria)
+                ? `<section>
+              <h3>Portaria</h3>
+              <div class="field-block">
+                ${hasMetadataValue(portarias) ? renderMetadataList(portarias) : "—"}
+                ${hasMetadataValue(datasPortaria) ? `<div style="margin-top:0.35rem"><small>Datas: ${escapeHtml(formatMetadataValue(datasPortaria))}</small></div>` : ""}
+              </div>
+            </section>`
+                : ""
+            }
+            ${
+              hasMetadataValue(descricaoSiglas)
+                ? `<section>
+              <h3>Siglas</h3>
+              <div class="field-block">${renderMetadataList(descricaoSiglas)}</div>
+            </section>`
+                : ""
+            }
             ${
               otherKeys.length
                 ? `<section>
