@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import time
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.generate import _build_llm
 from assistente_medico_api.graph.state import ChatRAGState
+from assistente_medico_api.observability.audit import audit, truncate
 
 _REWRITE_SYSTEM = """\
 Você reformula a última pergunta do médico como uma única consulta autocontida para busca \
@@ -35,15 +38,38 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
     Define retrieval_query: cópia da pergunta atual se não há histórico; caso contrário, LLM
     condensa pergunta + histórico numa string de busca.
     """
+    pid = state.get("patient_id") or None
+    t0 = time.perf_counter()
+
     query = (state.get("query") or "").strip()
     steps = list(state.get("reasoning_steps") or [])
     if not query:
         steps.append("Reescrita: pergunta vazia — sem consulta de busca.")
+        audit(
+            "rag_rewrite_done",
+            kind="rag",
+            latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+            patient_id=pid,
+            query_snippet="",
+            retrieval_query_snippet="",
+            used_history=False,
+            note="empty_query",
+        )
         return {"retrieval_query": "", "reasoning_steps": steps}
 
     hist = state.get("chat_history") or []
     if not hist:
         steps.append("Busca: sem histórico — usada pergunta literal na recuperação.")
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        audit(
+            "rag_rewrite_done",
+            kind="rag",
+            latency_ms=latency_ms,
+            patient_id=pid,
+            query_snippet=truncate(query),
+            retrieval_query_snippet=truncate(query),
+            used_history=False,
+        )
         return {"retrieval_query": query, "reasoning_steps": steps}
 
     transcript = _history_transcript(state)
@@ -63,9 +89,30 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
         if not raw:
             raise ValueError("resposta vazia do modelo")
         steps.append("Busca: pergunta reescrita com o histórico para recuperação.")
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        audit(
+            "rag_rewrite_done",
+            kind="rag",
+            latency_ms=latency_ms,
+            patient_id=pid,
+            query_snippet=truncate(query),
+            retrieval_query_snippet=truncate(raw),
+            used_history=True,
+        )
         return {"retrieval_query": raw, "reasoning_steps": steps}
     except Exception:
         steps.append(
             "Busca: falha na reescrita — usada pergunta literal na recuperação."
+        )
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        audit(
+            "rag_rewrite_done",
+            kind="rag",
+            latency_ms=latency_ms,
+            patient_id=pid,
+            query_snippet=truncate(query),
+            retrieval_query_snippet=truncate(query),
+            used_history=True,
+            note="rewrite_failed_fallback_literal",
         )
         return {"retrieval_query": query, "reasoning_steps": steps}

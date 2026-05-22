@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import time
+
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.state import ChatRAGState
+from assistente_medico_api.observability.audit import audit, truncate
 
 
 def format_source_label(doc: Document) -> str:
@@ -42,6 +45,8 @@ def retrieve_node(
 
     Síncrono para poder ser executado em asyncio.to_thread no endpoint.
     """
+    pid = state.get("patient_id") or None
+    t0 = time.perf_counter()
     query = (state.get("retrieval_query") or state.get("query") or "").strip()
     k = settings.retrieval_k
     pairs = store.similarity_search_with_score(query, k=k)
@@ -57,6 +62,19 @@ def retrieve_node(
         reasoning_steps.append(f"Fragmentos de: {', '.join(stems)}.")
     else:
         reasoning_steps.append("Nenhum fragmento acima do limiar retornado.")
+
+    latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+    stems_list = sorted({d.metadata.get("source_stem", "?") for d in docs}) if docs else []
+    audit(
+        "rag_retrieve_done",
+        kind="rag",
+        latency_ms=latency_ms,
+        patient_id=pid,
+        retrieval_query_snippet=truncate(query),
+        retrieved_count=len(docs),
+        source_stems=stems_list,
+        top_k=k,
+    )
 
     return {
         "retrieved_docs": docs,

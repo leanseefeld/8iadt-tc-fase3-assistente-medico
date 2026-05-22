@@ -1,11 +1,11 @@
-import { API_BASE_URL } from '@/api/client';
+import { apiFetch, API_BASE_URL } from '@/api/client';
 import type { SuggestedActionItem } from '@/types/domain';
 
 export async function createSuggestedItemHttp(
   patientId: string,
   input: Pick<SuggestedActionItem, 'type' | 'description'>,
 ): Promise<SuggestedActionItem> {
-  const res = await fetch(`${API_BASE_URL}/patients/${patientId}/suggested-items`, {
+  const res = await apiFetch(`${API_BASE_URL}/patients/${patientId}/suggested-items`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(input),
@@ -21,7 +21,7 @@ export async function patchSuggestedItemHttp(
   itemId: string,
   patch: Partial<Pick<SuggestedActionItem, 'status' | 'description'>>,
 ): Promise<SuggestedActionItem> {
-  const res = await fetch(`${API_BASE_URL}/patients/${patientId}/suggested-items/${itemId}`, {
+  const res = await apiFetch(`${API_BASE_URL}/patients/${patientId}/suggested-items/${itemId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(patch),

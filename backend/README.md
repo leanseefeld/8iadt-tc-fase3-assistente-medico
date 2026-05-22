@@ -50,6 +50,34 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `MEDICO_CHROMA_COLLECTION`  | `pcdt`                   | Nome da coleção                                                                         |
 | `MEDICO_RETRIEVAL_K`        | `6`                      | Top-k na recuperação                                                                    |
 | `MEDICO_DATABASE_URL`       | `sqlite+aiosqlite:///./assistente_medico.db` | URL do banco (SQLite assíncrono por padrão)                              |
+| `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para `assistente_medico.jsonl` |
+| `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível efetivo dos loggers `assistente_medico.*` (ex.: `DEBUG`, `INFO`)                    |
+
+## Logging e auditoria
+
+O backend registra eventos estruturados em **JSON**, linha a linha:
+
+- **Stdout** (via handler do logger `assistente_medico`): útil com `uvicorn` e gravação pelo orquestrador.
+- **Arquivo rotativo** `assistente_medico.jsonl` em `MEDICO_LOG_DIR` (padrão `./logs` na raiz do repo; diretório criado na subida do processo).
+
+Middleware `RequestContextMiddleware`:
+
+- Lê ou gera `X-Request-Id` e devolve o mesmo id no header de resposta para correlação cliente/servidor.
+- Emite `event: http_request` com `latency_ms`, método, path HTTP e status.
+
+Eventos principais (campo `event` no JSON):
+
+- **Chat:** `chat_request_received`, `chat_response_done` (JSON ou SSE, com contagem aproximada de chunks em `tokens_streamed` no modo stream).
+- **Decision flow:** `decision_flow_run`, `decision_flow_done`.
+- **RAG (LangGraph):** `rag_rewrite_done`, `rag_retrieve_done`, `rag_generate_done`, `guardrail_*` (classificação e bloqueios).
+- **Clínico:** `prescription_created`, `prescription_archived`, `clinical_alert_created`, `vitals_recorded`, `vitals_critical_detected`, `exam_status_changed`, `exam_attachment_uploaded`, etc.
+
+Consulta rápida (exemplos):
+
+```bash
+grep '"event":"guardrail_blocked"' logs/assistente_medico.jsonl
+grep '"event":"chat_response_done"' logs/assistente_medico.jsonl | head
+```
 
 ## Configurar SQLite
 

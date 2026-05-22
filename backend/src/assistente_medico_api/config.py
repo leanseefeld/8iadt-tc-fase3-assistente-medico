@@ -38,6 +38,14 @@ class Settings(BaseSettings):
         default=120.0,
         description="Timeout (segundos) para o streaming do nó de geração via Ollama.",
     )
+    log_dir: Path = Field(
+        default=Path("./logs"),
+        description="Diretório para arquivo rotativo JSONL de auditoria (relativo ao repositório se não absoluto).",
+    )
+    log_level: str = Field(
+        default="INFO",
+        description="Nível de log efetivo (ex.: INFO, DEBUG) para pacote assistente_medico.*.",
+    )
 
 def resolve_runtime_path(path: Path) -> Path:
     """Resolve paths relativos da configuração a partir da raiz do repositório."""

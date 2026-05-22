@@ -1,7 +1,7 @@
 /**
  * Transporte HTTP para endpoints do assistente.
  */
-import { API_BASE_URL } from '@/api/client';
+import { apiFetch, API_BASE_URL } from '@/api/client';
 import type { ChatResponse, DecisionFlowResponse } from '@/types/domain';
 import {
   consumeAssistantChatSse,
@@ -42,7 +42,7 @@ export async function postAssistantChatMock(
   );
 
   if (useSse) {
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -58,7 +58,7 @@ export async function postAssistantChatMock(
     return consumeAssistantChatSse(res, options);
   }
 
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -92,7 +92,7 @@ async function parseHttpErrorDetail(res: Response): Promise<string> {
 export async function postAssistantDecisionFlowMock(
   patientId: string,
 ): Promise<DecisionFlowResponse> {
-  const res = await fetch(`${API_BASE_URL}/assistant/decision-flow`, {
+  const res = await apiFetch(`${API_BASE_URL}/assistant/decision-flow`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

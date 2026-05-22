@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '@/api/client';
+import { apiFetch, API_BASE_URL } from '@/api/client';
 import type { Alert } from '@/types/alert';
 
 export async function getAlertsHttp(params?: {
@@ -21,7 +21,7 @@ export async function getAlertsHttp(params?: {
     url.searchParams.set('team', params.team);
   }
 
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) {
@@ -31,7 +31,7 @@ export async function getAlertsHttp(params?: {
 }
 
 export async function getAlertByIdHttp(id: string): Promise<Alert | null> {
-  const res = await fetch(`${API_BASE_URL}/alerts/${id}`, {
+  const res = await apiFetch(`${API_BASE_URL}/alerts/${id}`, {
     headers: { Accept: 'application/json' },
   });
   if (res.status === 404) {
@@ -47,7 +47,7 @@ export async function patchAlertHttp(
   id: string,
   patch: { resolved?: boolean },
 ): Promise<Alert | null> {
-  const res = await fetch(`${API_BASE_URL}/alerts/${id}`, {
+  const res = await apiFetch(`${API_BASE_URL}/alerts/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(patch),
@@ -64,7 +64,7 @@ export async function patchAlertHttp(
 export async function createAlertHttp(
   input: Omit<Alert, 'id' | 'createdAt'>,
 ): Promise<Alert> {
-  const res = await fetch(`${API_BASE_URL}/alerts`, {
+  const res = await apiFetch(`${API_BASE_URL}/alerts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({

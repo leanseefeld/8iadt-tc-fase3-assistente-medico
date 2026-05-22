@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import httpx
 from langchain_core.messages import (
     AIMessage,
@@ -14,6 +16,7 @@ from langchain_ollama import ChatOllama
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.retrieve import format_context_block
 from assistente_medico_api.graph.state import ChatRAGState
+from assistente_medico_api.observability.audit import audit, truncate
 
 # Persona e limites de segurança para o assistente (pt-BR).
 _SYSTEM_PROMPT = """\
@@ -71,6 +74,10 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
     Nó assíncrono do grafo: acumula tokens via astream para que
     graph.astream_events() emita eventos on_chat_model_stream por token.
     """
+    pid = state.get("patient_id") or None
+    t0 = time.perf_counter()
+    docs = state.get("retrieved_docs") or []
+
     llm = _build_llm(settings)
     messages = _build_messages(state)
 
@@ -87,6 +94,18 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
             chunks.append(str(piece))
 
     ans = "".join(chunks)
+    stems = sorted({d.metadata.get("source_stem", "?") for d in docs}) if docs else []
+    latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+    audit(
+        "rag_generate_done",
+        kind="rag",
+        latency_ms=latency_ms,
+        patient_id=pid,
+        query_snippet=truncate(state.get("query") or ""),
+        answer_chars=len(ans),
+        retrieved_count=len(docs),
+        source_stems=stems,
+    )
     # Histórico atualizado no guardrail_node, que conhece a resposta final
     # (pode ter sido substituída ou modificada pelo guardrail).
     return {"answer": ans}

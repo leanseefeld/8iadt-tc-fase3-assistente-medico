@@ -5,7 +5,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import re
-from datetime import UTC, datetime
+import time
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -13,9 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.generate import _build_llm
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
-
-# Logger dedicado; rastreável com: grep "guardrail_block" nos logs.
-_logger = logging.getLogger("assistente_medico.guardrail")
+from assistente_medico_api.observability.audit import audit, truncate
 
 GuardrailVerdict = Literal["SEGURO", "AVISO", "BLOQUEAR"]
 
@@ -134,25 +132,29 @@ async def _regenerate_strict(state: ChatRAGState, settings: Settings) -> str:
     return str(content).strip()
 
 
-def _emit_log(
-    event: str, patient_id: str, query: str, answer: str, reason: str
+def _audit_guardrail(
+    *,
+    event: str,
+    level: int,
+    patient_id: str | None,
+    query: str,
+    answer: str,
+    reason: str,
+    classifier_verdict: str,
+    latency_ms: float,
 ) -> None:
-    """Emite log estruturado (JSON) no logger dedicado de guardrail."""
-    record = {
-        "event": event,
-        "patient_id": patient_id,
-        "query_snippet": query[:120],
-        "answer_snippet": answer[:200],
-        "reason": reason,
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
-    # WARNING+ para eventos de bloqueio; INFO para avisos; DEBUG para passagem segura.
-    if "blocked" in event:
-        _logger.warning(_json.dumps(record, ensure_ascii=False))
-    elif "warn" in event:
-        _logger.info(_json.dumps(record, ensure_ascii=False))
-    else:
-        _logger.debug(_json.dumps(record, ensure_ascii=False))
+    """Registra evento de guardrail com JSON unificado (sem conteúdo completo)."""
+    audit(
+        event,
+        kind="rag.guardrail",
+        level=level,
+        latency_ms=latency_ms,
+        patient_id=patient_id,
+        query_snippet=truncate(query),
+        answer_snippet=truncate(answer),
+        reason=truncate(reason, 240),
+        classifier_verdict=classifier_verdict,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -171,17 +173,31 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
     4. BLOQUEAR → tenta regenerar com prompt restritivo (1 tentativa);
                   se ainda bloqueado → substitui por mensagem padrão segura.
     """
+    t0 = time.perf_counter()
     original_answer = state.get("answer") or ""
-    patient_id = state.get("patient_id") or ""
+    patient_id_raw = state.get("patient_id") or ""
+    patient_id = patient_id_raw or None
     query = state.get("query") or ""
     steps = list(state.get("reasoning_steps") or [])
     hist = list(state.get("chat_history") or [])
+
+    def _elapsed_ms() -> float:
+        return round((time.perf_counter() - t0) * 1000, 2)
 
     # --- Classificação: LLM com fallback determinístico ---
     try:
         verdict, reason = await _classify_with_llm(original_answer, settings)
     except Exception as exc:
-        _logger.warning("guardrail_llm_classify_failed; usando keywords. erro=%s", exc)
+        audit(
+            "guardrail_classifier_failed",
+            kind="rag.guardrail",
+            level=logging.WARNING,
+            patient_id=patient_id,
+            latency_ms=_elapsed_ms(),
+            query_snippet=truncate(query),
+            answer_snippet=truncate(original_answer),
+            error=truncate(str(exc), 240),
+        )
         blocked, kw_reason = _check_with_keywords(original_answer)
         verdict = "BLOQUEAR" if blocked else "SEGURO"
         reason = kw_reason or "classificação por keywords (LLM indisponível)"
@@ -193,18 +209,45 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
     if verdict == "SEGURO":
         guardrail_status = "safe"
         steps.append("Guardrail: resposta classificada como segura.")
-        _emit_log("guardrail_safe", patient_id, query, original_answer, reason)
+        _audit_guardrail(
+            event="guardrail_safe",
+            level=logging.DEBUG,
+            patient_id=patient_id,
+            query=query,
+            answer=original_answer,
+            reason=reason,
+            classifier_verdict=verdict,
+            latency_ms=_elapsed_ms(),
+        )
 
     elif verdict == "AVISO":
         guardrail_status = "warned"
         final_answer = original_answer + _DISCLAIMER
         steps.append("Guardrail: disclaimer adicionado à resposta.")
-        _emit_log("guardrail_warned", patient_id, query, original_answer, reason)
+        _audit_guardrail(
+            event="guardrail_warned",
+            level=logging.INFO,
+            patient_id=patient_id,
+            query=query,
+            answer=original_answer,
+            reason=reason,
+            classifier_verdict=verdict,
+            latency_ms=_elapsed_ms(),
+        )
 
     else:
         # --- BLOQUEAR: tenta regeneração com prompt mais restritivo ---
         steps.append(f"Guardrail: resposta bloqueada ({reason}). Tentando regenerar.")
-        _emit_log("guardrail_blocked", patient_id, query, original_answer, reason)
+        _audit_guardrail(
+            event="guardrail_blocked",
+            level=logging.WARNING,
+            patient_id=patient_id,
+            query=query,
+            answer=original_answer,
+            reason=reason,
+            classifier_verdict=verdict,
+            latency_ms=_elapsed_ms(),
+        )
 
         try:
             regen = await _regenerate_strict(state, settings)
@@ -221,18 +264,45 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
                 guardrail_status = "blocked"
                 final_answer = _SAFE_BLOCKED_MESSAGE
                 steps.append("Guardrail: regeneração também bloqueada — mensagem padrão exibida.")
-                _emit_log("guardrail_regen_blocked", patient_id, query, regen, regen_reason)
+                _audit_guardrail(
+                    event="guardrail_regen_blocked",
+                    level=logging.WARNING,
+                    patient_id=patient_id,
+                    query=query,
+                    answer=regen,
+                    reason=regen_reason,
+                    classifier_verdict=regen_verdict,
+                    latency_ms=_elapsed_ms(),
+                )
             else:
                 guardrail_status = "regenerated"
                 final_answer = regen
                 steps.append("Guardrail: resposta substituída por versão regenerada mais segura.")
-                _emit_log("guardrail_regenerated", patient_id, query, regen, regen_reason)
+                _audit_guardrail(
+                    event="guardrail_regenerated",
+                    level=logging.INFO,
+                    patient_id=patient_id,
+                    query=query,
+                    answer=regen,
+                    reason=regen_reason,
+                    classifier_verdict=regen_verdict,
+                    latency_ms=_elapsed_ms(),
+                )
 
         except Exception as regen_exc:
             guardrail_status = "blocked"
             final_answer = _SAFE_BLOCKED_MESSAGE
             steps.append("Guardrail: regeneração falhou — mensagem padrão exibida.")
-            _emit_log("guardrail_regen_blocked", patient_id, query, "", str(regen_exc))
+            _audit_guardrail(
+                event="guardrail_regen_blocked",
+                level=logging.WARNING,
+                patient_id=patient_id,
+                query=query,
+                answer="",
+                reason=str(regen_exc),
+                classifier_verdict="BLOQUEAR",
+                latency_ms=_elapsed_ms(),
+            )
 
     # Atualiza histórico com a resposta final (pós-guardrail) para que turnos
     # futuros usem o conteúdo efetivamente entregue ao médico.

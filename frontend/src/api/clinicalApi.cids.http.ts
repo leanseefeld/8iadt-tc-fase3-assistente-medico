@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '@/api/client';
+import { apiFetch, API_BASE_URL } from '@/api/client';
 import type { Cid } from '@/types/domain';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -12,7 +12,7 @@ export async function getCidListHttp(): Promise<Cid[]> {
     return cache;
   }
 
-  const res = await fetch(`${API_BASE_URL}/cids`, {
+  const res = await apiFetch(`${API_BASE_URL}/cids`, {
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) {

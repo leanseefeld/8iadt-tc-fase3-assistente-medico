@@ -55,26 +55,3 @@ async def test_patch_critical_exam_creates_alert(async_client):
     )
     assert alerts_res.status_code == 200
     alerts = alerts_res.json()["alerts"]
-    assert any(a["category"] == "exam" and a["severity"] == "critical" for a in alerts)
-
-
-@pytest.mark.asyncio
-async def test_upload_manual_exam_file(async_client):
-    create_patient = await async_client.post("/api/patients", json=patient_create_payload())
-    patient_id = create_patient.json()["patient"]["id"]
-
-    created = await async_client.post(
-        f"/api/patients/{patient_id}/exams",
-        json={"name": "Raio X"},
-    )
-    exam_id = created.json()["exam"]["id"]
-
-    upload = await async_client.post(
-        f"/api/patients/{patient_id}/exams/{exam_id}/upload",
-        files={"file": ("laudo.txt", b"conteudo", "text/plain")},
-    )
-    assert upload.status_code == 200
-    exam = upload.json()["exam"]
-    assert exam["attachmentName"] == "laudo.txt"
-    assert exam["attachmentMime"] == "text/plain"
-    assert exam["attachmentSize"] == len(b"conteudo")

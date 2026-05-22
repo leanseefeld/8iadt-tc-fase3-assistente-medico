@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '@/api/client';
+import { apiFetch, API_BASE_URL } from '@/api/client';
 import type {
   CreatePatientRequestBody,
   Patient,
@@ -31,7 +31,7 @@ export async function getPatientsHttp(params?: {
     url.searchParams.set('q', params.q);
   }
 
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  const res = await apiFetch(url, { headers: { Accept: 'application/json' } });
   if (!res.ok) {
     throw new Error(`Falha ao listar pacientes: HTTP ${res.status}`);
   }
@@ -43,7 +43,7 @@ export async function searchPatientsHttp(query: string): Promise<Patient[]> {
 }
 
 export async function createPatientHttp(body: CreatePatientRequestBody): Promise<Patient> {
-  const res = await fetch(`${API_BASE_URL}/patients`, {
+  const res = await apiFetch(`${API_BASE_URL}/patients`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(normalizeCreateBody(body)),
@@ -55,7 +55,7 @@ export async function createPatientHttp(body: CreatePatientRequestBody): Promise
 }
 
 export async function getPatientByIdHttp(id: string): Promise<Patient | null> {
-  const res = await fetch(`${API_BASE_URL}/patients/${id}`, {
+  const res = await apiFetch(`${API_BASE_URL}/patients/${id}`, {
     headers: { Accept: 'application/json' },
   });
   if (res.status === 404) {
@@ -68,7 +68,7 @@ export async function getPatientByIdHttp(id: string): Promise<Patient | null> {
 }
 
 export async function getPatientVitalsHistoryHttp(id: string): Promise<VitalSigns[]> {
-  const res = await fetch(`${API_BASE_URL}/patients/${id}/vitals-history`, {
+  const res = await apiFetch(`${API_BASE_URL}/patients/${id}/vitals-history`, {
     headers: { Accept: 'application/json' },
   });
   if (res.status === 404) {
@@ -84,7 +84,7 @@ export async function patchPatientHttp(
   id: string,
   patch: PatchPatientBody,
 ): Promise<Patient | null> {
-  const res = await fetch(`${API_BASE_URL}/patients/${id}`, {
+  const res = await apiFetch(`${API_BASE_URL}/patients/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(patch),
@@ -102,7 +102,7 @@ export async function patchVitalsHttp(
   id: string,
   patch: Partial<VitalSigns>,
 ): Promise<Patient | null> {
-  const res = await fetch(`${API_BASE_URL}/patients/${id}/vitals`, {
+  const res = await apiFetch(`${API_BASE_URL}/patients/${id}/vitals`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(patch),
@@ -117,7 +117,7 @@ export async function patchVitalsHttp(
 }
 
 export async function reAdmitPatientHttp(patientId: string): Promise<Patient | null> {
-  const res = await fetch(`${API_BASE_URL}/patients/${patientId}/readmit`, {
+  const res = await apiFetch(`${API_BASE_URL}/patients/${patientId}/readmit`, {
     method: 'POST',
     headers: { Accept: 'application/json' },
   });

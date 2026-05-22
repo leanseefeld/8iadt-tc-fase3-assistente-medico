@@ -28,6 +28,8 @@ from assistente_medico_api.schemas.suggested_items import (
     SuggestedItemResponse,
 )
 from assistente_medico_api.services import alert_service, patient_service
+from assistente_medico_api.observability.audit import audit
+from assistente_medico_api.observability.context import set_patient_id
 
 router = APIRouter(tags=["patients"])
 
@@ -66,6 +68,15 @@ async def create_patient(
 ) -> PatientResponse:
     patient = await patient_service.create_patient(session, body)
     await session.commit()
+    set_patient_id(patient.id)
+    audit(
+        "patient_admitted",
+        kind="clinical",
+        patient_id=patient.id,
+        patient_name=patient.name,
+        cid=patient.cid_code,
+        age=patient.age,
+    )
     return PatientResponse(patient=await patient_service.build_patient_schema(session, patient))
 
 
@@ -118,9 +129,28 @@ async def patch_vitals(
 
     new_vitals = await patient_service.append_vitals(session, patient=patient, patch=body)
 
+    audit(
+        "vitals_recorded",
+        kind="clinical",
+        patient_id=patient.id,
+        patient_name=patient.name,
+        blood_pressure=str(new_vitals.blood_pressure or ""),
+        temperature=float(new_vitals.temperature),
+        oxygen_saturation=int(new_vitals.oxygen_saturation),
+        heart_rate=int(new_vitals.heart_rate),
+    )
+
     if body.oxygen_saturation is not None:
         curr_critical = new_vitals.oxygen_saturation < 92
         if curr_critical:
+            audit(
+                "vitals_critical_detected",
+                kind="clinical",
+                patient_id=patient.id,
+                patient_name=patient.name,
+                trigger="oxygen_saturation",
+                value=int(new_vitals.oxygen_saturation),
+            )
             await alert_service.create_alert(
                 session,
                 patient.id,
@@ -133,6 +163,14 @@ async def patch_vitals(
     if body.temperature is not None:
         curr_critical = new_vitals.temperature >= 39 or new_vitals.temperature < 35
         if curr_critical:
+            audit(
+                "vitals_critical_detected",
+                kind="clinical",
+                patient_id=patient.id,
+                patient_name=patient.name,
+                trigger="temperature",
+                value=float(new_vitals.temperature),
+            )
             await alert_service.create_alert(
                 session,
                 patient.id,
@@ -145,6 +183,14 @@ async def patch_vitals(
     if body.heart_rate is not None:
         curr_critical = new_vitals.heart_rate > 120 or new_vitals.heart_rate < 45
         if curr_critical:
+            audit(
+                "vitals_critical_detected",
+                kind="clinical",
+                patient_id=patient.id,
+                patient_name=patient.name,
+                trigger="heart_rate",
+                value=int(new_vitals.heart_rate),
+            )
             await alert_service.create_alert(
                 session,
                 patient.id,
@@ -158,6 +204,15 @@ async def patch_vitals(
         curr_sys = _extract_systolic(new_vitals.blood_pressure)
         curr_critical = curr_sys is not None and curr_sys >= 180
         if curr_critical:
+            audit(
+                "vitals_critical_detected",
+                kind="clinical",
+                patient_id=patient.id,
+                patient_name=patient.name,
+                trigger="blood_pressure",
+                systolic_estimate=curr_sys,
+                bp_raw=str(new_vitals.blood_pressure or ""),
+            )
             await alert_service.create_alert(
                 session,
                 patient.id,
@@ -237,6 +292,16 @@ async def patch_exam(
             team="doctors",
         )
 
+    audit(
+        "exam_status_changed",
+        kind="clinical",
+        patient_id=patient_id,
+        exam_id=exam_id,
+        exam_name=exam.name,
+        from_status=str(previous_status),
+        to_status=str(exam.status),
+    )
+
     await session.commit()
     return ExamResponse(exam=await patient_service.exam_to_schema_with_attachments(session, exam))
 
@@ -260,6 +325,17 @@ async def upload_exam_file(
     target = uploads_dir / f"{exam.id}_{file.filename}"
     content = await file.read()
     target.write_bytes(content)
+
+    audit(
+        "exam_attachment_uploaded",
+        kind="clinical",
+        patient_id=patient_id,
+        exam_id=exam_id,
+        exam_name=exam.name,
+        filename=file.filename,
+        mime=str(file.content_type or "application/octet-stream"),
+        size_bytes=len(content),
+    )
 
     # Criar novo registro de attachment ao invés de sobrescrever
     attachment = ExamAttachment(

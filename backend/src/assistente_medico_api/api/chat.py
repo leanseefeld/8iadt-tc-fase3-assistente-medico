@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import json
+import time
 import uuid
 from typing import Annotated
 
@@ -24,6 +25,8 @@ from assistente_medico_api.schemas.chat import (
 )
 from assistente_medico_api.graph.state import ChatHistoryTurnState
 from assistente_medico_api.services.protocol_map import get_protocol_for_cid
+from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.observability.context import set_patient_id, set_thread_id
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -106,6 +109,20 @@ async def post_chat(
     initial, config, thread_id = await _invoke_payload_and_config(body, graph)
     wants_stream = bool(accept and "text/event-stream" in accept.lower())
 
+    set_thread_id(thread_id)
+    set_patient_id(body.patient_id or None)
+    t_started = time.perf_counter()
+
+    audit(
+        "chat_request_received",
+        kind="chat",
+        thread_id=thread_id,
+        patient_id=(body.patient_id or None),
+        query_snippet=truncate(body.message),
+        accept=(accept or ""),
+        stream=wants_stream,
+    )
+
     # --- Caminho JSON: usa API async (grafo contém nós async) ---
     if not wants_stream:
         try:
@@ -115,6 +132,16 @@ async def post_chat(
                 status_code=503,
                 detail=f"Falha ao executar o assistente: {exc!s}",
             ) from exc
+        audit(
+            "chat_response_done",
+            kind="chat",
+            latency_ms=round((time.perf_counter() - t_started) * 1000, 2),
+            thread_id=thread_id,
+            patient_id=(body.patient_id or None),
+            mode="json",
+            guardrail_status=final.get("guardrail_status"),
+            tokens_streamed=0,
+        )
         return ChatResponseJson(
             text=final.get("answer") or "",
             sources=list(final.get("sources") or []),
@@ -126,6 +153,21 @@ async def post_chat(
 
     # --- Caminho SSE: astream_events emite on_chat_model_stream por token ---
     async def event_gen():
+        tokens_streamed = 0
+        guard_status = None
+
+        def finalize_audit() -> None:
+            audit(
+                "chat_response_done",
+                kind="chat",
+                latency_ms=round((time.perf_counter() - t_started) * 1000, 2),
+                thread_id=thread_id,
+                patient_id=(body.patient_id or None),
+                mode="sse",
+                guardrail_status=guard_status,
+                tokens_streamed=tokens_streamed,
+            )
+
         try:
             async for event in graph.astream_events(initial, config, version="v2"):
                 kind = event["event"]
@@ -148,6 +190,7 @@ async def post_chat(
                 # BLOQUEAR/regenerated substitui por mensagem segura).
                 elif kind == "on_chain_end" and event.get("name") == "guardrail":
                     output = event["data"].get("output") or {}
+                    guard_status = output.get("guardrail_status")
                     yield {
                         "event": "guardrail",
                         "data": json.dumps(
@@ -167,6 +210,7 @@ async def post_chat(
                     if isinstance(piece, list):
                         piece = "".join(str(p) for p in piece)
                     if piece:
+                        tokens_streamed += 1
                         yield {
                             "event": "token",
                             "data": json.dumps({"content": str(piece)}),
@@ -182,7 +226,10 @@ async def post_chat(
                 "event": "error",
                 "data": json.dumps({"detail": str(exc)}),
             }
+            finalize_audit()
             return
+
+        finalize_audit()
 
     return EventSourceResponse(event_gen())
 
@@ -195,6 +242,14 @@ async def post_decision_flow(
     patient = await patient_repo.get_patient_by_id(session, body.patient_id)
     if patient is None:
         raise HTTPException(status_code=404, detail="Paciente nao encontrado")
+
+    t0 = time.perf_counter()
+    set_patient_id(body.patient_id)
+    audit(
+        "decision_flow_run",
+        kind="chat",
+        patient_id=body.patient_id,
+    )
 
     exams = await patient_repo.list_exams(session, patient.id)
     items = await patient_repo.list_suggested_items(session, patient.id)
@@ -230,5 +285,12 @@ async def post_decision_flow(
         )
     lines.append(f"[{_flow_ts(now, 4)}] Alerta enviado: equipes notificadas conforme regras")
     lines.append(f"[{_flow_ts(now, 5)}] Fluxo concluido")
+
+    audit(
+        "decision_flow_done",
+        kind="chat",
+        latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+        patient_id=body.patient_id,
+    )
 
     return DecisionFlowResponse(lines=lines, meta=meta)

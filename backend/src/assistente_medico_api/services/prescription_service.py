@@ -15,6 +15,7 @@ from assistente_medico_api.schemas.prescriptions import (
     PrescriptionItemSchema,
     PrescriptionResponse,
 )
+from assistente_medico_api.observability.audit import audit, mask_cpf, truncate
 
 
 def _items_to_db(payload: list[PrescriptionItemSchema]) -> list[dict]:
@@ -100,6 +101,18 @@ async def create_prescription(
         issued_at=datetime.now(UTC),
     )
     created = await prescription_repo.create_prescription(session, row)
+    audit(
+        "prescription_created",
+        kind="clinical",
+        patient_id=patient_id,
+        prescription_id=created.id,
+        prescriber_kind=created.prescriber_kind,
+        prescriber_crm=created.prescriber_crm or "",
+        items_count=len(request.items),
+        patient_cpf=mask_cpf(created.patient_cpf or request.patient_cpf),
+        chat_thread_id=(created.chat_thread_id or ""),
+        decision_flow_run_id=(created.decision_flow_run_id or ""),
+    )
     return prescription_to_response(created)
 
 
@@ -119,4 +132,14 @@ async def archive_prescription(
     row.archived_reason = body.reason.strip()
     row.archived_by = body.archived_by.strip()
     await prescription_repo.update_prescription(session, row)
+
+    audit(
+        "prescription_archived",
+        kind="clinical",
+        patient_id=row.patient_id,
+        prescription_id=row.id,
+        reason=truncate(str(row.archived_reason or "")),
+        archived_by=str(row.archived_by or ""),
+        prescriber_kind=row.prescriber_kind,
+    )
     return prescription_to_response(row)

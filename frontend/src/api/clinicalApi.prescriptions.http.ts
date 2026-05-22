@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '@/api/client';
+import { apiFetch, API_BASE_URL } from '@/api/client';
 import type { Prescription, PrescriptionCreateBody } from '@/types/prescription';
 
 export async function getPrescriptionsHttp(
@@ -11,7 +11,7 @@ export async function getPrescriptionsHttp(
   if (includeArchived) {
     url.searchParams.set('includeArchived', 'true');
   }
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  const res = await apiFetch(url, { headers: { Accept: 'application/json' } });
   if (!res.ok) {
     throw new Error(`Falha ao listar prescrições: HTTP ${res.status}`);
   }
@@ -23,7 +23,7 @@ export async function createPrescriptionHttp(
   patientId: string,
   body: PrescriptionCreateBody,
 ): Promise<Prescription> {
-  const res = await fetch(
+  const res = await apiFetch(
     `${API_BASE_URL}/patients/${encodeURIComponent(patientId)}/prescriptions`,
     {
       method: 'POST',
@@ -46,7 +46,7 @@ export async function createPrescriptionHttp(
 export async function getPrescriptionByIdHttp(
   prescriptionId: string,
 ): Promise<Prescription | null> {
-  const res = await fetch(
+  const res = await apiFetch(
     `${API_BASE_URL}/prescriptions/${encodeURIComponent(prescriptionId)}`,
     { headers: { Accept: 'application/json' } },
   );
@@ -64,7 +64,7 @@ export async function archivePrescriptionHttp(
   reason: string,
   archivedBy: string,
 ): Promise<Prescription> {
-  const res = await fetch(
+  const res = await apiFetch(
     `${API_BASE_URL}/prescriptions/${encodeURIComponent(prescriptionId)}/archive`,
     {
       method: 'PATCH',

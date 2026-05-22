@@ -2,6 +2,7 @@
  * Clinical API: Comorbidities endpoint (reference data for patient check-in)
  * HTTP transport for fetching comorbidity options from backend.
  */
+import { apiFetch } from '@/api/client';
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -35,7 +36,7 @@ export async function getComorbidities(): Promise<ComorbidititiesResponse> {
   }
 
   try {
-    const response = await fetch("/api/assistant/comorbidities");
+    const response = await apiFetch("/api/assistant/comorbidities");
 
     if (!response.ok) {
       throw new Error(

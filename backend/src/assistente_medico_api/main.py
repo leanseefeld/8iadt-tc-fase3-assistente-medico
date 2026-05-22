@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,21 +17,11 @@ from assistente_medico_api.api.patients import router as patients_router
 from assistente_medico_api.api.prescriptions import router as prescriptions_router
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
+from assistente_medico_api.observability.logging_setup import configure_logging
+from assistente_medico_api.observability.middleware import RequestContextMiddleware
 
 
-def _configure_guardrail_logger() -> None:
-    """Garante que o logger de guardrail emite para stdout independente do uvicorn."""
-    logger = logging.getLogger("assistente_medico.guardrail")
-    if logger.handlers:
-        return
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("%(levelname)s [guardrail] %(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = False
-
-
-_configure_guardrail_logger()
+configure_logging(Settings())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -82,6 +70,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Deve ficar como último `add_middleware` para ser a camada externa mais próxima do ASGI,
+    # capturando toda latência até a resposta.
+    app.add_middleware(RequestContextMiddleware)
     app.include_router(chat_router, prefix="/api")
     app.include_router(comorbidities_router, prefix="/api")
     app.include_router(cids_router, prefix="/api")

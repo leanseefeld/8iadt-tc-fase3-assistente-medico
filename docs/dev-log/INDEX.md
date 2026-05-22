@@ -12,6 +12,10 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ## Marcos
 
+### 2026-05-21
+
+- **logging-auditoria-estruturada** — agent:cursor — Logging JSON (stdout + arquivo rotativo `logs/assistente_medico.jsonl`), `JsonFormatter`, `RequestContextMiddleware` com `X-Request-Id`; `audit()` nos nós LangGraph, chat/decision-flow e ações clínicas (prescrições, alertas, vitals/exames/upload).
+
 ### 2026-04-26
 
 - **chat-thread-checkpointer-rewrite** — Chat: `threadId` + `MemorySaver` (`ainvoke`/`astream_events` com config); `rewrite`→`retrieve`→`generate`; `retrieval_query` e reescrita via LLM com histórico; `generate` persiste turnos no estado; resposta JSON/SSE com `threadId`; frontend guarda thread por paciente. — Revisão: `844e734` adiciona memoria de conversa do chat

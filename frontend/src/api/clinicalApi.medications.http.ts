@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '@/api/client';
+import { apiFetch, API_BASE_URL } from '@/api/client';
 import type { MedicationOption } from '@/types/domain';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -12,7 +12,7 @@ export async function getMedicationCatalogHttp(): Promise<MedicationOption[]> {
     return cache;
   }
 
-  const res = await fetch(`${API_BASE_URL}/medications`, {
+  const res = await apiFetch(`${API_BASE_URL}/medications`, {
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) {

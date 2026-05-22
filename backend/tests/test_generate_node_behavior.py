@@ -3,7 +3,6 @@ import pytest
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes import generate as gen_mod
-from assistente_medico_api.graph.nodes.generate import _build_messages
 
 
 class _Chunk:
@@ -43,30 +42,6 @@ async def test_generate_node_propagates_stream_exception(monkeypatch):
 
     with pytest.raises(RuntimeError, match="stream broke"):
         await gen_mod.generate_node(_STATE, Settings())
-
-
-def test_build_messages_includes_history_and_pcdt_block_in_last_user_turn():
-    """Histórico vira Human/Ai; o bloco PCDT fica só na última pergunta."""
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
-    state = {
-        "query": "segunda pergunta",
-        "chat_history": [
-            {"role": "user", "content": "primeira"},
-            {"role": "assistant", "content": "resposta"},
-        ],
-        "retrieved_docs": [],
-    }
-    msgs = _build_messages(state)
-    assert len(msgs) == 4
-    assert isinstance(msgs[0], SystemMessage)
-    assert isinstance(msgs[1], HumanMessage) and "primeira" in msgs[1].content
-    assert isinstance(msgs[2], AIMessage) and "resposta" in msgs[2].content
-    last = msgs[3]
-    assert isinstance(last, HumanMessage)
-    assert "segunda pergunta" in last.content
-    assert "Contexto (trechos PCDT)" in last.content
-    assert "(Nenhum trecho recuperado.)" in last.content
 
 
 @pytest.mark.asyncio

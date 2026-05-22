@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from assistente_medico_api.models.exam import Exam
 from assistente_medico_api.models.patient import Patient
 from assistente_medico_api.repositories import alert_repo
 from assistente_medico_api.schemas.alerts import Alert as AlertSchema, AlertCreateRequest
+from assistente_medico_api.observability.audit import audit, truncate
 
 
 def _new_alert_id() -> str:
@@ -36,7 +38,20 @@ async def create_alert(
         team=team,
         resolved=False,
     )
-    return await alert_repo.create_alert(session, alert)
+    created = await alert_repo.create_alert(session, alert)
+    lvl = logging.WARNING if str(severity).lower() == "critical" else logging.INFO
+    audit(
+        "clinical_alert_created",
+        kind="clinical",
+        level=lvl,
+        patient_id=patient_id,
+        alert_id=created.id,
+        severity=severity,
+        category=category,
+        team=team,
+        message_snippet=truncate(message),
+    )
+    return created
 
 
 async def generate_alerts_for_patient(
