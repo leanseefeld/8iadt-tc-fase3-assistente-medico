@@ -26,6 +26,9 @@ dependencies = [
     "ruff>=0.6",
     "tqdm>=4.67",
     "streamlit>=1.40",
+    "spacy>=3.7",
+    "scispacy>=0.6.2",
+    "rapidfuzz>=3.6",
 ]
 
 [project.optional-dependencies]

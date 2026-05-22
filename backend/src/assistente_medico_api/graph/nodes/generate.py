@@ -38,11 +38,21 @@ def _build_messages(state: ChatRAGState) -> list:
     docs = state.get("retrieved_docs") or []
     context = format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
     user_text = state.get("query") or ""
+    understanding = _format_clinical_understanding(state.get("clinical_understanding") or {})
     # Bloco PCDT só na pergunta corrente (turno final do utilizador).
     final_human = (
         f"Pergunta do médico:\n{user_text}\n\n"
+        f"Entendimento da pergunta:\n{understanding}\n\n"
         f"Contexto (trechos PCDT):\n{context}\n\n"
-        "Responda com base exclusivamente nos documentos recuperados quando aplicável."
+        "Instruções:\n"
+        "- Responda com base exclusivamente nos documentos recuperados.\n"
+        "- Use o entendimento da pergunta apenas como apoio para priorizar os documentos; não trate esse entendimento como fonte clínica.\n"
+        "- Priorize documentos cuja diretriz, doença, seção e páginas sejam compatíveis com a pergunta do médico.\n"
+        "- Se a pergunta pedir uma seção específica, como critérios de inclusão, critérios de exclusão, diagnóstico, tratamento, monitoramento ou medicamentos, priorize documentos dessa seção.\n"
+        "- Se os documentos recuperados não contiverem a informação solicitada, diga claramente que os documentos recuperados são insuficientes.\n"
+        "- Cite a diretriz, a seção e as páginas quando disponíveis.\n"
+        "- Não invente condutas, doses, critérios, contraindicações ou recomendações ausentes nos documentos.\n"
+        "- Não use conhecimento externo aos documentos recuperados.\n"
     )
     out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
     for turn in state.get("chat_history") or []:
@@ -56,6 +66,20 @@ def _build_messages(state: ChatRAGState) -> list:
             out.append(AIMessage(content=text))
     out.append(HumanMessage(content=final_human))
     return out
+
+
+def _format_clinical_understanding(understanding: dict) -> str:
+    disease = understanding.get("detected_disease") or {}
+    meds = understanding.get("detected_medications") or []
+    med_names = [str(item.get("name") or item) for item in meds if item]
+    return "\n".join(
+        [
+            f"- Intenção: {understanding.get('intent') or 'não detectada'}",
+            f"- Doença detectada: {disease.get('name') or 'nenhuma'}",
+            f"- CID explícito: {', '.join(understanding.get('detected_cid10_codes') or []) or 'nenhum'}",
+            f"- Medicamento explícito: {', '.join(med_names) or 'nenhum'}",
+        ]
+    )
 
 
 def _build_llm(settings: Settings) -> ChatOllama:

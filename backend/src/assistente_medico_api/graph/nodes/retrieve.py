@@ -65,7 +65,7 @@ def retrieve_node(
 
     catalog = _cached_conitec_catalog()
     try:
-        expansion = expand_query_with_conitec_catalog(query, catalog, max_terms=20)
+        expansion = expand_query_with_conitec_catalog(query, catalog, max_terms=10)
     except Exception as exc:
         _logger.warning("Falha na expansão da query; usando consulta original. erro=%s", exc)
         expansion = {
@@ -79,6 +79,12 @@ def retrieve_node(
         }
 
     retrieval_query = (expansion.get("expanded_query") or query).strip()
+    expansion["use_cross_encoder"] = bool(getattr(settings, "rag_use_cross_encoder_rerank", False))
+    expansion["cross_encoder_model"] = (
+        str(getattr(settings, "rag_cross_encoder_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"))
+        if expansion["use_cross_encoder"]
+        else None
+    )
     pairs = store.similarity_search_with_score(retrieval_query, k=candidates_k)
     try:
         docs = rerank_documents(
@@ -86,6 +92,11 @@ def retrieve_node(
             expanded_query=expansion,
             documents=pairs,
             final_k=final_k,
+            understanding=expansion.get("clinical_understanding") or {},
+            use_cross_encoder=bool(getattr(settings, "rag_use_cross_encoder_rerank", False)),
+            cross_encoder_model_name=str(getattr(settings, "rag_cross_encoder_model", "cross-encoder/ms-marco-MiniLM-L-6-v2")),
+            cross_encoder_top_n=int(getattr(settings, "rag_cross_encoder_top_n", 15)),
+            min_final_score=float(getattr(settings, "rag_min_final_score", -5.0)),
         )
     except Exception as exc:
         _logger.warning("Falha no reranking; usando ordem densa original. erro=%s", exc)
@@ -141,6 +152,7 @@ def retrieve_node(
         "sources": sources,
         "reasoning_steps": reasoning_steps,
         "query_expansion": expansion,
+        "clinical_understanding": expansion.get("clinical_understanding") or {},
         "rag_audit_payload": build_audit_payload(
             question=state.get("query") or "",
             expansion=expansion,

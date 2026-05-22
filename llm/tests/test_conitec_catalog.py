@@ -262,6 +262,10 @@ def test_match_source_to_disease_repairs_catalog_alias_fallbacks() -> None:
             "Manejo da Infecção pelo HIV em Crianças e Adolescentes - Módulo 1 - Diagnóstico, "
             "Manejo e Acompanhamento de Crianças Expostas ao HIV"
         ),
+        (
+            "Manejo da Infecção pelo HIV em Crianças e Adolescentes - Módulo 2 - Diagnóstico, "
+            "Manejo e Tratamento de Crianças e Adolescentes Vivendo com HIV"
+        ),
         "Hidradenite Supurativa",
         "Glaucoma",
     ]
@@ -307,6 +311,7 @@ def test_match_source_to_disease_repairs_catalog_alias_fallbacks() -> None:
         "pcdt_transtornoafetivobipolar_tipoi": "Transtorno Afetivo Bipolar do tipo I",
         "portaria-conjunta-no-41-pcdt-trombocitopenia": "Púrpura Trombocitopênica Idiopática",
         "portaria-conjunta-pcdt-diabete-melito-1": "Diabete Melito Tipo 1",
+        "pcdt-diabete-melito-tipo-2": "Diabete Melito Tipo 2",
         "portaria-conjunta-pcdt-doena-de-pompe10-08-2020": "Doença de Pompe",
         "portaria-conjunta-pcdt-uveites_saes": "Uveítes não Infecciosas",
         "portariaconjuntan14pcdttranstornododeficitdeatencaocomhiperatividadetdah": (
@@ -317,8 +322,8 @@ def test_match_source_to_disease_repairs_catalog_alias_fallbacks() -> None:
             "protocolo-clinico-e-diretrizes-terapeuticas-para-manejo-da-infeccao-pelo-hiv-em-criancas-e-"
             "adolescentes-modulo-2-diagnostico-manejo-e-tratamento-de-criancas-e-adolescentes-vivendo-"
         ): (
-            "Manejo da Infecção pelo HIV em Crianças e Adolescentes - Módulo 1 - Diagnóstico, "
-            "Manejo e Acompanhamento de Crianças Expostas ao HIV"
+            "Manejo da Infecção pelo HIV em Crianças e Adolescentes - Módulo 2 - Diagnóstico, "
+            "Manejo e Tratamento de Crianças e Adolescentes Vivendo com HIV"
         ),
         "site-de-portaria-conjunta-14_pcdthidradernite-supurativa": "Hidradenite Supurativa",
         "site_portaria-conjunta-n-11_pcdt_glaucoma_02_04_2018": "Glaucoma",

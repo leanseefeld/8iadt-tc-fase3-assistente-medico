@@ -118,6 +118,7 @@ SOURCE_DISEASE_ALIAS_NORMALIZED = {
     "transtornoafetivobipolar tipoi": "transtorno afetivo bipolar do tipo i",
     "trombocitopenia": "purpura trombocitopenica idiopatica",
     "diabete melito": "diabete melito tipo 1",
+    "diabete melito tipo 2": "diabete melito tipo 2",
     "doenca pompe10": "doenca de pompe",
     "uveites": "uveites nao infecciosas",
     "portariaconjuntan14pcdttranstornododeficitdeatencaocomhiperatividadetdah": (
@@ -125,8 +126,8 @@ SOURCE_DISEASE_ALIAS_NORMALIZED = {
     ),
     "portariaconjuntano8pcdtlipofuscinoseceroideneuronaltipo2": "lipofuscinose ceroide neuronal tipo 2",
     "manejo infeccao pelo hiv criancas adolescentes modulo 2 diagnostico manejo tratamento criancas adolescentes vivendo": (
-        "manejo da infeccao pelo hiv em criancas e adolescentes modulo 1 diagnostico manejo e acompanhamento de "
-        "criancas expostas ao hiv"
+        "manejo da infeccao pelo hiv em criancas e adolescentes modulo 2 diagnostico manejo e tratamento de "
+        "criancas e adolescentes vivendo com hiv"
     ),
     "hidradenite supurativa": "hidradenite supurativa",
     "n glaucoma": "glaucoma",
@@ -156,7 +157,15 @@ def normalize_source_for_match(source_stem: str) -> str:
     for pattern, replacement in SOURCE_TEXT_REPAIRS:
         text = pattern.sub(replacement, text)
     text = re.sub(r"\b(?:19|20)\d{2}\b", " ", text)
-    tokens = [tok for tok in text.split() if tok not in GENERIC_SOURCE_TOKENS and not tok.isdigit()]
+    tokens: list[str] = []
+    previous_kept: str | None = None
+    for tok in text.split():
+        if tok in GENERIC_SOURCE_TOKENS:
+            continue
+        if tok.isdigit() and previous_kept not in {"modulo", "tipo"}:
+            continue
+        tokens.append(tok)
+        previous_kept = tok
     return " ".join(tokens)
 
 

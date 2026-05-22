@@ -25,8 +25,11 @@ dependencies = [
     "chromadb>=0.6",
     "grandalf>=0.8",
     "simple-icd-10>=2.1.0",
+    "medspacy>=1.2",
+    "spacy>=3.7",
+    "rapidfuzz>=3.6",
+    "sentence-transformers>=3.0",
 ]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 

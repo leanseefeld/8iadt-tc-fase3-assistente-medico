@@ -21,6 +21,14 @@ pip install -e "llm[semantic]"
 ollama pull nomic-embed-text
 ```
 
+Para reconhecimento biomédico (NER + entity linking) e resolução contra o catálogo Conitec é utilizada a biblioteca `spacy`. A instalação não baixa modelos de linguagem automaticamente; recomendamos instalar um modelo spaCy em Português se desejar melhor cobertura linguística:
+
+```bash
+# instalar modelo Português (opcional)
+python -m spacy download pt_core_news_sm
+# (scispaCy models são tipicamente em inglês e opcionais)
+```
+
 Para usar o download Einstein com navegador (Playwright), instale também o Chromium:
 
 ```bash

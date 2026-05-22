@@ -167,6 +167,19 @@ def main() -> int:
             print("Instalando dependências opcionais do chunking semântico...")
             run_checked([str(venv_python), "-m", "pip", "install", "-e", f"{repo_root / 'llm'}[semantic]"], repo_root)
 
+        # Try to download recommended spaCy Portuguese model if spaCy is
+        # available in the created virtualenv. This is safe (non-fatal) and
+        # helps users who opt into the medical NLP extras to have the model
+        # ready locally.
+        try:
+            # Check if spacy is importable in the venv. This will raise if
+            # spacy is not installed yet in the venv (no fatal error).
+            run_checked([str(venv_python), "-c", "import importlib; importlib.import_module('spacy')"], repo_root)
+            print("Baixando modelo spaCy 'pt_core_news_sm' (pode demorar)...")
+            run_checked([str(venv_python), "-m", "spacy", "download", "pt_core_news_sm"], repo_root)
+        except Exception:
+            print("Aviso: spaCy não disponível no ambiente ou falha ao baixar 'pt_core_news_sm'. Para habilitar NLP médico, instale 'llm[medical-nlp]' e rode: python -m spacy download pt_core_news_sm")
+
         print("Instalando dependências do frontend...")
         run_checked(["npm", "install"], repo_root / "frontend")
 

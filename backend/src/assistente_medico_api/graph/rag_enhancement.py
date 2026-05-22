@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,75 +10,42 @@ from typing import Any, Iterable
 
 from langchain_core.documents import Document
 
+from assistente_medico_api.graph.cross_encoder_reranker import apply_cross_encoder_rerank
+from assistente_medico_api.graph.clinical_query_understanding import (
+    expand_query_for_medical_chat,
+    normalize_text_for_match,
+    understand_clinical_query,
+)
+from assistente_medico_api.graph.clinical_query_understanding import (
+    _char_ngram_embedding,
+    _cosine_similarity,
+)
+
 try:
     from pcdt_ingest.paths import data_root
     from pcdt_ingest.reference_data.conitec_catalog import (
         DEFAULT_CATALOG_RELATIVE_PATH,
-        normalize_text_for_match,
         read_catalog_jsonl,
     )
 except Exception:  # pragma: no cover - backend pode ser importado sem pacote llm instalado.
     data_root = None  # type: ignore[assignment]
     DEFAULT_CATALOG_RELATIVE_PATH = Path("processed/conitec/pcdt_catalog.jsonl")
 
-    def normalize_text_for_match(value: Any) -> str:  # type: ignore[no-redef]
-        return re.sub(r"\s+", " ", str(value or "").lower()).strip()
-
     def read_catalog_jsonl(_path: Path) -> dict[str, dict[str, Any]]:  # type: ignore[no-redef]
         return {}
 
 
-CID10_RE = re.compile(r"\b[A-Z]\d{2}(?:\.\d{1,2})?\b", re.IGNORECASE)
+_TREATMENT_INTENTS = {"tratamento", "dose", "medicamento"}
 
-SECTION_INTENT_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
-    ("criterios_inclusao", ("criterios de inclusao", "criterio de inclusao", "inclusao", "incluido", "incluidos")),
-    ("criterios_exclusao", ("criterios de exclusao", "criterio de exclusao", "exclusao", "excluido", "excluidos")),
-    ("monitoramento", ("monitoramento", "monitorizacao", "acompanhamento", "seguimento")),
-    ("diagnostico", ("diagnostico", "diagnosticar", "confirmacao diagnostica")),
-    ("tratamento", ("tratamento", "terapia", "conduta", "manejo")),
-    ("dose", ("dose", "posologia", "dosagem", "esquema terapeutico")),
-    ("medicamento", ("medicamento", "farmaco", "remedio")),
-    ("regulacao", ("regulacao", "controle", "avaliacao pelo gestor", "gestor")),
-    ("exames", ("exame", "exames", "laboratorial", "laboratoriais")),
-]
+# Legacy section-penalty lists are intentionally left empty to avoid
+# hard-coded clinical token rules dominating ranking. The catalog and
+# detected entities should guide retrieval; any section-level signals
+# must be lightweight and learned/derived rather than hardcoded.
+SECTION_PENALTIES_BY_INTENT: dict[str, dict[str, float]] = {}
 
-ADMIN_SECTION_TERMS = (
-    "regulacao",
-    "controle",
-    "avaliacao pelo gestor",
-    "referencias",
-    "metodologia",
-    "busca e avaliacao da literatura",
-)
-
-_GENERIC_TERM_TOKENS = {
-    "a",
-    "as",
-    "com",
-    "da",
-    "das",
-    "de",
-    "do",
-    "dos",
-    "e",
-    "em",
-    "no",
-    "na",
-    "para",
-    "por",
-}
-
-SECTION_BOOST_TERMS = {
-    "criterios_inclusao": ("criterios de inclusao",),
-    "criterios_exclusao": ("criterios de exclusao",),
-    "tratamento": ("tratamento", "tratamento medicamentoso"),
-    "diagnostico": ("diagnostico",),
-    "monitoramento": ("monitoramento", "monitorizacao", "acompanhamento"),
-    "dose": ("tratamento", "posologia", "dose"),
-    "medicamento": ("tratamento", "medicamento", "medicamentos"),
-    "regulacao": ("regulacao", "controle", "avaliacao pelo gestor"),
-    "exames": ("diagnostico", "exames", "laboratorial"),
-}
+# Administrative sections are not universally harmful; keep this map
+# empty to avoid removing relevant documents based on brittle lists.
+ADMIN_SECTION_PENALTIES: dict[str, float] = {}
 
 
 def _as_list(value: Any) -> list[str]:
@@ -142,124 +108,75 @@ def _catalog_entries(catalog: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _haystack_for_entry(entry: dict[str, Any]) -> str:
-    parts = [
-        entry.get("diretriz", ""),
-        entry.get("disease", ""),
-        entry.get("disease_normalized", ""),
-        entry.get("diretriz_normalized", ""),
-        *_as_list(entry.get("cid10_codes")),
-        *_as_list(entry.get("cid10_descriptions")),
-        *_as_list(entry.get("medicamentos")),
-        *_as_list(entry.get("descricao_siglas")),
-    ]
-    return " ".join(normalize_text_for_match(part) for part in parts if part)
-
-
-def _match_entry(query_norm: str, query_tokens: set[str], cid_codes: list[str], entry: dict[str, Any]) -> bool:
-    cid_values = {code.upper() for code in _as_list(entry.get("cid10_codes"))}
-    if cid_codes and any(code.upper() in cid_values for code in cid_codes):
-        return True
-
-    disease_norm = normalize_text_for_match(entry.get("disease") or entry.get("diretriz") or "")
-    if disease_norm and (disease_norm in query_norm or query_norm in disease_norm):
-        return True
-
-    haystack = _haystack_for_entry(entry)
-    if query_norm and query_norm in haystack:
-        return True
-    hay_tokens = set(haystack.split())
-    relevant_tokens = {tok for tok in query_tokens if len(tok) >= 3}
-    acronym_tokens = {tok for tok in query_tokens if 2 <= len(tok) <= 5}
-    if acronym_tokens & hay_tokens:
-        return True
-    return bool(relevant_tokens and len(relevant_tokens & hay_tokens) >= min(2, len(relevant_tokens)))
-
-
-def _detect_section_intent(query_norm: str) -> str | None:
-    for intent, patterns in SECTION_INTENT_PATTERNS:
-        if any(pattern in query_norm for pattern in patterns):
-            return intent
-    return None
-
-
 def extract_query_entities(query: str, catalog: Any | None = None) -> dict[str, Any]:
     """Extrai entidades simples da pergunta sem depender de LLM."""
-    query_norm = normalize_text_for_match(query)
-    cid10_codes = _dedupe(code.upper() for code in CID10_RE.findall(query or ""))
-    disease_terms: list[str] = []
-    medication_terms: list[str] = []
-
-    for entry in _catalog_entries(catalog):
-        disease = str(entry.get("disease") or entry.get("diretriz") or "").strip()
-        disease_norm = normalize_text_for_match(disease)
-        if disease and disease_norm and (disease_norm in query_norm or query_norm in disease_norm):
-            disease_terms.append(disease)
-        for med in _as_list(entry.get("medicamentos")):
-            med_norm = normalize_text_for_match(med)
-            med_tokens = [tok for tok in med_norm.split() if len(tok) >= 4 and tok not in _GENERIC_TERM_TOKENS]
-            if med_norm and (
-                med_norm in query_norm
-                or any(tok in query_norm.split() for tok in med_tokens[:3])
-            ):
-                medication_terms.append(med)
+    understanding = understand_clinical_query(query, catalog)
+    disease = understanding.get("detected_disease") or {}
+    medication_terms = [str(item.get("name") or "") for item in understanding.get("detected_medications") or []]
 
     return {
-        "cid10_codes": cid10_codes,
-        "disease_terms": _dedupe(disease_terms),
+        "cid10_codes": _dedupe(understanding.get("detected_cid10_codes") or []),
+        "disease_terms": _dedupe([disease.get("name")] if disease else []),
         "medication_terms": _dedupe(medication_terms),
-        "section_intent": _detect_section_intent(query_norm),
+        "section_intent": understanding.get("intent"),
     }
 
 
-def expand_query_with_conitec_catalog(query: str, catalog: Any, max_terms: int = 20) -> dict[str, Any]:
-    """Expande a query com diretriz, CID-10, medicamentos e descrições do catálogo local."""
+def expand_query_with_conitec_catalog(query: str, catalog: Any, max_terms: int = 10) -> dict[str, Any]:
+    """Expande a query do chat médico de forma restritiva e compatível com o backend."""
     original = (query or "").strip()
     if not original or not catalog:
+        understanding = understand_clinical_query(original, catalog)
         return {
             "original_query": original,
             "expanded_query": original,
+            "added_terms": [],
+            "expansion_reason": [],
             "matched_diseases": [],
             "matched_cid10_codes": [],
             "matched_medications": [],
             "matched_terms": [],
             "entities": extract_query_entities(original, catalog),
+            "clinical_understanding": understanding,
         }
 
-    query_norm = normalize_text_for_match(original)
-    query_tokens = set(query_norm.split())
-    entities = extract_query_entities(original, catalog)
+    understanding = understand_clinical_query(original, catalog)
+    expansion = expand_query_for_medical_chat(understanding, catalog, max_terms=max_terms)
+    disease = understanding.get("detected_disease") or {}
+    disease_norm = normalize_text_for_match(disease.get("normalized") or disease.get("name") or "")
     matched_entries = [
         entry
         for entry in _catalog_entries(catalog)
-        if _match_entry(query_norm, query_tokens, entities["cid10_codes"], entry)
+        if disease_norm
+        and normalize_text_for_match(entry.get("disease_normalized") or entry.get("disease") or entry.get("diretriz") or "")
+        == disease_norm
     ]
 
     matched_diseases = _dedupe(entry.get("disease") or entry.get("diretriz") for entry in matched_entries)
     matched_cids = _dedupe(code for entry in matched_entries for code in _as_list(entry.get("cid10_codes")))
-    matched_meds = _dedupe(med for entry in matched_entries for med in _as_list(entry.get("medicamentos")))
     descriptions = _dedupe(desc for entry in matched_entries for desc in _as_list(entry.get("cid10_descriptions")))
-    siglas = _dedupe(term for entry in matched_entries for term in _as_list(entry.get("descricao_siglas")))
-
-    additions = _dedupe(
-        [
-            *matched_diseases,
-            *matched_cids,
-            *descriptions,
-            *matched_meds,
-            *siglas,
-        ],
-        limit=max_terms,
+    entities = extract_query_entities(original, catalog)
+    explicit_meds = set(entities.get("medication_terms") or [])
+    include_related_meds = entities.get("section_intent") in _TREATMENT_INTENTS
+    matched_meds = _dedupe(
+        med
+        for entry in matched_entries
+        for med in _as_list(entry.get("medicamentos"))
+        if include_related_meds or med in explicit_meds
     )
-    expanded_query = " ".join(_dedupe([original, *additions]))
+
     return {
         "original_query": original,
-        "expanded_query": expanded_query or original,
+        "expanded_query": expansion["expanded_query"],
+        "added_terms": expansion["added_terms"],
+        "expansion_reason": expansion["expansion_reason"],
         "matched_diseases": matched_diseases,
         "matched_cid10_codes": matched_cids,
         "matched_medications": matched_meds,
-        "matched_terms": additions,
+        "matched_terms": expansion["added_terms"],
+        "matched_cid10_descriptions": descriptions,
         "entities": entities,
+        "clinical_understanding": understanding,
     }
 
 
@@ -283,6 +200,99 @@ def _metadata_text(metadata: dict[str, Any]) -> str:
     return normalize_text_for_match(" ".join(parts))
 
 
+def _document_disease_text(metadata: dict[str, Any]) -> str:
+    parts = []
+    for key in ("disease", "disease_normalized", "diretriz", "diretriz_normalized", "source_stem"):
+        parts.extend(_as_list(metadata.get(key)))
+    return normalize_text_for_match(" ".join(parts))
+
+
+def _doc_disease_normalized(metadata: dict[str, Any]) -> str:
+    for key in ("disease_normalized", "disease", "diretriz_normalized", "diretriz"):
+        value = metadata.get(key)
+        if value:
+            return normalize_text_for_match(value)
+    return ""
+
+
+def _document_matches_disease(metadata: dict[str, Any], disease_norm: str) -> bool:
+    doc_norm = _doc_disease_normalized(metadata)
+    if not doc_norm or not disease_norm:
+        return False
+    return doc_norm == disease_norm
+
+
+def _document_has_other_disease(metadata: dict[str, Any]) -> bool:
+    return bool(
+        metadata.get("disease")
+        or metadata.get("disease_normalized")
+        or metadata.get("diretriz")
+        or metadata.get("diretriz_normalized")
+    )
+
+
+def _reason_slug(value: Any) -> str:
+    return normalize_text_for_match(value).replace(" ", "_")
+
+
+def _detected_disease_norm(understanding: dict[str, Any]) -> str:
+    disease = understanding.get("detected_disease") or {}
+    return normalize_text_for_match(disease.get("normalized") or disease.get("name") or "")
+
+
+def _query_document_relevance(query_norm: str, text_norm: str, meta_norm: str) -> float:
+    if not query_norm:
+        return 0.0
+    target = f"{meta_norm} {text_norm}".strip()
+    if not target:
+        return 0.0
+    # Use a deterministic lightweight n-gram cosine similarity instead of
+    # RapidFuzz here. RapidFuzz use is restricted to catalog matching (see
+    # CatalogConceptResolver). This function returns a 0.0-1.0 relevance.
+    left = _char_ngram_embedding(query_norm, n=3)
+    right = _char_ngram_embedding(target, n=3)
+    sim = _cosine_similarity(left, right)
+    return min(1.0, max(0.0, float(sim)))
+
+
+def filter_documents_by_detected_disease(
+    documents: list[Any],
+    understanding: dict[str, Any],
+    *,
+    min_confidence: float = 0.90,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Aplica pós-filtro rígido por disease_normalized quando a doença é confiável."""
+    disease = understanding.get("detected_disease") or {}
+    disease_norm = _detected_disease_norm(understanding)
+    before = len(documents)
+    info = {
+        "disease_filter_applied": False,
+        "filtered_disease": disease_norm,
+        "candidate_count_before_filter": before,
+        "candidate_count_after_filter": before,
+        "disease_filter_fallback": False,
+    }
+    if not disease_norm or float(disease.get("confidence") or 0.0) < min_confidence:
+        return documents, info
+
+    kept = []
+    for item in documents:
+        doc, _score = _doc_from_pair(item)
+        if _document_matches_disease(dict(getattr(doc, "metadata", {}) or {}), disease_norm):
+            kept.append(item)
+
+    info.update(
+        {
+            "disease_filter_applied": True,
+            "candidate_count_after_filter": len(kept),
+            "disease_filter_fallback": not bool(kept),
+        }
+    )
+    if kept:
+        return kept, info
+    return documents, info
+
+
 def _doc_from_pair(item: Any) -> tuple[Document, float | None]:
     if isinstance(item, tuple) and item:
         doc = item[0]
@@ -296,29 +306,56 @@ def rerank_documents(
     expanded_query: dict[str, Any],
     documents: list[Any],
     final_k: int = 6,
+    *,
+    understanding: dict[str, Any] | None = None,
+    use_cross_encoder: bool = False,
+    cross_encoder_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    cross_encoder_top_n: int = 15,
+    min_final_score: float = -5.0,
 ) -> list[Document]:
     """Rerank heurístico explicável sobre candidatos vindos do Chroma."""
     if final_k < 1:
         return []
 
+    clinical_understanding = understanding or expanded_query.get("clinical_understanding") or {}
     entities = expanded_query.get("entities") or extract_query_entities(query)
-    query_norm = normalize_text_for_match(query)
-    cids = {code.upper() for code in (entities.get("cid10_codes") or expanded_query.get("matched_cid10_codes") or [])}
-    disease_terms = [normalize_text_for_match(t) for t in (entities.get("disease_terms") or expanded_query.get("matched_diseases") or [])]
-    medication_terms = [
+    explicit_cids = {
+        code.upper()
+        for code in (clinical_understanding.get("detected_cid10_codes") or entities.get("cid10_codes") or [])
+    }
+    expanded_cids = {
+        code.upper()
+        for code in (expanded_query.get("matched_cid10_codes") or [])
+        if code.upper() not in explicit_cids
+    }
+    detected_disease = clinical_understanding.get("detected_disease") or {}
+    disease_terms = [
         normalize_text_for_match(t)
-        for t in (entities.get("medication_terms") or expanded_query.get("matched_medications") or [])
+        for t in (
+            [detected_disease.get("normalized") or detected_disease.get("name")]
+            if detected_disease
+            else entities.get("disease_terms") or expanded_query.get("matched_diseases") or []
+        )
+        if t
     ]
-    exact_terms = [
-        normalize_text_for_match(term)
-        for term in expanded_query.get("matched_terms", [])
-        if len(normalize_text_for_match(term)) >= 3
-    ][:20]
-    intent = entities.get("section_intent")
+    explicit_medication_terms = [
+        normalize_text_for_match(item.get("name") if isinstance(item, dict) else item)
+        for item in (clinical_understanding.get("detected_medications") or entities.get("medication_terms") or [])
+    ]
+    related_medication_terms = []
+    if (clinical_understanding.get("intent") or entities.get("section_intent")) in _TREATMENT_INTENTS:
+        related_medication_terms = [
+            normalize_text_for_match(t)
+            for t in (expanded_query.get("matched_medications") or [])
+        ]
+    query_norm = normalize_text_for_match(query)
+    intent = clinical_understanding.get("intent") or entities.get("section_intent")
 
-    total = max(1, len(documents))
+    candidate_docs, filter_info = filter_documents_by_detected_disease(documents, clinical_understanding)
+    total = max(1, len(candidate_docs))
+    fallback_wrong_disease = bool(filter_info.get("disease_filter_fallback"))
     ranked: list[tuple[float, Document]] = []
-    for idx, item in enumerate(documents):
+    for idx, item in enumerate(candidate_docs):
         doc, dense_score = _doc_from_pair(item)
         metadata = dict(getattr(doc, "metadata", {}) or {})
         text = str(getattr(doc, "page_content", "") or "")
@@ -333,52 +370,111 @@ def rerank_documents(
         boost = 0.0
         penalty = 0.0
         reasons: list[str] = []
+        disease_match = False
+        section_match = False
 
         meta_cids = {code.upper() for code in _as_list(metadata.get("cid10_codes"))}
-        for cid in sorted(cids):
+        for cid in sorted(explicit_cids):
             if cid in meta_cids:
-                boost += 0.45
-                reasons.append(f"cid10_match:{cid}")
+                boost += 5.0
+                reasons.append(f"cid_explicit_match:{cid}")
             if cid and cid.lower() in text.lower():
-                boost += 0.12
-                reasons.append(f"cid10_text:{cid}")
+                boost += 5.0
+                reasons.append(f"cid_explicit_text:{cid}")
+
+        for cid in sorted(expanded_cids):
+            if cid in meta_cids:
+                if intent == "criterios_inclusao":
+                    reasons.append(f"cid_expansion_hint_ignored:{cid}")
+                else:
+                    boost += 0.5
+                    reasons.append(f"cid_expansion_hint:{cid}")
 
         for disease in disease_terms:
-            if disease and disease in meta_norm:
-                boost += 0.25
-                reasons.append(f"disease_match:{disease}")
-            elif disease and disease in source_norm:
-                boost += 0.08
-                reasons.append(f"source_disease_hint:{disease}")
+            if disease and _document_matches_disease(metadata, disease):
+                boost += 5.0
+                disease_match = True
+                reasons.append(f"disease_exact_match:{_reason_slug(disease)}")
+                if filter_info.get("disease_filter_applied") and not filter_info.get("disease_filter_fallback"):
+                    reasons.append(f"filtered_by_detected_disease:{_reason_slug(disease)}")
+                break
 
-        for med in medication_terms:
+        # If the query indicates a specific disease but this document is from
+        # another disease, penalize lightly — but do not dominate ranking with
+        # hard cutoffs. Heavier filtering should be done by
+        # `filter_documents_by_detected_disease` when confidence is high.
+        if disease_terms and _document_has_other_disease(metadata) and not disease_match:
+            penalty += 2.0 if fallback_wrong_disease else 1.0
+            doc_disease = metadata.get("disease") or metadata.get("diretriz") or metadata.get("source_stem") or "unknown"
+            reasons.append(f"penalty_other_disease:{_reason_slug(doc_disease)}")
+
+        for med in explicit_medication_terms:
             if med and med in meta_norm:
-                boost += 0.35
-                reasons.append(f"medication_match:{med}")
+                boost += 5.0
+                reasons.append(f"medication_explicit_match:{_reason_slug(med)}")
             if med and med in text_norm:
-                boost += 0.12
-                reasons.append(f"medication_text:{med}")
+                boost += 5.0
+                reasons.append(f"medication_explicit_text:{_reason_slug(med)}")
 
+        for med in related_medication_terms:
+            if med and med in meta_norm:
+                if intent == "criterios_inclusao":
+                    reasons.append(f"medication_related_hint_ignored:{_reason_slug(med)}")
+                else:
+                    boost += 0.5
+                    reasons.append(f"medication_related_hint:{_reason_slug(med)}")
+
+        # Section signals are kept but much weaker than before; they are only
+        # hints to rerank and must not dominate candidate selection.
         if intent:
-            for section_term in SECTION_BOOST_TERMS.get(str(intent), ()):
-                if section_term in section_norm:
-                    boost += 0.50
-                    reasons.append(f"section_match:{intent}")
+            if intent == "criterios_inclusao" and "criterios de inclusao" in section_norm:
+                boost += 1.0
+                section_match = True
+                reasons.append("section_intent_match:criterios_inclusao")
+            elif intent == "criterios_exclusao" and "criterios de exclusao" in section_norm:
+                boost += 1.0
+                section_match = True
+                reasons.append("section_intent_match:criterios_exclusao")
+            elif intent == "diagnostico" and "diagnostico" in section_norm:
+                boost += 0.8
+                section_match = True
+                reasons.append("section_intent_match:diagnostico")
+            elif intent == "tratamento" and "tratamento" in section_norm:
+                boost += 0.8
+                section_match = True
+                reasons.append("section_intent_match:tratamento")
+            elif intent == "medicamento" and any(term in section_norm for term in ("farmaco", "farmacos", "tratamento medicamentoso", "posologia")):
+                boost += 0.8
+                section_match = True
+                reasons.append("section_intent_match:medicamento")
+            elif intent == "monitoramento" and any(term in section_norm for term in ("monitoramento", "acompanhamento")):
+                boost += 0.8
+                section_match = True
+                reasons.append("section_intent_match:monitoramento")
+
+        # Combined disease+section signals provide a small additional signal
+        # but should not overwhelm semantic relevance.
+        if disease_match and section_match:
+            boost += 1.0
+            reasons.append("combined_disease_section_match")
+
+        query_relevance = _query_document_relevance(query_norm, text_norm, meta_norm)
+        if query_relevance >= 0.65:
+            boost += query_relevance
+            reasons.append(f"query_text_relevance:{query_relevance:.2f}")
+
+        if intent not in {"regulatorio", "regulacao"}:
+            for admin_term, admin_penalty in ADMIN_SECTION_PENALTIES.items():
+                if admin_term in section_norm:
+                    penalty += abs(admin_penalty)
+                    reasons.append(f"penalty_wrong_section:{_reason_slug(admin_term)}")
                     break
 
-        exact_hits = 0
-        for term in exact_terms:
-            if term and (term in text_norm or term in meta_norm):
-                exact_hits += 1
-        if exact_hits:
-            term_boost = min(0.25, exact_hits * 0.035)
-            boost += term_boost
-            reasons.append(f"exact_terms:{exact_hits}")
-
-        is_admin = any(term in section_norm for term in ADMIN_SECTION_TERMS)
-        if is_admin and intent not in {"regulacao"}:
-            penalty += 0.25
-            reasons.append("penalty:administrative_section")
+        section_penalties = SECTION_PENALTIES_BY_INTENT.get(str(intent), {})
+        wrong_section = next((term for term in section_penalties if term in section_norm), "")
+        if wrong_section:
+            penalty += abs(section_penalties[wrong_section])
+            reasons.append(f"penalty_wrong_section:{_reason_slug(wrong_section)}")
 
         final_score = base + boost - penalty
         metadata.update(
@@ -386,7 +482,13 @@ def rerank_documents(
                 "dense_score": dense_score,
                 "dense_rank": idx + 1,
                 "dense_rank_score": round(base, 6),
-                "heuristic_score": round(boost - penalty, 6),
+                "heuristic_score": round(final_score, 6),
+                "disease_filter_applied": filter_info.get("disease_filter_applied", False),
+                "filtered_disease": filter_info.get("filtered_disease") or "",
+                "candidate_count_before_filter": filter_info.get("candidate_count_before_filter"),
+                "candidate_count_after_filter": filter_info.get("candidate_count_after_filter"),
+                "disease_filter_fallback": filter_info.get("disease_filter_fallback", False),
+                "cross_encoder_score": None,
                 "final_score": round(final_score, 6),
                 "ranking_reasons": reasons,
             }
@@ -395,7 +497,15 @@ def rerank_documents(
         ranked.append((final_score, ranked_doc))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
-    return [doc for _score, doc in ranked[:final_k]]
+    heuristic_docs = [doc for score, doc in ranked if score >= float(min_final_score)]
+    if use_cross_encoder:
+        heuristic_docs = apply_cross_encoder_rerank(
+            query,
+            heuristic_docs,
+            model_name=cross_encoder_model_name,
+            top_n=cross_encoder_top_n,
+        )
+    return heuristic_docs[:final_k]
 
 
 def _format_list(value: Any, *, max_items: int = 10, max_chars: int = 500) -> str:
@@ -424,8 +534,6 @@ def format_context_document(doc: Document, rank: int) -> str:
         f"CID-10: {_format_list(meta.get('cid10_codes'), max_items=12, max_chars=240)}\n"
         f"Medicamentos relacionados: {_format_list(meta.get('medicamentos'), max_items=10, max_chars=600)}\n"
         f"Seção: {meta.get('section') or meta.get('header_1') or '-'}\n"
-        f"Portaria: {_format_list(meta.get('portarias'), max_items=4, max_chars=240)}\n"
-        f"Data da Portaria: {_format_list(meta.get('datas_portaria'), max_items=4, max_chars=120)}\n"
         f"Fonte: {meta.get('source_pdf') or meta.get('source_stem') or '-'}\n"
         f"Páginas: {page_start}-{page_end}\n"
         f"Score final: {meta.get('final_score', '-')}\n"
@@ -454,7 +562,9 @@ def document_audit_record(doc: Document, rank: int) -> dict[str, Any]:
         "medicamentos": _as_list(meta.get("medicamentos")),
         "portarias": _as_list(meta.get("portarias")),
         "dense_score": meta.get("dense_score"),
+        "dense_rank_score": meta.get("dense_rank_score"),
         "heuristic_score": meta.get("heuristic_score"),
+        "cross_encoder_score": meta.get("cross_encoder_score"),
         "final_score": meta.get("final_score"),
         "ranking_reasons": _as_list(meta.get("ranking_reasons")),
     }
@@ -470,17 +580,27 @@ def build_audit_payload(
     answer: str = "",
     audit_id: str | None = None,
 ) -> dict[str, Any]:
+    first_meta = dict(documents[0].metadata or {}) if documents else {}
     return {
         "audit_id": audit_id or str(uuid.uuid4()),
         "question": question,
         "original_query": expansion.get("original_query") or question,
+        "clinical_understanding": expansion.get("clinical_understanding") or {},
         "expanded_query": expansion.get("expanded_query") or question,
+        "added_terms": expansion.get("added_terms") or expansion.get("matched_terms") or [],
+        "expansion_reason": expansion.get("expansion_reason") or [],
         "matched_diseases": expansion.get("matched_diseases") or [],
         "matched_cid10_codes": expansion.get("matched_cid10_codes") or [],
         "matched_medications": expansion.get("matched_medications") or [],
         "matched_terms": expansion.get("matched_terms") or [],
         "retrieval_candidates_k": retrieval_candidates_k,
         "retrieval_final_k": retrieval_final_k,
+        "disease_filter_applied": bool(first_meta.get("disease_filter_applied", False)),
+        "filtered_disease": first_meta.get("filtered_disease") or "",
+        "candidate_count_before_filter": first_meta.get("candidate_count_before_filter"),
+        "candidate_count_after_filter": first_meta.get("candidate_count_after_filter"),
+        "use_cross_encoder": bool(expansion.get("use_cross_encoder", False)),
+        "cross_encoder_model": expansion.get("cross_encoder_model"),
         "documents": [document_audit_record(doc, i) for i, doc in enumerate(documents, start=1)],
         "answer": answer,
         "created_at": datetime.now(UTC).isoformat(),

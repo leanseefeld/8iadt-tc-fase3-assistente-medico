@@ -50,6 +50,26 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MEDICO_RAG_AUDIT_ENABLED", "RAG_AUDIT_ENABLED"),
         description="Ativa escrita de auditoria RAG em JSONL.",
     )
+    rag_use_cross_encoder_rerank: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MEDICO_RAG_USE_CROSS_ENCODER_RERANK", "RAG_USE_CROSS_ENCODER_RERANK"),
+        description="Ativa reranking opcional com CrossEncoder após o rerank heurístico.",
+    )
+    rag_cross_encoder_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        validation_alias=AliasChoices("MEDICO_RAG_CROSS_ENCODER_MODEL", "RAG_CROSS_ENCODER_MODEL"),
+        description="Modelo sentence-transformers CrossEncoder usado quando o rerank opcional está ativo.",
+    )
+    rag_cross_encoder_top_n: int = Field(
+        default=15,
+        validation_alias=AliasChoices("MEDICO_RAG_CROSS_ENCODER_TOP_N", "RAG_CROSS_ENCODER_TOP_N"),
+        description="Número de documentos do ranking heurístico enviados ao CrossEncoder.",
+    )
+    rag_min_final_score: float = Field(
+        default=-5.0,
+        validation_alias=AliasChoices("MEDICO_RAG_MIN_FINAL_SCORE", "RAG_MIN_FINAL_SCORE"),
+        description="Score final mínimo para retornar um documento ao prompt.",
+    )
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(
         default=Path("./uploads"),

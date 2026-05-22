@@ -55,6 +55,10 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `RAG_RETRIEVE_FINAL_K` ou `MEDICO_RAG_RETRIEVE_FINAL_K` | `6` | Quantidade final de documentos enviados ao prompt |
 | `RAG_AUDIT_JSONL` ou `MEDICO_RAG_AUDIT_JSONL` | `../llm/data/audit/rag_interactions.jsonl` | Arquivo JSONL de auditoria RAG |
 | `RAG_AUDIT_ENABLED` ou `MEDICO_RAG_AUDIT_ENABLED` | `true` | Liga/desliga escrita da auditoria RAG |
+| `RAG_MIN_FINAL_SCORE` ou `MEDICO_RAG_MIN_FINAL_SCORE` | `-5.0` | Score mínimo para um documento entrar no prompt final |
+| `RAG_USE_CROSS_ENCODER_RERANK` ou `MEDICO_RAG_USE_CROSS_ENCODER_RERANK` | `false` | Liga reranking opcional por CrossEncoder após o rerank heurístico |
+| `RAG_CROSS_ENCODER_MODEL` ou `MEDICO_RAG_CROSS_ENCODER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Modelo `sentence-transformers` usado quando CrossEncoder está ativo |
+| `RAG_CROSS_ENCODER_TOP_N` ou `MEDICO_RAG_CROSS_ENCODER_TOP_N` | `15` | Quantos documentos heurísticos são enviados ao CrossEncoder |
 | `MEDICO_DATABASE_URL`       | `sqlite+aiosqlite:///./assistente_medico.db` | URL do banco (SQLite assíncrono por padrão)                              |
 | `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para `assistente_medico.jsonl` |
 | `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível efetivo dos loggers `assistente_medico.*` (ex.: `DEBUG`, `INFO`)                    |
@@ -90,12 +94,14 @@ grep '"event":"chat_response_done"' logs/assistente_medico.jsonl | head
 O fluxo de recuperação do chat agora é:
 
 ```text
-pergunta -> expansão Conitec -> Chroma k=30 -> reranking heurístico -> top 6 -> prompt -> auditoria
+pergunta -> entendimento clínico -> expansão restritiva Conitec -> Chroma k=30 -> reranking por intenção -> top 6 -> prompt -> auditoria
 ```
 
-A expansão usa apenas o catálogo local `llm/data/processed/conitec/pcdt_catalog.jsonl`; a planilha da Conitec não é baixada em tempo de requisição. Quando a pergunta contém doença, CID-10, medicamento ou sigla, a consulta recebe termos relacionados do catálogo, como diretriz, descrições CID e medicamentos.
+A expansão usa apenas o catálogo local `llm/data/processed/conitec/pcdt_catalog.jsonl`; a planilha da Conitec não é baixada em tempo de requisição. O chat interpreta a pergunta médica antes da busca, detectando intenção clínica, CID-10 explícito, medicamento explícito e uma diretriz/doença do catálogo quando houver match forte. A expansão é restritiva e sensível à intenção: perguntas de critérios de inclusão/exclusão adicionam apenas a doença canônica e a seção esperada, sem CIDs ou medicamentos automáticos.
 
-O reranking é heurístico e explicável. Ele mantém a posição original do Chroma como sinal forte, mas aplica boosts para CID exato, doença/diretriz, medicamento, seção compatível com a intenção da pergunta e termos exatos. Perguntas clínicas recebem penalização leve para seções administrativas, referências e metodologia.
+O reranking é heurístico e explicável. Quando uma doença é detectada com confiança alta, há pós-filtro rígido por `metadata.disease_normalized`: se sobrarem documentos da doença correta, doenças diferentes não entram no prompt só para completar o top 6. Ele mantém a posição original do Chroma como base, mas aplica boosts por doença/diretriz detectada, seção compatível com a intenção, CID explícito e medicamento explícito. CIDs vindos apenas da expansão recebem peso fraco ou são ignorados em perguntas de critérios. Para perguntas de critérios de inclusão, seções como CID-10, Fármacos, Tratamento e Diagnóstico diferencial são penalizadas em relação à seção `CRITÉRIOS DE INCLUSÃO`.
+
+Depois do rerank heurístico, é possível habilitar reranking por `sentence-transformers` CrossEncoder para reordenar os candidatos já recuperados. As bibliotecas clínicas e de reranking (`medspacy`, `spacy`, `rapidfuzz`, `sentence-transformers`) são dependências obrigatórias do backend; o modelo CrossEncoder só é carregado se `RAG_USE_CROSS_ENCODER_RERANK=true`. Se o modelo configurado falhar ao carregar, o fluxo mantém o ranking heurístico.
 
 O prompt enviado ao LLM inclui metadados ricos por documento:
 
@@ -106,10 +112,11 @@ O prompt enviado ao LLM inclui metadados ricos por documento:
 - portaria e data;
 - fonte e páginas;
 - score final e motivos do ranking.
+- entendimento clínico da pergunta (intenção, doença, CID e medicamento explícitos).
 
 A resposta continua citando documentos pelo identificador `[n]`. A política de segurança de doses/posologia permanece sob o guardrail existente.
 
-Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com pergunta, query expandida, entidades encontradas, `k` inicial/final, documentos usados, scores e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta.
+Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com pergunta original, entendimento clínico, query expandida, termos adicionados, `k` inicial/final, status do filtro por doença, contagem antes/depois do filtro, uso de CrossEncoder, documentos usados, scores, motivos de ranking e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta.
 
 Exemplos rápidos para testar:
 

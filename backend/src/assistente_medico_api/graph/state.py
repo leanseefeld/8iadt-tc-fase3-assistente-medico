@@ -28,6 +28,7 @@ class ChatRAGState(TypedDict, total=False):
     sources: list[str]
     reasoning_steps: list[str]
     query_expansion: dict
+    clinical_understanding: dict
     rag_audit_payload: dict
     audit_id: str
     answer: str
