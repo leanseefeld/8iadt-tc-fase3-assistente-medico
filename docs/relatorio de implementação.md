@@ -187,23 +187,6 @@ Resumo do plano executável para o arquivo `docs/rename-medicamentos-2024.pdf`:
 
 Detalhamento completo por fase, entradas, saídas e critérios de validação em [docs/plano-extracao-rename.md](./plano-extracao-rename.md).
 
-# Fine Tuning
-
-Interagindo com o assistente usando Gemma4 sem fine-tuning, as respostas tem um tom inconsistente - às vezes muito formal, às vezes muito distante ("com os dados fornecidos"). Parte do problema foi resolvido mudando as instruções do agente e indicando que foi o próprio agente que iniciou a pesquisa nos documentos PCDT e ele deve apenas continuar a responder a mensagem com base nos resultados. Além do mais, os documentos PCDT são muito específicos e não agregam tanto no conhecimento do agente quanto um dataset destinado a conhecimentos médicos.
-
-É aqui que entra o fine-tuning do modelo com o MedQuAD, como forma tanto de melhorar o tom de resposta do modelo quanto seu repertório técnico em medicina.
-O MedQuAD é hospedado em um [repositório GitHub](https://github.com/abachaa/MedQuAD), separado em pastas para as diferentes fontes de perguntas e respostas.
-
-Apesar da vasta quantidade de pares de perguntas e respostas, há seções sem respostas ou com respostas incorretas ou incompletas. Os autores, no entanto, realizaram uma avaliação manual das perguntas do [TREC-2017 LiveQA medical task](https://github.com/abachaa/LiveQA_MedicalTask_TREC2017/tree/master/TestDataset) e classificaram as respostas do próprio dataset em: 1-Incorrect, 2-Related, 3-Incomplete, and 4-Excellent.
-O resultado desta classificação foi disponibilizado no arquivo [QA-TestSet-LiveQA-Med-Qrels-2479-Answers.zip](https://github.com/abachaa/MedQuAD/blob/master/QA-TestSet-LiveQA-Med-Qrels-2479-Answers.zip), que foi manualmente extraído para a pasta `llm/fine-tuning/assets` copiado para o repositório deste trabalho.
-
-Criado o notebook [data-prep.ipynb](../llm/fine-tuning/data-prep.ipynb) para tratar e traduzir o dataset filtrado, que resultou em 141 pares de perguntas e respostas avaliadas como excelente e então traduzidas usando o modelo Gemma4:E4B. Foi constatado também uma certa inconsistência entre as respostas devido ao processo que os autores usaram para a extração: scraping de websites informativos de agências de saúde. Em alguns casos, foi observado que o modelo Gemma4:E4B forneceu respostas mais precisas e pertinentes do que as presentes no dataset. O Gemma4:E4B foi executado localmente usando Ollama e precisou ter o tamanho do contexto aumentado para 8192 para dar conta de respostas mais longas. Em um MacBook M4 Pro com 26GB, o comando `OLLAMA_CONTEXT_LENGTH=8192 OLLAMA_NUM_PARALLEL=4 ollama serve` se mostrou satisfatório.
-
-O ideal seria escolher um dataset mais consistente e robusto, e com linguajar mais próximo do que se espera de uma interação direta com o conteúdo (conversa) ao invés de expositiva (lista de FAQs, seções de artigos ou mesmo artigos inteiros). Para o propósito deste trabalho acadêmico, entretanto, optamos por continuar com o dataset sugerido.
-
-
-Criado o notebook [data-prep.ipynb](../llm/fine-tuning/data-prep.ipynb) para tratar e traduzir o dataset filtrado.
-
 ## Evoluindo a Pipeline RAG
 
 Continuando a evolução do projeto, foi verificado que os textos extraídos do PCDT's precisam passar por um processo de limpeza e tratamento, para geração do chunks e assim remover ruídos.
@@ -303,3 +286,49 @@ R: ~120k em quantização 4bit / ~76k para CUDA 16bit
 
 * Quantos chunks cabem nesse contexto no pior cenário? (maiores chunks sendo usados) \
 R: <121 para 4bit / <63 para CUDA 16bit (sem considerar system prompt e mensagens trocadas)
+
+
+# Fine Tuning
+
+Interagindo com o assistente usando Gemma4 sem fine-tuning, as respostas tem um tom inconsistente - às vezes muito formal, às vezes muito distante ("com os dados fornecidos"). Parte do problema foi resolvido mudando as instruções do agente e indicando que foi o próprio agente que iniciou a pesquisa nos documentos PCDT e ele deve apenas continuar a responder a mensagem com base nos resultados. Além do mais, os documentos PCDT são muito específicos e não agregam tanto no conhecimento do agente quanto um dataset destinado a conhecimentos médicos.
+
+## Dataset - MedQuAD
+
+É aqui que entra o fine-tuning do modelo com o MedQuAD, como forma tanto de melhorar o tom de resposta do modelo quanto seu repertório técnico em medicina.
+O MedQuAD é hospedado em um [repositório GitHub](https://github.com/abachaa/MedQuAD), separado em pastas para as diferentes fontes de perguntas e respostas.
+
+Apesar da vasta quantidade de pares de perguntas e respostas, há seções sem respostas ou com respostas incorretas ou incompletas. Os autores, no entanto, realizaram uma avaliação manual das perguntas do [TREC-2017 LiveQA medical task](https://github.com/abachaa/LiveQA_MedicalTask_TREC2017/tree/master/TestDataset) e classificaram as respostas do próprio dataset em: 1-Incorrect, 2-Related, 3-Incomplete, and 4-Excellent.
+O resultado desta classificação foi disponibilizado no arquivo [QA-TestSet-LiveQA-Med-Qrels-2479-Answers.zip](https://github.com/abachaa/MedQuAD/blob/master/QA-TestSet-LiveQA-Med-Qrels-2479-Answers.zip), que foi manualmente extraído para a pasta `llm/fine-tuning/assets` do repositório deste trabalho.
+
+## Tradução do dataset
+
+Criado o notebook [data-prep.ipynb](../llm/fine-tuning/data-prep.ipynb) para tratar e traduzir o dataset filtrado, que resultou em 141 pares de perguntas e respostas avaliadas como excelente e então traduzidas usando o modelo Gemma4:E4B. Foi constatado também uma certa inconsistência entre as respostas devido ao processo que os autores usaram para a extração: scraping de websites informativos de agências de saúde. Em alguns casos, foi observado que o modelo Gemma4:E4B forneceu respostas mais precisas e pertinentes do que as presentes no dataset. O Gemma4:E4B foi executado localmente usando Ollama e precisou ter o tamanho do contexto aumentado para 8192 para dar conta de respostas mais longas. Em um MacBook M4 Pro com 26GB, o comando `OLLAMA_CONTEXT_LENGTH=8192 OLLAMA_NUM_PARALLEL=4 ollama serve` se mostrou satisfatório.
+
+O ideal seria escolher um dataset mais consistente e robusto, e com linguajar mais próximo do que se espera de uma interação direta com o conteúdo (conversa) ao invés de expositiva (lista de FAQs, seções de artigos ou mesmo artigos inteiros). Para o propósito deste trabalho acadêmico, entretanto, optamos por continuar com o dataset sugerido.
+
+Criado o notebook [data-prep.ipynb](../llm/fine-tuning/data-prep.ipynb) para tratar e traduzir o dataset filtrado.
+
+## Execução do Fine Tune
+
+O fine tune inicial foi executado via unsloth em uma GPU T4 do Google Colab. ([fine-tuning_colab.ipynb](../llm/fine-tuning/fine-tuning_colab.ipynb))
+Em uma tentativa de deixar as mensagens o mais próxima do cenário onde são utilizadas, foi usado o `ChatPromptTemplate` para gerar as mensagens formatadas para o treinamento. Para o treinamento, foi constatado que uma única época não produziu uma alteração satisfatória, e com 3 épocas tivemos over fitting, onde ao executar a inferência do modelo ajustado com uma nova pergunta, o modelo halucinou e prodiziu mensagens inconsistentes.
+
+Para contornar a limitação de uso do Google Colab e acelerar o tempo de iteração, foi criado um novo notebook para executar o fine tune localmente em Apple Silicon ([fine-tuning_apple-silicon.ipynb](../llm/fine-tuning/fine-tuning_apple-silicon.ipynb)). Infelizmente, unsloth ainda não suporta este ambiente e por isso foi usado `mlx-tune` no lugar, que mantém a mesma interface/API/contrato e delega o treino para `mlx-lm`, otimizado para Apple Silicon.
+
+### Resultados preliminares
+
+Feito isso, foi constatado que o uso do `ChatPromptTemplate` "bagunçou a cabeça" do modelo Llama3.2:3B-Instruct, que na verdade já foi pré-treinado com um padrão. Com este template, em muitos casos o modelo respondia com perguntas utilizadas durante o treinamento, ao invés de responder diretamente. Este problema foi contornado ao usar `tokenizer.apply_chat_template`.
+
+Outro problema foi a inconsistência no tamanho das respostas do dataset, que gerou truncamento durante o treinamento. Com este truncamento, o modelo viu vários exemplos sem o token de fim de geração (`<|eot_id|>`, para Llama3+) e resultou em gerações/respostas com repetição de frases até completar `max_seq_length`/tamanho do contexto.
+
+### TODO: próximos passos
+
+* próximo passo é tentar fazer o treinamento sem as respostas que estão sendo truncadas
+* outra ideia, é usar o Gemma4 pra *transformar* esse dataset horroroso em algo mais padronizado e útil
+* precisamos testar como o modelo ajustado se comporta quando é usado com o system prompt to rewrite e do guardrail, pois é possível que o modelo perca a capacidade de seguir outras instruções se ele for treinado só com a mesma
+* existem datasets de instruções que podemos "surrupiar" pra que uns 5 a 10% da massa de treino seja diferente, pra não bitolar o modelo.
+
+E depois disso:
+* exportar modelo quantizado Q4 GGUF (Ollama compatible)
+      * só é possível via CUDA (Colab/T4) ou a partir de modelo sem quantização no MLX (usa mais memória e tempo)
+      * com MLX, tá pra fazer FT quantizado mas o resultado não pode ser executado fora de Apple Silicon
