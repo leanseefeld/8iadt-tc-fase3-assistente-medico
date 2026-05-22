@@ -279,3 +279,27 @@ Porém, essa estratégia ainda estava falhando quando o tamanho do chunk ultrapa
 
 Dessa forma, implementamos a divisão por sentença, usando o `nltk`, e unimos em sentenças até atingir o limite de tokens, garantindo que o chunk gerado tenha um valor semântico completo. Além disso, adicionamento heurísticas para melhorar a coerência textual dos fragmentos.
 
+
+## Cálculo de memória e tamanho de contexto
+
+Tendo em vista a tendência de carregar documentos inteiros na janela de contexto de modelos LLM mais recentes, com modelos suportando janelas acima de 1 milhão de tokens, decidimos investigar o tamanho da nossa base de PCDTs, com 131 protocolos no momento da escrita desta análise.
+
+Criamos o notebook [chroma_llama_token_analysis](../llm/notebooks/chroma_llama_token_analysis.ipynb) para obter as respostas para perguntas como:
+
+* Quantos tokens Llama3.2:3B (4bit / Q4_K_M) nossos chunks ocupam? \
+R: 4.249.631 tokens Llama (em 15,541 chunks)
+
+* Quantos PCDTs caberiam inteiros numa janela de contexto de 120k tokens? (um documento por vez) \
+R: 130 (ou seja, apenas 2 não cabem inteiros)
+
+* Quantos *PCDTs* tem chunks que passam do limite configurado de tokens? \
+R: 52 - com o maior deles ocupando 2224 tokens, o que indica um erro no processo de fragmentação
+
+* E quantos *chunks* passam do limite configurado? \
+R: 3955 chunks com mais de 400 tokens Llama
+
+* Qual contexto máximo para 16GB de VRAM? \
+R: ~120k em quantização 4bit / ~76k para CUDA 16bit
+
+* Quantos chunks cabem nesse contexto no pior cenário? (maiores chunks sendo usados) \
+R: <121 para 4bit / <63 para CUDA 16bit (sem considerar system prompt e mensagens trocadas)
