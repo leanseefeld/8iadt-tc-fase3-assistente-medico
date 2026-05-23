@@ -193,7 +193,7 @@ def main() -> int:
     # Variáveis de ambiente para os modelos (somente nomes de modelo aqui)
     medico_vars = {
         "MEDICO_OLLAMA_EMBED_MODEL": str(config_value(llm_config, "OLLAMA_EMBED_MODEL", "nomic-embed-text")),
-        "MEDICO_OLLAMA_CHAT_MODEL": "gemma4:e4b-it-q4_K_M",
+        "MEDICO_OLLAMA_CHAT_MODEL": "llama3.2:3b",
     }
 
     if args.build_vectorstore:

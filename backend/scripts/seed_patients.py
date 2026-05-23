@@ -1,4 +1,4 @@
-"""Idempotent seed for initial discharged patients."""
+"""Idempotent seed for initial demo patients."""
 
 from __future__ import annotations
 
@@ -8,11 +8,24 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import select
 
-from assistente_medico_api.config import Settings
+from assistente_medico_api.config import Settings, resolve_database_url
 from assistente_medico_api.models.patient import Patient
 from assistente_medico_api.services.patient_service import append_vitals, apply_protocol
 
 SEED_PATIENTS = [
+    {
+        "id": "mock-adm-01",
+        "name": "Julia Santos",
+        "age": 37,
+        "sex": "F",
+        "status": "admitted",
+        "admitted_at_days_ago": 1,
+        "cid_code": "J45.9",
+        "cid_label": "Asma não especificada",
+        "observations": "Dispneia e sibilância em observação",
+        "comorbidities": ["Rinite alérgica"],
+        "current_medications": ["Salbutamol"],
+    },
     {
         "id": "mock-disch-01",
         "name": "Maria Oliveira",
@@ -83,17 +96,19 @@ SEED_PATIENTS = [
 
 async def main() -> None:
     settings = Settings()
-    engine = create_async_engine(settings.database_url, echo=False)
+    engine = create_async_engine(resolve_database_url(settings), echo=False)
     SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False)
 
     async with SessionLocal() as session:
-        existing = await session.execute(select(Patient.id).limit(1))
-        if existing.first() is not None:
-            print("Seed ignorado: tabela patients já contém dados.")
+        existing = await session.execute(select(Patient.id).where(Patient.id.in_([p["id"] for p in SEED_PATIENTS])))
+        existing_ids = set(existing.scalars().all())
+        missing_patients = [p for p in SEED_PATIENTS if p["id"] not in existing_ids]
+        if not missing_patients:
+            print("Seed ignorado: todos os pacientes iniciais já existem.")
             return
 
         now = datetime.now(UTC)
-        for row in SEED_PATIENTS:
+        for row in missing_patients:
             patient = Patient(
                 id=row["id"],
                 name=row["name"],
@@ -113,7 +128,7 @@ async def main() -> None:
             await apply_protocol(session, patient, "admission")
 
         await session.commit()
-        print(f"Seed concluído: {len(SEED_PATIENTS)} pacientes inseridos.")
+        print(f"Seed concluído: {len(missing_patients)} pacientes inseridos.")
 
     await engine.dispose()
 

@@ -6,8 +6,10 @@ from pathlib import Path
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+BACKEND_ROOT = REPO_ROOT / "backend"
 
 
 class Settings(BaseSettings):
@@ -104,6 +106,22 @@ class Settings(BaseSettings):
 def resolve_runtime_path(path: Path) -> Path:
     """Resolve paths relativos da configuração a partir da raiz do repositório."""
     return path if path.is_absolute() else REPO_ROOT / path
+
+
+def resolve_database_url(settings: Settings) -> str:
+    """Resolve SQLite file URLs relative to backend/, independent of cwd."""
+    url = make_url(settings.database_url)
+    if not url.get_backend_name().startswith("sqlite"):
+        return settings.database_url
+    if url.database in (None, "", ":memory:"):
+        return settings.database_url
+
+    database_path = Path(url.database)
+    if database_path.is_absolute():
+        return settings.database_url
+
+    resolved_path = BACKEND_ROOT / database_path
+    return url.set(database=str(resolved_path)).render_as_string(hide_password=False)
 
 
 def resolve_chroma_persist_dir(settings: Settings) -> Path:

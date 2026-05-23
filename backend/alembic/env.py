@@ -7,7 +7,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlmodel import SQLModel
 
-from assistente_medico_api.config import Settings
+from assistente_medico_api.config import Settings, resolve_database_url
 from assistente_medico_api.models import AgentLogEntry, Exam, Patient, SuggestedItem, VitalSigns  # noqa: F401
 
 config = context.config
@@ -16,7 +16,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = Settings()
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", resolve_database_url(settings))
 
 target_metadata = SQLModel.metadata
 

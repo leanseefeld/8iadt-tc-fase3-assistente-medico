@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import inspect
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -8,8 +10,10 @@ from langchain_core.documents import Document
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph import cross_encoder_reranker as ce_mod
 from assistente_medico_api.graph import clinical_query_understanding as cqu_mod
-from assistente_medico_api.graph.nodes import retrieve as retrieve_mod
+from assistente_medico_api.graph.nodes.generate import _build_messages, generate_node
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
+from assistente_medico_api.services import rag_retrieval_service as rag_service
+from assistente_medico_api.services.rag_retrieval_service import run_rag_retrieval
 from assistente_medico_api.graph.clinical_query_understanding import (
     CatalogCandidateRetriever,
     detect_clinical_intent,
@@ -474,7 +478,7 @@ def test_rerank_documents_prefers_sgb_inclusion_section_over_cid10() -> None:
 
 
 def test_retrieve_node_runs_complementary_search_for_sgb_missing_preferred_section(monkeypatch) -> None:
-    monkeypatch.setattr(retrieve_mod, "_cached_conitec_catalog", lambda: _catalog())
+    monkeypatch.setattr(rag_service, "cached_conitec_catalog", lambda: _catalog())
     first = [
         (
             _doc(
@@ -516,7 +520,7 @@ def test_retrieve_node_runs_complementary_search_for_sgb_missing_preferred_secti
 
 
 def test_retrieve_node_marks_preferred_section_not_found_after_complementary_search(monkeypatch) -> None:
-    monkeypatch.setattr(retrieve_mod, "_cached_conitec_catalog", lambda: _catalog())
+    monkeypatch.setattr(rag_service, "cached_conitec_catalog", lambda: _catalog())
     first = [
         (
             _doc(
@@ -854,3 +858,111 @@ def test_hiv_pediatric_expansion_has_catalog_candidates_and_not_only_intent() ->
     assert expanded["expanded_query"] != "Como tratar HIV em crianças? TRATAMENTO"
     assert expanded["structured_terms"]["catalog_candidates"]
     _assert_clean_expanded_query(expanded["expanded_query"])
+
+
+def test_chat_retrieve_sgb_uses_catalog_expansion(monkeypatch) -> None:
+    monkeypatch.setattr(rag_service, "cached_conitec_catalog", lambda: _catalog())
+    sgb_doc = _doc(
+        "Serão incluídos pacientes com Síndrome de Guillain-Barré.",
+        disease="Síndrome de Guillain-Barré",
+        diretriz="Síndrome de Guillain-Barré",
+        disease_normalized="sindrome de guillain barre",
+        section="CRITÉRIOS DE INCLUSÃO",
+        cid10_codes=["G61.0"],
+        source_stem="20201022_portaria_conjunta_pcdt_sgb-1",
+    )
+    wrong_doc = _doc(
+        "Critérios de inclusão de outra doença.",
+        disease="Doença de Paget",
+        diretriz="Doença de Paget",
+        disease_normalized="doenca de paget",
+        section="CRITÉRIOS DE INCLUSÃO",
+        source_stem="pcdt-paget",
+    )
+    store = _FakeStore([(wrong_doc, 0.1), (sgb_doc, 0.2)])
+    settings = Settings(rag_retrieve_candidates_k=10, rag_retrieve_final_k=6)
+
+    out = retrieve_node({"query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
+
+    expansion = out["query_expansion"]
+    docs = out["retrieved_docs"]
+    assert "Síndrome de Guillain-Barré" in expansion["expanded_query"]
+    assert expansion["structured_terms"]["disease"] == "Síndrome de Guillain-Barré"
+    assert "G61.0" in expansion["structured_terms"]["cid10_codes"]
+    assert expansion["structured_terms"]["intent"] == "criterios_inclusao"
+    assert [doc.metadata["disease"] for doc in docs] == ["Síndrome de Guillain-Barré"]
+
+
+def test_chat_and_inspector_use_same_retrieval_service() -> None:
+    retrieve_source = inspect.getsource(retrieve_node)
+    inspector_source = (Path(__file__).resolve().parents[2] / "llm" / "scripts" / "rag_inspector_app.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "run_rag_retrieval" in retrieve_source
+    assert "run_rag_retrieval" in inspector_source
+    assert "retrieve_node(" not in inspector_source
+
+
+def test_generate_does_not_reinterpret_detected_abbreviation() -> None:
+    state = {
+        "query": "Quais são os critérios de inclusão para sgb?",
+        "retrieved_docs": [
+            _doc(
+                "Critérios de inclusão para SGB.",
+                disease="Síndrome de Guillain-Barré",
+                diretriz="Síndrome de Guillain-Barré",
+                disease_normalized="sindrome de guillain barre",
+                section="CRITÉRIOS DE INCLUSÃO",
+            )
+        ],
+        "query_expansion": {
+            "expanded_query": "Quais são os critérios de inclusão para sgb? Síndrome de Guillain-Barré G61.0 CRITÉRIOS DE INCLUSÃO",
+            "structured_terms": {
+                "disease": "Síndrome de Guillain-Barré",
+                "diretriz": "Síndrome de Guillain-Barré",
+                "disease_normalized": "sindrome de guillain barre",
+                "cid10_codes": ["G61.0"],
+                "intent": "criterios_inclusao",
+                "preferred_sections": ["CRITÉRIOS DE INCLUSÃO"],
+            },
+        },
+        "clinical_understanding": {},
+    }
+
+    prompt = "\n".join(str(message.content) for message in _build_messages(state))
+
+    assert "Doença/Diretriz: Síndrome de Guillain-Barré" in prompt
+    assert "Não expanda ou redefina siglas" in prompt
+    assert "Síndrome de Sobrecarga de Glóbulos Brancos" not in prompt
+
+
+def test_no_context_mismatch_goes_to_llm() -> None:
+    state = {
+        "query": "Quais são os critérios de inclusão para sgb?",
+        "retrieved_docs": [
+            _doc(
+                "Critérios de inclusão de Doença de Wilson.",
+                disease="Doença de Wilson",
+                diretriz="Doença de Wilson",
+                disease_normalized="doenca de wilson",
+                section="CRITÉRIOS DE INCLUSÃO",
+            )
+        ],
+        "query_expansion": {
+            "expanded_query": "Quais são os critérios de inclusão para sgb? Síndrome de Guillain-Barré G61.0 CRITÉRIOS DE INCLUSÃO",
+            "structured_terms": {
+                "disease": "Síndrome de Guillain-Barré",
+                "diretriz": "Síndrome de Guillain-Barré",
+                "disease_normalized": "sindrome de guillain barre",
+                "cid10_codes": ["G61.0"],
+                "intent": "criterios_inclusao",
+            },
+        },
+        "clinical_understanding": {},
+        "rag_audit_payload": {},
+    }
+
+    out = asyncio.run(generate_node(state, Settings()))
+
+    assert "Não encontrei trechos PCDT compatíveis com Síndrome de Guillain-Barré" in out["answer"]

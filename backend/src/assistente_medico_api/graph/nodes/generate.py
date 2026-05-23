@@ -14,8 +14,10 @@ from langchain_core.messages import (
 from langchain_ollama import ChatOllama
 
 from assistente_medico_api.config import Settings
+from assistente_medico_api.graph.rag_enhancement import format_context_document
 from assistente_medico_api.graph.nodes.retrieve import format_context_block
 from assistente_medico_api.graph.state import ChatRAGState
+from assistente_medico_api.graph.clinical_query_understanding import normalize_text_for_match
 from assistente_medico_api.observability.audit import audit, truncate
 
 # Persona e limites de segurança para o assistente (pt-BR).
@@ -49,6 +51,10 @@ def _build_messages(state: ChatRAGState) -> list:
         f"Pergunta do médico:\n{user_text}\n\n"
         f"Entendimento da pergunta:\n{understanding}\n\n"
         f"Contexto (trechos PCDT):\n{context}\n\n"
+        "Instruções de resposta:\n"
+        "- Use apenas o contexto PCDT acima.\n"
+        "- Não expanda ou redefina siglas se a Doença/Diretriz já foi detectada no entendimento estruturado.\n"
+        "- Se o contexto não responder à pergunta sobre a Doença/Diretriz detectada, diga que os documentos recuperados não foram suficientes.\n"
     )
     out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
     for turn in state.get("chat_history") or []:
@@ -111,6 +117,73 @@ def _build_llm(settings: Settings) -> ChatOllama:
     )
 
 
+def _structured_disease_name(state: ChatRAGState) -> str:
+    expansion = state.get("query_expansion") or {}
+    structured = expansion.get("structured_terms") or {}
+    understanding = state.get("clinical_understanding") or {}
+    disease = understanding.get("detected_disease") or {}
+    return str(
+        structured.get("diretriz")
+        or structured.get("disease")
+        or disease.get("name")
+        or ""
+    ).strip()
+
+
+def _structured_disease_norm(state: ChatRAGState) -> str:
+    expansion = state.get("query_expansion") or {}
+    structured = expansion.get("structured_terms") or {}
+    understanding = state.get("clinical_understanding") or {}
+    disease = understanding.get("detected_disease") or {}
+    return normalize_text_for_match(
+        structured.get("disease_normalized")
+        or structured.get("diretriz")
+        or structured.get("disease")
+        or disease.get("normalized")
+        or disease.get("name")
+        or ""
+    )
+
+
+def _doc_matches_detected_disease(doc, disease_norm: str) -> bool:
+    if not disease_norm:
+        return True
+    meta = dict(getattr(doc, "metadata", {}) or {})
+    for key in ("disease_normalized", "disease", "diretriz_normalized", "diretriz"):
+        if normalize_text_for_match(meta.get(key)) == disease_norm:
+            return True
+    return False
+
+
+def _context_mismatch_answer(state: ChatRAGState) -> str | None:
+    disease_norm = _structured_disease_norm(state)
+    disease_name = _structured_disease_name(state)
+    if not disease_norm or not disease_name:
+        return None
+
+    docs = state.get("retrieved_docs") or []
+    if not docs:
+        return (
+            f"Não encontrei trechos PCDT compatíveis com {disease_name} "
+            "para responder com segurança."
+        )
+    if not any(_doc_matches_detected_disease(doc, disease_norm) for doc in docs):
+        return (
+            f"Não encontrei trechos PCDT compatíveis com {disease_name} "
+            "para responder com segurança."
+        )
+    return None
+
+
+def _prompt_context_preview(state: ChatRAGState, max_chars: int = 1200) -> str:
+    docs = state.get("retrieved_docs") or []
+    preview = "\n\n---\n\n".join(
+        format_context_document(doc, i)
+        for i, doc in enumerate(docs[:2], start=1)
+    )
+    return preview[:max_chars]
+
+
 async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
     """
     Nó assíncrono do grafo: acumula tokens via astream para que
@@ -119,6 +192,47 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
     pid = state.get("patient_id") or None
     t0 = time.perf_counter()
     docs = state.get("retrieved_docs") or []
+    expansion = state.get("query_expansion") or {}
+    structured = expansion.get("structured_terms") or {}
+    top_stems = [d.metadata.get("source_stem") for d in docs[:5]]
+    top_sections = [d.metadata.get("section") or d.metadata.get("header_1") for d in docs[:5]]
+    context_preview = _prompt_context_preview(state)
+
+    audit_payload = dict(state.get("rag_audit_payload") or {})
+    if audit_payload is not None:
+        audit_payload["prompt_context_preview"] = context_preview
+
+    audit(
+        "rag_generate_context_received",
+        kind="rag",
+        patient_id=pid,
+        retrieved_docs_count=len(docs),
+        disease=structured.get("diretriz") or structured.get("disease"),
+        expanded_query=expansion.get("expanded_query"),
+        top_source_stems=top_stems,
+        top_sections=top_sections,
+        prompt_context_preview=truncate(context_preview, n=1000),
+    )
+
+    controlled_answer = _context_mismatch_answer(state)
+    if controlled_answer is not None:
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        audit(
+            "rag_generate_done",
+            kind="rag",
+            latency_ms=latency_ms,
+            patient_id=pid,
+            query_snippet=truncate(state.get("query") or ""),
+            answer_chars=len(controlled_answer),
+            retrieved_count=len(docs),
+            source_stems=top_stems,
+            controlled_response=True,
+            reason="detected_disease_without_compatible_context",
+        )
+        return {
+            "answer": controlled_answer,
+            "rag_audit_payload": audit_payload,
+        }
 
     llm = _build_llm(settings)
     messages = _build_messages(state)
@@ -147,7 +261,8 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
         answer_chars=len(ans),
         retrieved_count=len(docs),
         source_stems=stems,
+        controlled_response=False,
     )
     # Histórico atualizado no guardrail_node, que conhece a resposta final
     # (pode ter sido substituída ou modificada pelo guardrail).
-    return {"answer": ans}
+    return {"answer": ans, "rag_audit_payload": audit_payload}
