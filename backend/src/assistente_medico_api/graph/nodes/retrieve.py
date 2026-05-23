@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.state import ChatRAGState
+from assistente_medico_api.observability.audit import audit, truncate
 from assistente_medico_api.graph.rag_enhancement import (
     apply_complementary_retrieve_info,
     build_complementary_retrieve_plan,
@@ -29,7 +30,6 @@ _logger = logging.getLogger("assistente_medico.rag")
 @lru_cache(maxsize=1)
 def _cached_conitec_catalog() -> dict:
     return load_local_conitec_catalog()
-from assistente_medico_api.observability.audit import audit, truncate
 
 
 def format_source_label(doc: Document) -> str:
@@ -195,7 +195,7 @@ def retrieve_node(
         retrieval_query_snippet=truncate(query),
         retrieved_count=len(docs),
         source_stems=stems_list,
-        top_k=k,
+        top_k=final_k,
     )
 
     return {
