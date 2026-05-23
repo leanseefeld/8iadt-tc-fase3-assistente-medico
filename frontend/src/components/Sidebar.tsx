@@ -20,12 +20,11 @@ export function Sidebar() {
   } = useAppSession();
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] shadow-sm">
+    <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col overflow-y-auto border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] shadow-sm">
       <div className="border-b border-[var(--color-border-subtle)] px-4 py-5">
         <h1 className="text-lg font-semibold tracking-tight text-teal-800">
           Assistente Médico
         </h1>
-        <p className="mt-1 text-xs text-slate-500">Protótipo de interface</p>
 
         <NavLink
           to="/checkin"
