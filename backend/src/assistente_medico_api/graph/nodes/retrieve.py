@@ -112,6 +112,8 @@ def retrieve_node(
             cross_encoder_model_name=str(getattr(settings, "rag_cross_encoder_model", "cross-encoder/ms-marco-MiniLM-L-6-v2")),
             cross_encoder_top_n=int(getattr(settings, "rag_cross_encoder_top_n", 15)),
             min_final_score=float(getattr(settings, "rag_min_final_score", -5.0)),
+            require_catalog_match_when_confident=bool(getattr(settings, "rag_require_catalog_match_when_confident", True)),
+            min_final_score_with_catalog=float(getattr(settings, "rag_min_final_score_with_catalog", 0.0)),
         )
     except Exception as exc:
         _logger.warning("Falha no reranking; usando ordem densa original. erro=%s", exc)

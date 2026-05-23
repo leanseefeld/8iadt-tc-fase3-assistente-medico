@@ -109,6 +109,8 @@ class InspectorSettings:
     retrieval_k: int
     rag_retrieve_candidates_k: int
     rag_retrieve_final_k: int
+    rag_require_catalog_match_when_confident: bool
+    rag_min_final_score_with_catalog: float
     rag_audit_enabled: bool
     rag_audit_jsonl: str
     llm_stream_timeout_s: float
@@ -139,6 +141,8 @@ def _default_settings() -> InspectorSettings:
         retrieval_k=backend_cfg.retrieval_k,
         rag_retrieve_candidates_k=backend_cfg.rag_retrieve_candidates_k,
         rag_retrieve_final_k=backend_cfg.rag_retrieve_final_k,
+        rag_require_catalog_match_when_confident=backend_cfg.rag_require_catalog_match_when_confident,
+        rag_min_final_score_with_catalog=backend_cfg.rag_min_final_score_with_catalog,
         rag_audit_enabled=backend_cfg.rag_audit_enabled,
         rag_audit_jsonl=str(backend_cfg.rag_audit_jsonl),
         llm_stream_timeout_s=backend_cfg.llm_stream_timeout_s,
@@ -192,6 +196,8 @@ def _backend_settings(cfg: InspectorSettings) -> Settings:
         retrieval_k=int(cfg.retrieval_k),
         rag_retrieve_candidates_k=int(cfg.rag_retrieve_candidates_k),
         rag_retrieve_final_k=int(cfg.rag_retrieve_final_k),
+        rag_require_catalog_match_when_confident=bool(cfg.rag_require_catalog_match_when_confident),
+        rag_min_final_score_with_catalog=float(cfg.rag_min_final_score_with_catalog),
         rag_audit_enabled=bool(cfg.rag_audit_enabled),
         rag_audit_jsonl=Path(cfg.rag_audit_jsonl),
         llm_stream_timeout_s=float(cfg.llm_stream_timeout_s),
@@ -364,6 +370,17 @@ def main() -> None:
                 max_value=50,
                 value=int(cfg0.rag_retrieve_final_k),
                 step=1,
+            ),
+            rag_require_catalog_match_when_confident=st.checkbox(
+                "Exigir match de catálogo quando confiante",
+                value=bool(cfg0.rag_require_catalog_match_when_confident),
+            ),
+            rag_min_final_score_with_catalog=st.number_input(
+                "Score mínimo com catálogo",
+                min_value=-10.0,
+                max_value=20.0,
+                value=float(cfg0.rag_min_final_score_with_catalog),
+                step=0.5,
             ),
             rag_audit_enabled=st.checkbox("Registrar auditoria RAG", value=bool(cfg0.rag_audit_enabled)),
             rag_audit_jsonl=st.text_input("Arquivo auditoria RAG", value=cfg0.rag_audit_jsonl),
@@ -571,6 +588,8 @@ def main() -> None:
             final_score_summary = _score_summary(final_scores)
             query_expansion = cast(dict[str, Any], final_state.get("query_expansion") or {})
             audit_payload = cast(dict[str, Any], final_state.get("rag_audit_payload") or {})
+            structured_terms = cast(dict[str, Any], query_expansion.get("structured_terms") or {})
+            catalog_filter = cast(dict[str, Any], audit_payload or query_expansion.get("_catalog_filter_info") or {})
 
             payload: dict[str, Any] = {
                 "timestamp": _now_iso(),
@@ -602,6 +621,20 @@ def main() -> None:
                     "final_k": int(cfg.rag_retrieve_final_k),
                     "rewrite_query": final_state.get("retrieval_query") or query,
                     "expanded_query": query_expansion.get("expanded_query") or final_state.get("retrieval_query") or query,
+                    "structured_terms": structured_terms,
+                    "catalog_candidates": structured_terms.get("catalog_candidates") or query_expansion.get("catalog_candidates") or [],
+                    "catalog_filter": {
+                        "has_confident_catalog_candidate": catalog_filter.get("has_confident_catalog_candidate", False),
+                        "documents_before_filter": catalog_filter.get("documents_before_filter")
+                        or catalog_filter.get("candidate_count_before_filter")
+                        or len(raw_candidates),
+                        "documents_after_catalog_filter": catalog_filter.get("documents_after_catalog_filter")
+                        or catalog_filter.get("candidate_count_after_filter"),
+                        "documents_removed_by_catalog_filter": catalog_filter.get("documents_removed_by_catalog_filter") or [],
+                        "catalog_filter_fallback": catalog_filter.get("catalog_filter_fallback", False),
+                        "final_documents_count": catalog_filter.get("final_documents_count", len(docs)),
+                        "returned_less_than_final_k": catalog_filter.get("returned_less_than_final_k", len(docs) < int(cfg.rag_retrieve_final_k)),
+                    },
                     "dense_score_summary": dense_score_summary,
                     "final_score_summary": final_score_summary,
                     "final_results": [_doc_payload(doc, i + 1) for i, doc in enumerate(docs)],
@@ -668,10 +701,46 @@ def main() -> None:
             candidate_rows = cast(list[dict[str, Any]], retrieve_payload.get("candidate_results") or [])
             st.caption(f"Query reescrita: `{retrieve_payload.get('rewrite_query') or ''}`")
             st.caption(f"Query expandida enviada ao Chroma: `{retrieve_payload.get('expanded_query') or ''}`")
+            with st.expander("Structured terms e candidatos do catálogo", expanded=True):
+                st.json(
+                    {
+                        "structured_terms": retrieve_payload.get("structured_terms") or {},
+                        "catalog_candidates": retrieve_payload.get("catalog_candidates") or [],
+                    },
+                    expanded=False,
+                )
             k_cols = st.columns(3)
             k_cols[0].metric("k candidatos", str(retrieve_payload.get("candidates_k") or "-"))
             k_cols[1].metric("k final", str(retrieve_payload.get("final_k") or "-"))
             k_cols[2].metric("candidatos Chroma", str(len(candidate_rows)))
+
+            filter_payload = cast(dict[str, Any], retrieve_payload.get("catalog_filter") or {})
+            f_cols = st.columns(5)
+            f_cols[0].metric("catálogo confiante", "sim" if filter_payload.get("has_confident_catalog_candidate") else "não")
+            f_cols[1].metric("antes filtro", str(filter_payload.get("documents_before_filter") or "-"))
+            f_cols[2].metric("após filtro", str(filter_payload.get("documents_after_catalog_filter") or "-"))
+            f_cols[3].metric("top final", str(filter_payload.get("final_documents_count") or len(rows)))
+            f_cols[4].metric("fallback", "sim" if filter_payload.get("catalog_filter_fallback") else "não")
+            if filter_payload.get("returned_less_than_final_k"):
+                st.info("Retornou menos documentos que k final porque o filtro de catálogo removeu resultados incompatíveis.")
+            removed = cast(list[dict[str, Any]], filter_payload.get("documents_removed_by_catalog_filter") or [])
+            if removed:
+                with st.expander("Documentos removidos pelo filtro de catálogo", expanded=False):
+                    st.dataframe(
+                        [
+                            {
+                                "disease": r.get("disease") or "",
+                                "diretriz": r.get("diretriz") or "",
+                                "section": r.get("section") or "",
+                                "source_stem": r.get("source_stem") or "",
+                                "dense_score": r.get("dense_score"),
+                                "reason": r.get("reason") or "",
+                            }
+                            for r in removed
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
             score_summary = cast(dict[str, Any] | None, retrieve_payload.get("final_score_summary"))
             if score_summary:

@@ -38,6 +38,10 @@ except Exception:  # pragma: no cover - backend pode ser importado sem pacote ll
 
 _TREATMENT_INTENTS = {"tratamento", "dose", "medicamento"}
 _INTENT_SECTION_NORMS = {intent: normalize_text_for_match(label) for intent, label in INTENT_SECTION_LABELS.items()}
+_TREATMENT_SECTION_HINTS = {
+    normalize_text_for_match(value)
+    for value in ("TRATAMENTO", "TRATAMENTO MEDICAMENTOSO", "FÁRMACOS", "ESQUEMAS")
+}
 
 # Legacy section-penalty lists are intentionally left empty to avoid
 # hard-coded clinical token rules dominating ranking. The catalog and
@@ -168,6 +172,19 @@ def _expanded_query_terms(
     # field labels or serialized structures.
     terms.extend(term for term in original_added_terms if not _looks_structured(term))
     return _dedupe(terms, limit=max_terms)
+
+
+def _preferred_section_norms(intent: Any, structured_terms: dict[str, Any]) -> list[str]:
+    preferred = [
+        normalize_text_for_match(section)
+        for section in _as_list(structured_terms.get("preferred_sections"))
+    ]
+    if str(intent) == "tratamento":
+        preferred.extend(sorted(_TREATMENT_SECTION_HINTS))
+    expected = _INTENT_SECTION_NORMS.get(str(intent))
+    if expected:
+        preferred.append(expected)
+    return _dedupe(preferred)
 
 
 def _looks_structured(value: Any) -> bool:
@@ -353,6 +370,20 @@ def _document_has_other_disease(metadata: dict[str, Any]) -> bool:
     )
 
 
+def _removed_doc_record(item: Any, reason: str) -> dict[str, Any]:
+    doc, score = _doc_from_pair(item)
+    metadata = dict(getattr(doc, "metadata", {}) or {})
+    return {
+        "source_stem": metadata.get("source_stem"),
+        "source_pdf": metadata.get("source_pdf"),
+        "diretriz": metadata.get("diretriz"),
+        "disease": metadata.get("disease"),
+        "section": metadata.get("section") or metadata.get("header_1") or metadata.get("header_2"),
+        "dense_score": score,
+        "reason": reason,
+    }
+
+
 def _reason_slug(value: Any) -> str:
     return normalize_text_for_match(value).replace(" ", "_")
 
@@ -391,7 +422,7 @@ def filter_documents_by_detected_disease(
     understanding: dict[str, Any],
     *,
     structured_terms: dict[str, Any] | None = None,
-    min_confidence: float = 0.90,
+    min_confidence: float = 0.84,
 ) -> tuple[list[Any], dict[str, Any]]:
     """Aplica pós-filtro rígido por disease_normalized quando a doença é confiável."""
     disease = understanding.get("detected_disease") or {}
@@ -404,25 +435,32 @@ def filter_documents_by_detected_disease(
         "candidate_count_before_filter": before,
         "candidate_count_after_filter": before,
         "disease_filter_fallback": False,
+        "has_confident_catalog_candidate": bool(disease_norm and confidence >= min_confidence),
+        "documents_removed_by_catalog_filter": [],
     }
     if not disease_norm or confidence < min_confidence:
         return documents, info
 
     kept = []
+    removed = []
     for item in documents:
         doc, _score = _doc_from_pair(item)
         if _document_matches_disease(dict(getattr(doc, "metadata", {}) or {}), disease_norm):
             kept.append(item)
+        else:
+            removed.append(_removed_doc_record(item, "catalog_candidate_mismatch"))
 
     info.update(
         {
             "disease_filter_applied": True,
             "candidate_count_after_filter": len(kept),
             "disease_filter_fallback": not bool(kept),
+            "documents_removed_by_catalog_filter": removed if kept else [],
         }
     )
     if kept:
         return kept, info
+    info["candidate_count_after_filter"] = before
     return documents, info
 
 
@@ -446,6 +484,8 @@ def rerank_documents(
     cross_encoder_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
     cross_encoder_top_n: int = 15,
     min_final_score: float = -5.0,
+    require_catalog_match_when_confident: bool = True,
+    min_final_score_with_catalog: float = 0.0,
 ) -> list[Document]:
     """Rerank heurístico explicável sobre candidatos vindos do Chroma."""
     if final_k < 1:
@@ -477,16 +517,15 @@ def rerank_documents(
             for t in _as_list(structured.get("medications") or expanded_query.get("matched_medications") or [])
         ]
     query_norm = normalize_text_for_match(query)
-    preferred_sections = [
-        normalize_text_for_match(section)
-        for section in _as_list(structured.get("preferred_sections"))
-    ]
+    preferred_sections = _preferred_section_norms(intent, structured)
 
     candidate_docs, filter_info = filter_documents_by_detected_disease(
         documents,
         clinical_understanding,
         structured_terms=structured,
     )
+    has_confident_catalog_candidate = bool(filter_info.get("has_confident_catalog_candidate"))
+    expanded_query["_catalog_filter_info"] = filter_info
     total = max(1, len(candidate_docs))
     fallback_wrong_disease = bool(filter_info.get("disease_filter_fallback"))
     ranked: list[tuple[float, Document]] = []
@@ -519,15 +558,11 @@ def rerank_documents(
 
         for cid in sorted(catalog_cids):
             if cid in meta_cids:
-                if intent == "criterios_inclusao":
-                    reasons.append(f"cid_catalog_hint_ignored:{cid}")
-                else:
-                    boost += 0.5
-                    reasons.append(f"cid_catalog_hint:{cid}")
+                reasons.append(f"cid_catalog_hint_ignored:{cid}")
 
         for disease in disease_terms:
             if disease and _document_matches_disease(metadata, disease):
-                boost += 5.0
+                boost += 10.0 if has_confident_catalog_candidate else 5.0
                 disease_match = True
                 reasons.append("catalog_candidate_match")
                 reasons.append(f"disease_exact_match:{_reason_slug(disease)}")
@@ -564,19 +599,20 @@ def rerank_documents(
 
         # Section signals are kept much weaker than catalog matches. They are
         # derived from canonical section labels, not from clinical term lists.
-        expected_section = _INTENT_SECTION_NORMS.get(str(intent))
-        section_targets = preferred_sections or ([expected_section] if expected_section else [])
+        section_targets = preferred_sections
         section_hit = any(section and section in section_norm for section in section_targets)
         if intent and disease_terms and not disease_match and _document_has_other_disease(metadata):
             if section_hit:
                 reasons.append("section_match_ignored_without_catalog_match")
         elif section_hit:
             if intent == "criterios_inclusao":
-                boost += 1.0
+                boost += 8.0 if disease_match and has_confident_catalog_candidate else 1.0
             elif intent == "criterios_exclusao":
-                boost += 1.0
+                boost += 8.0 if disease_match and has_confident_catalog_candidate else 1.0
+            elif intent == "tratamento":
+                boost += 8.0 if disease_match and has_confident_catalog_candidate else 0.8
             else:
-                boost += 0.8
+                boost += 6.0 if disease_match and has_confident_catalog_candidate else 0.8
             section_match = True
             reasons.append(f"section_intent_match:{intent}")
 
@@ -589,8 +625,11 @@ def rerank_documents(
         if section_targets and section_norm and not section_hit and disease_match:
             other_section = next((label for label in _INTENT_SECTION_NORMS.values() if label in section_norm), "")
             if other_section:
-                penalty += 0.8
+                penalty += 4.0 if has_confident_catalog_candidate else 0.8
                 reasons.append(f"penalty_wrong_section:{_reason_slug(other_section)}")
+            elif has_confident_catalog_candidate:
+                penalty += 1.0
+                reasons.append("penalty_section_not_preferred")
 
         query_relevance = _query_document_relevance(query_norm, text_norm, meta_norm)
         if query_relevance >= 0.65:
@@ -622,6 +661,8 @@ def rerank_documents(
                 "candidate_count_before_filter": filter_info.get("candidate_count_before_filter"),
                 "candidate_count_after_filter": filter_info.get("candidate_count_after_filter"),
                 "disease_filter_fallback": filter_info.get("disease_filter_fallback", False),
+                "has_confident_catalog_candidate": has_confident_catalog_candidate,
+                "catalog_filter_fallback": filter_info.get("disease_filter_fallback", False),
                 "cross_encoder_score": None,
                 "final_score": round(final_score, 6),
                 "ranking_reasons": reasons,
@@ -631,7 +672,22 @@ def rerank_documents(
         ranked.append((final_score, ranked_doc))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
-    heuristic_docs = [doc for score, doc in ranked if score >= float(min_final_score)]
+    if has_confident_catalog_candidate and require_catalog_match_when_confident and not filter_info.get("disease_filter_fallback"):
+        threshold = float(min_final_score_with_catalog)
+        heuristic_docs = [
+            doc
+            for score, doc in ranked
+            if score >= threshold and "catalog_candidate_match" in _as_list(doc.metadata.get("ranking_reasons"))
+        ]
+    else:
+        heuristic_docs = [doc for score, doc in ranked if score >= float(min_final_score)]
+
+    expanded_query["_catalog_filter_info"] = {
+        **filter_info,
+        "documents_after_final_filter": len(heuristic_docs),
+        "final_documents_count": min(len(heuristic_docs), final_k),
+        "returned_less_than_final_k": len(heuristic_docs[:final_k]) < final_k,
+    }
     if use_cross_encoder:
         heuristic_docs = apply_cross_encoder_rerank(
             query,
@@ -715,6 +771,7 @@ def build_audit_payload(
     audit_id: str | None = None,
 ) -> dict[str, Any]:
     first_meta = dict(documents[0].metadata or {}) if documents else {}
+    filter_info = expansion.get("_catalog_filter_info") or {}
     return {
         "audit_id": audit_id or str(uuid.uuid4()),
         "question": question,
@@ -733,12 +790,19 @@ def build_audit_payload(
         "matched_terms": expansion.get("matched_terms") or [],
         "retrieval_candidates_k": retrieval_candidates_k,
         "retrieval_final_k": retrieval_final_k,
+        "has_confident_catalog_candidate": bool(filter_info.get("has_confident_catalog_candidate", False)),
         "disease_filter_applied": bool(first_meta.get("disease_filter_applied", False)),
         "filtered_disease": first_meta.get("filtered_disease") or "",
-        "candidate_count_before_filter": first_meta.get("candidate_count_before_filter"),
-        "candidate_count_after_filter": first_meta.get("candidate_count_after_filter"),
+        "candidate_count_before_filter": filter_info.get("candidate_count_before_filter", first_meta.get("candidate_count_before_filter")),
+        "candidate_count_after_filter": filter_info.get("candidate_count_after_filter", first_meta.get("candidate_count_after_filter")),
         "candidate_count_before_rerank": retrieval_candidates_k,
-        "candidate_count_after_catalog_filter": first_meta.get("candidate_count_after_filter"),
+        "documents_before_filter": filter_info.get("candidate_count_before_filter", retrieval_candidates_k),
+        "documents_after_catalog_filter": filter_info.get("candidate_count_after_filter", first_meta.get("candidate_count_after_filter")),
+        "documents_removed_by_catalog_filter": filter_info.get("documents_removed_by_catalog_filter") or [],
+        "catalog_filter_fallback": bool(filter_info.get("disease_filter_fallback", False)),
+        "candidate_count_after_catalog_filter": filter_info.get("candidate_count_after_filter", first_meta.get("candidate_count_after_filter")),
+        "final_documents_count": len(documents),
+        "returned_less_than_final_k": len(documents) < retrieval_final_k,
         "final_documents": [document_audit_record(doc, i) for i, doc in enumerate(documents, start=1)],
         "use_cross_encoder": bool(expansion.get("use_cross_encoder", False)),
         "cross_encoder_model": expansion.get("cross_encoder_model"),

@@ -190,12 +190,12 @@ class CatalogConceptResolver:
         matched_tokens = shared | prefix_shared
         if not matched_tokens:
             return 0.0, [], []
-        if len(matched_tokens) < 2:
-            return 0.0, [], ["weak_single_catalog_context_match"]
 
         df = self._token_document_frequency()
         rare_matches = {token for token in matched_tokens if df.get(token, 0) <= 1}
         common_matches = matched_tokens - rare_matches
+        if len(matched_tokens) < 2 and not rare_matches:
+            return 0.0, [], ["weak_single_catalog_context_match"]
         query_weight = sum(1.0 / max(1, df.get(token, 1)) for token in query_tokens)
         match_weight = sum(1.0 / max(1, df.get(token, 1)) for token in matched_tokens)
         weighted_coverage = match_weight / max(query_weight, 0.0001)

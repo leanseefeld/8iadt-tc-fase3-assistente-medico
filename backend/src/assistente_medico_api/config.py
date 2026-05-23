@@ -70,6 +70,19 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MEDICO_RAG_MIN_FINAL_SCORE", "RAG_MIN_FINAL_SCORE"),
         description="Score final mínimo para retornar um documento ao prompt.",
     )
+    rag_require_catalog_match_when_confident: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "MEDICO_RAG_REQUIRE_CATALOG_MATCH_WHEN_CONFIDENT",
+            "RAG_REQUIRE_CATALOG_MATCH_WHEN_CONFIDENT",
+        ),
+        description="Quando houver candidato de catálogo confiável, retorna apenas documentos compatíveis.",
+    )
+    rag_min_final_score_with_catalog: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices("MEDICO_RAG_MIN_FINAL_SCORE_WITH_CATALOG", "RAG_MIN_FINAL_SCORE_WITH_CATALOG"),
+        description="Score mínimo aplicado quando há candidato de catálogo confiável.",
+    )
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(
         default=Path("./uploads"),

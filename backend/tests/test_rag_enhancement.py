@@ -61,7 +61,7 @@ def _catalog() -> dict[str, dict]:
         "artrite reumatoide": {
             "disease": "Artrite Reumatoide",
             "diretriz": "Artrite Reumatoide",
-            "cid10_codes": ["M05", "M06"],
+            "cid10_codes": ["M05", "M05.0", "M06"],
             "cid10_descriptions": ["Artrite reumatoide soropositiva", "Outras artrites reumatoides"],
             "medicamentos": ["Metotrexato", "Leflunomida"],
             "descricao_siglas": ["AR"],
@@ -212,6 +212,20 @@ def test_medical_chat_pipeline_resolves_lupus_and_diagnostic_intent() -> None:
     _assert_clean_expanded_query(expanded["expanded_query"])
     assert "M32" in expanded["structured_terms"]["cid10_codes"]
     assert expanded["structured_terms"]["intent"] == "diagnostico"
+
+
+def test_lupus_diagnostic_query_filters_other_diagnostic_documents() -> None:
+    expanded = expand_query_with_conitec_catalog("Como reconhecer uma criança com lupus?", _catalog())
+    docs = [
+        (_doc("diagnóstico Wilson", disease="Doença de Wilson", diretriz="Doença de Wilson", section="DIAGNÓSTICO"), 0.1),
+        (_doc("diagnóstico brucelose", disease="Brucelose", diretriz="Brucelose", section="DIAGNÓSTICO"), 0.2),
+        (_doc("diagnóstico lupus", disease="Lúpus Eritematoso Sistêmico", diretriz="Lúpus Eritematoso Sistêmico", section="DIAGNÓSTICO", cid10_codes=["M32"]), 0.3),
+    ]
+
+    ranked = rerank_documents("Como reconhecer uma criança com lupus?", expanded, docs, final_k=6)
+
+    assert "Lúpus Eritematoso Sistêmico" in expanded["expanded_query"]
+    assert [doc.metadata["disease"] for doc in ranked] == ["Lúpus Eritematoso Sistêmico"]
 
 
 def test_match_disease_from_catalog_detects_cid_from_catalog() -> None:
@@ -382,6 +396,37 @@ def test_rerank_documents_does_not_match_rheumatoid_arthritis_to_juvenile_arthri
     assert all("Artrite Idiopática Juvenil" != doc.metadata["disease"] for doc in ranked)
 
 
+def test_rerank_documents_does_not_complete_sgb_with_wrong_diseases() -> None:
+    expansion = expand_query_with_conitec_catalog("Quais são os critérios de inclusão para sgb?", _catalog())
+    docs = [
+        (_doc("G61.0", disease="Síndrome de Guillain-Barré", diretriz="Síndrome de Guillain-Barré", section="CID-10", cid10_codes=["G61.0"]), 0.1),
+        (_doc("paget", disease="Doença de Paget", diretriz="Doença de Paget", section="CID-10"), 0.2),
+        (_doc("mps", disease="Mucopolissacaridose", diretriz="Mucopolissacaridose", section="CRITÉRIOS DE EXCLUSÃO"), 0.3),
+        (_doc("gaucher", disease="Doença de Gaucher", diretriz="Doença de Gaucher", section="MEDICAMENTOS"), 0.4),
+    ]
+
+    ranked = rerank_documents("Quais são os critérios de inclusão para sgb?", expansion, docs, final_k=6)
+
+    assert [doc.metadata["disease"] for doc in ranked] == ["Síndrome de Guillain-Barré"]
+    assert expansion["_catalog_filter_info"]["candidate_count_after_filter"] == 1
+    assert expansion["_catalog_filter_info"]["final_documents_count"] == 1
+    assert expansion["_catalog_filter_info"]["documents_removed_by_catalog_filter"]
+
+
+def test_rerank_documents_prefers_sgb_inclusion_section_over_cid10() -> None:
+    expansion = expand_query_with_conitec_catalog("Quais são os critérios de inclusão para sgb?", _catalog())
+    docs = [
+        (_doc("G61.0", disease="Síndrome de Guillain-Barré", diretriz="Síndrome de Guillain-Barré", section="CID-10", cid10_codes=["G61.0"]), 0.1),
+        (_doc("serão incluídos pacientes", disease="Síndrome de Guillain-Barré", diretriz="Síndrome de Guillain-Barré", section="CRITÉRIOS DE INCLUSÃO", cid10_codes=["G61.0"]), 0.2),
+    ]
+
+    ranked = rerank_documents("Quais são os critérios de inclusão para sgb?", expansion, docs, final_k=2)
+
+    assert [doc.metadata["section"] for doc in ranked] == ["CRITÉRIOS DE INCLUSÃO", "CID-10"]
+    assert "section_intent_match:criterios_inclusao" in ranked[0].metadata["ranking_reasons"]
+    assert any(reason.startswith("cid_catalog_hint_ignored:") for reason in ranked[1].metadata["ranking_reasons"])
+
+
 def test_rerank_documents_boosts_inclusion_section_over_incompatible_sections() -> None:
     expansion = expand_query_with_conitec_catalog(
         "Quais são os critérios de inclusão para artrite reumatoide?",
@@ -449,6 +494,45 @@ def test_rerank_documents_expanded_cid_does_not_dominate_section_intent() -> Non
 
     assert ranked[0].metadata["section"] == "CRITÉRIOS DE INCLUSÃO"
     assert any(reason.startswith("cid_catalog_hint_ignored:") for reason in ranked[1].metadata["ranking_reasons"])
+
+
+def test_rerank_documents_treatment_prefers_treatment_sections_over_cid_and_intro() -> None:
+    expansion = expand_query_with_conitec_catalog("Qual o melhor tratamento para artrite reumatoide?", _catalog())
+    docs = [
+        (_doc("cid", disease="Artrite Reumatoide", diretriz="Artrite Reumatoide", section="CID-10", cid10_codes=["M05.0", "M06"]), 0.1),
+        (_doc("intro", disease="Artrite Reumatoide", diretriz="Artrite Reumatoide", section="INTRODUÇÃO", cid10_codes=["M05.0", "M06"]), 0.2),
+        (_doc("tratamento sintomático", disease="Artrite Reumatoide", diretriz="Artrite Reumatoide", section="Tratamento sintomático", cid10_codes=["M05.0", "M06"]), 0.3),
+        (_doc("tratamento", disease="Artrite Reumatoide", diretriz="Artrite Reumatoide", section="TRATAMENTO", cid10_codes=["M05.0", "M06"]), 0.4),
+    ]
+
+    ranked = rerank_documents("Qual o melhor tratamento para artrite reumatoide?", expansion, docs, final_k=4)
+
+    assert ranked[0].metadata["section"] in {"TRATAMENTO", "Tratamento sintomático"}
+    assert ranked[1].metadata["section"] in {"TRATAMENTO", "Tratamento sintomático"}
+    assert ranked[-1].metadata["section"] in {"CID-10", "INTRODUÇÃO"}
+    assert not any(
+        reason.startswith("cid_catalog_hint:")
+        for doc in ranked
+        for reason in doc.metadata["ranking_reasons"]
+    )
+    assert any(
+        reason.startswith("cid_catalog_hint_ignored:")
+        for doc in ranked
+        for reason in doc.metadata["ranking_reasons"]
+    )
+
+
+def test_rerank_documents_explicit_cid_keeps_strong_boost() -> None:
+    expansion = expand_query_with_conitec_catalog("O que o PCDT fala sobre M05.0?", _catalog())
+    docs = [
+        (_doc("texto geral", disease="Artrite Reumatoide", diretriz="Artrite Reumatoide", section="INTRODUÇÃO", cid10_codes=["M06"]), 0.1),
+        (_doc("M05.0", disease="Artrite Reumatoide", diretriz="Artrite Reumatoide", section="CID-10", cid10_codes=["M05.0"]), 0.2),
+    ]
+
+    ranked = rerank_documents("O que o PCDT fala sobre M05.0?", expansion, docs, final_k=2)
+
+    assert ranked[0].metadata["section"] == "CID-10"
+    assert "cid_explicit_match:M05.0" in ranked[0].metadata["ranking_reasons"]
 
 
 def test_rerank_documents_keeps_juvenile_arthritis_out_of_top_six_for_rheumatoid_query() -> None:
