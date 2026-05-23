@@ -290,9 +290,9 @@ const PROTOCOL_MAP: Record<string, ProtocolResult> = {
 **Rota:** `/chat`  
 **Propósito:** Demonstrar interação conversacional com RAG e raciocínio transparente.
 
-### Layout — 2 painéis
+### Layout — coluna única
 
-**Painel principal (2/3 da largura) — Chat**
+**Chat (largura máxima ~3xl, centralizado)**
 - Balões de conversa: usuário (direita, azul) e assistente (esquerda, cinza)
 - Input no rodapé com botão enviar
 - Botões de atalho acima do input (4 perguntas pré-definidas por CID):
@@ -321,14 +321,14 @@ const QUICK_QUESTIONS: Record<string, string[]> = {
 };
 ```
 
-**Painel lateral (1/3 da largura) — Contexto do Agente**
-- Seção **"Fontes consultadas"**: lista de documentos mock com ícone de arquivo
-  - ex: *📄 PCDT Artrite Psoriásica — CONITEC 2023*
-  - ex: *📄 Bula Metotrexato — ANVISA*
-- Seção expansível **"Raciocínio do agente"**: passos intermediários
-  - *🔍 Buscou: "artrite psoriásica exames baseline"*
-  - *📋 Encontrou: PCDT seção 4.2 — Avaliação laboratorial inicial*
-  - *✅ Concluiu: 5 exames identificados*
+**Meta por mensagem do assistente (sob demanda)**
+- Após o fim do streaming, se houver fontes ou passos de raciocínio, aparecem chips **Fontes (n)** e/ou **Raciocínio (n)** abaixo do balão (fechados por padrão).
+- Durante o streaming não há rodapé de contexto.
+- Ao expandir **Fontes**: lista numerada com o mesmo índice `[n]` usado no prompt de geração (ex. `[1] PCDT stem (pp. 12-14)`).
+- Ao expandir **Raciocínio**: passos intermediários do turno, por exemplo:
+  - *Consultou a base PCDT com k=…*
+  - *Fragmentos de: …*
+- Cada resposta do assistente conserva seu próprio meta; turnos antigos permanecem consultáveis.
 
 ### Respostas mock por pergunta
 

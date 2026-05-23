@@ -32,16 +32,18 @@ def _cached_conitec_catalog() -> dict:
     return load_local_conitec_catalog()
 
 
-def format_source_label(doc: Document) -> str:
-    """Rótulo amigável para a UI (alinhado ao exemplo RAG do repositório)."""
+def format_source_label(doc: Document, index: int) -> str:
+    """Rótulo amigável para a UI; ``index`` alinha ao rank do prompt de geração."""
     meta = doc.metadata
     diretriz = meta.get("diretriz") or meta.get("disease") or meta.get("source_stem", "?")
     section = meta.get("section")
     p0 = meta.get("page_start", "?")
     p1 = meta.get("page_end", "?")
     if section:
-        return f"PCDT {diretriz} — {section} (pp. {p0}-{p1})"
-    return f"PCDT {diretriz} (pp. {p0}-{p1})"
+        body = f"PCDT {diretriz} — {section} (pp. {p0}-{p1})"
+    else:
+        body = f"PCDT {diretriz} (pp. {p0}-{p1})"
+    return f"[{index}] {body}"
 
 
 def format_context_block(docs: list[Document]) -> str:
@@ -166,7 +168,7 @@ def retrieve_node(
             )
             docs.append(Document(page_content=doc.page_content, metadata=meta, id=getattr(doc, "id", None)))
 
-    sources = [format_source_label(d) for d in docs]
+    sources = [format_source_label(d, i) for i, d in enumerate(docs, start=1)]
     reasoning_steps = list(state.get("reasoning_steps") or [])
     reasoning_steps.append(
         "Consultou a base PCDT com "

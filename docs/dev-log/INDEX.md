@@ -12,6 +12,10 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ## Marcos
 
+### 2026-05-22
+
+- **chat-meta-por-mensagem** — agent:cursor — Chat: fontes e raciocínio por turno em `ChatMessage`; accordion inline (`AssistantMessageMeta`); sem painel lateral; rodapé só após streaming e se houver meta. — Revisão: `4856e6a` feat: fine tuning v1
+
 ### 2026-05-21
 
 - **logging-auditoria-estruturada** — agent:cursor — Logging JSON (stdout + arquivo rotativo `logs/assistente_medico.jsonl`), `JsonFormatter`, `RequestContextMiddleware` com `X-Request-Id`; `audit()` nos nós LangGraph, chat/decision-flow e ações clínicas (prescrições, alertas, vitals/exames/upload).

@@ -6,9 +6,15 @@ import {
   postAssistantChatMock,
   quickQuestionsForCid,
 } from '@/api/clinicalApi';
+import {
+  AssistantMessageMeta,
+  assistantMessageHasMeta,
+  type ExpandedMetaPanel,
+} from '@/components/chat/AssistantMessageMeta';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
+import type { GuardrailStatus } from '@/types/domain';
 
 interface ChatMessage {
   id: string;
@@ -16,6 +22,21 @@ interface ChatMessage {
   text: string;
   /** True enquanto tokens SSE estão chegando (modo HTTP). */
   streaming?: boolean;
+  sources?: string[];
+  reasoning?: string[];
+  /** Painel de meta aberto; no máximo um por mensagem. */
+  expandedPanel?: ExpandedMetaPanel | null;
+  guardrailStatus?: GuardrailStatus;
+}
+
+function patchAssistantMessage(
+  messages: ChatMessage[],
+  assistantId: string,
+  patch: Partial<ChatMessage>,
+): ChatMessage[] {
+  return messages.map((msg) =>
+    msg.id === assistantId ? { ...msg, ...patch } : msg,
+  );
 }
 
 export function ChatPage() {
@@ -24,17 +45,26 @@ export function ChatPage() {
   const { showToast } = useToast();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [sources, setSources] = useState<string[]>([]);
-  const [reasoning, setReasoning] = useState<string[]>([]);
-  const [reasoningOpen, setReasoningOpen] = useState(true);
   const [assistantThreadId, setAssistantThreadId] = useState<string | null>(null);
 
   useEffect(() => {
     setMessages([]);
-    setSources([]);
-    setReasoning([]);
     setAssistantThreadId(null);
   }, [activePatientId]);
+
+  function toggleMessagePanel(messageId: string, panel: ExpandedMetaPanel) {
+    setMessages((m) =>
+      m.map((msg) => {
+        if (msg.id !== messageId) {
+          return msg;
+        }
+        return {
+          ...msg,
+          expandedPanel: msg.expandedPanel === panel ? null : panel,
+        };
+      }),
+    );
+  }
 
   if (!activePatientId || !patient) {
     return (
@@ -71,45 +101,44 @@ export function ChatPage() {
         messageHistory,
         onToken: (delta) => {
           setMessages((m) =>
-            m.map((msg) =>
-              msg.id === assistantId
-                ? { ...msg, text: msg.text + delta }
-                : msg,
-            ),
+            patchAssistantMessage(m, assistantId, {
+              text: (m.find((x) => x.id === assistantId)?.text ?? '') + delta,
+            }),
           );
         },
         onMeta: (src, steps) => {
-          setSources(src);
-          setReasoning(steps);
+          setMessages((m) =>
+            patchAssistantMessage(m, assistantId, {
+              sources: src,
+              reasoning: steps,
+            }),
+          );
         },
         onError: (detail) => {
           showToast(detail);
         },
       });
       setMessages((m) =>
-        m.map((msg) =>
-          msg.id === assistantId
-            ? { ...msg, text: res.text, streaming: false }
-            : msg,
-        ),
+        patchAssistantMessage(m, assistantId, {
+          text: res.text,
+          streaming: false,
+          sources: res.sources,
+          reasoning: res.reasoning,
+          ...(res.guardrailStatus
+            ? { guardrailStatus: res.guardrailStatus }
+            : {}),
+        }),
       );
-      setSources(res.sources);
-      setReasoning(res.reasoning);
       if (res.threadId) {
         setAssistantThreadId(res.threadId);
       }
       if (!res.text.trim()) {
         setMessages((m) =>
-          m.map((msg) =>
-            msg.id === assistantId
-              ? {
-                  ...msg,
-                  text:
-                    '__FALLBACK__O assistente não devolveu texto. Verifique o backend e o Ollama.__',
-                  streaming: false,
-                }
-              : msg,
-          ),
+          patchAssistantMessage(m, assistantId, {
+            text:
+              '__FALLBACK__O assistente não devolveu texto. Verifique o backend e o Ollama.__',
+            streaming: false,
+          }),
         );
       }
     } catch {
@@ -123,8 +152,8 @@ export function ChatPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 lg:flex-row">
-      <div className="flex min-h-[420px] flex-[2] flex-col rounded-xl border border-[var(--color-border-subtle)] bg-white shadow-sm">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+      <div className="flex min-h-[420px] flex-col rounded-xl border border-[var(--color-border-subtle)] bg-white shadow-sm">
         <div className="border-b px-4 py-3">
           <h2 className="text-lg font-semibold text-slate-900">
             Chat com o assistente
@@ -147,7 +176,7 @@ export function ChatPage() {
             ) : (
               <div
                 key={msg.id}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
               >
                 <div
                   className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
@@ -167,6 +196,19 @@ export function ChatPage() {
                       />
                     ) : null}
                   </div>
+                  {msg.role === 'assistant' &&
+                  !msg.streaming &&
+                  assistantMessageHasMeta(msg) ? (
+                    <AssistantMessageMeta
+                      messageId={msg.id}
+                      sources={msg.sources ?? []}
+                      reasoning={msg.reasoning ?? []}
+                      expandedPanel={msg.expandedPanel ?? null}
+                      onTogglePanel={(panel) =>
+                        toggleMessagePanel(msg.id, panel)
+                      }
+                    />
+                  ) : null}
                 </div>
               </div>
             ),
@@ -202,41 +244,6 @@ export function ChatPage() {
           </form>
         </div>
       </div>
-
-      <aside className="flex flex-1 flex-col gap-4 rounded-xl border border-[var(--color-border-subtle)] bg-white p-4 shadow-sm">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-800">
-            Fontes consultadas
-          </h3>
-          <ul className="mt-2 space-y-1 text-sm text-slate-700">
-            {sources.length ? (
-              sources.map((s) => (
-                <li key={s}>📄 {s}</li>
-              ))
-            ) : (
-              <li className="text-slate-500">Nenhuma fonte ainda</li>
-            )}
-          </ul>
-        </div>
-        <div>
-          <button
-            type="button"
-            onClick={() => setReasoningOpen((o) => !o)}
-            className="text-sm font-semibold text-teal-800"
-          >
-            Raciocínio do agente {reasoningOpen ? '▼' : '▶'}
-          </button>
-          {reasoningOpen ? (
-            <ul className="mt-2 space-y-1 text-xs text-slate-600">
-              {reasoning.length ? (
-                reasoning.map((r, i) => <li key={i}>{r}</li>)
-              ) : (
-                <li>Envie uma pergunta para ver o raciocínio simulado.</li>
-              )}
-            </ul>
-          ) : null}
-        </div>
-      </aside>
     </div>
   );
 }

@@ -77,8 +77,8 @@ except ModuleNotFoundError as exc:
     def format_context_block(docs: list[Any]) -> str:  # type: ignore[no-redef]
         return ""
 
-    def format_source_label(doc: Any) -> str:  # type: ignore[no-redef]
-        return "PCDT ? (pp. ?-?)"
+    def format_source_label(doc: Any, index: int) -> str:  # type: ignore[no-redef]
+        return f"[{index}] PCDT ? (pp. ?-?)"
 
     def retrieve_node(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
@@ -275,7 +275,7 @@ def _doc_payload(doc: Document, rank: int) -> dict[str, Any]:
     meta = dict(doc.metadata or {})
     return {
         "rank": rank,
-        "source_label": format_source_label(doc),
+        "source_label": format_source_label(doc, rank),
         "doc_id": getattr(doc, "id", None),
         "metadata": meta,
         "dense_score": meta.get("dense_score"),
@@ -293,7 +293,7 @@ def _candidate_payload(doc: Document, score: float, rank: int) -> dict[str, Any]
     return {
         "rank": rank,
         "dense_score": float(score),
-        "source_label": format_source_label(doc),
+        "source_label": format_source_label(doc, rank),
         "doc_id": getattr(doc, "id", None),
         "metadata": dict(doc.metadata or {}),
         "content_preview": (doc.page_content or "").strip()[:500],
