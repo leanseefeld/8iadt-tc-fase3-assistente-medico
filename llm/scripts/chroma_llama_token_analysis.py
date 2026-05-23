@@ -36,7 +36,7 @@ DEFAULT_CONTEXT_WINDOW = 128_000
 DEFAULT_RETRIEVAL_K = 6
 
 # Teto de referência para gráficos e tabela de k (orçamentos até 200k).
-MAX_REFERENCE_CONTEXT = 200_000
+MAX_REFERENCE_CONTEXT = 262_144
 
 # Limite padrão do eixo k no gráfico da §10 (None = todos os chunks do escopo).
 DEFAULT_MAX_K_CHART = 500
@@ -46,14 +46,16 @@ HEADER_TOKENS_PER_CHUNK = 55
 
 # Referências comuns de janela (linhas no gráfico de acumulado).
 STANDARD_CONTEXT_BUDGETS: tuple[int, ...] = (
-    2_000,
-    4_000,
-    8_000,
-    16_000,
-    32_000,
-    64_000,
-    128_000,
-    256_000,
+    256,
+    512,
+    1_024,
+    2_048,
+    4_096,
+    8_192,
+    16_384,
+    32_768,
+    65_536,
+    131_072,
 )
 
 # --- Estimativa de VRAM (Llama 3.2 3B, inferência batch=1) ---
