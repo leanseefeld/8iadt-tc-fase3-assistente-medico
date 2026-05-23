@@ -6,6 +6,7 @@ from pathlib import Path
 from langchain_core.documents import Document
 
 from assistente_medico_api.graph import cross_encoder_reranker as ce_mod
+from assistente_medico_api.graph import clinical_query_understanding as cqu_mod
 from assistente_medico_api.graph.clinical_query_understanding import (
     CatalogCandidateRetriever,
     detect_clinical_intent,
@@ -23,6 +24,16 @@ from assistente_medico_api.graph.rag_enhancement import (
     format_context_document,
     rerank_documents,
 )
+
+
+def _assert_clean_expanded_query(expanded_query: str) -> None:
+    assert "cid10_codes:" not in expanded_query
+    assert "structured_terms:" not in expanded_query
+    assert "{" not in expanded_query
+    assert "}" not in expanded_query
+    assert "[" not in expanded_query
+    assert "]" not in expanded_query
+    assert '"' not in expanded_query
 
 
 def _catalog() -> dict[str, dict]:
@@ -92,6 +103,36 @@ def _catalog() -> dict[str, dict]:
             "descricao_siglas": ["HIV"],
             "source_stem": "pcdt_hiv_criancas_adolescentes_modulo_2",
         },
+        "hiv adultos": {
+            "disease": "Infecção pelo HIV em Adultos",
+            "diretriz": "Manejo da Infecção pelo HIV em Adultos - Módulo 1 - Tratamento",
+            "disease_normalized": "infeccao pelo hiv em adultos",
+            "cid10_codes": ["B20", "B24"],
+            "cid10_descriptions": ["Doença pelo vírus da imunodeficiência humana"],
+            "medicamentos": ["Dolutegravir", "Lamivudina"],
+            "descricao_siglas": ["HIV"],
+            "source_stem": "pcdt_hiv_adultos_modulo_1",
+        },
+        "sindrome guillain barre": {
+            "disease": "Síndrome de Guillain-Barré",
+            "diretriz": "Síndrome de Guillain-Barré",
+            "disease_normalized": "sindrome de guillain barre",
+            "cid10_codes": ["G61.0"],
+            "cid10_descriptions": ["Síndrome de Guillain-Barré"],
+            "medicamentos": ["Imunoglobulina humana"],
+            "descricao_siglas": ["SGB"],
+            "source_stem": "20201022_portaria_conjunta_pcdt_sgb-1",
+        },
+        "lupus eritematoso sistemico": {
+            "disease": "Lúpus Eritematoso Sistêmico",
+            "diretriz": "Lúpus Eritematoso Sistêmico",
+            "disease_normalized": "lupus eritematoso sistemico",
+            "cid10_codes": ["M32"],
+            "cid10_descriptions": ["Lúpus eritematoso sistêmico"],
+            "medicamentos": ["Hidroxicloroquina"],
+            "descricao_siglas": ["LES"],
+            "source_stem": "20221109_pcdt_lupus",
+        },
     }
 
 
@@ -123,6 +164,56 @@ def test_catalog_candidate_retriever_uses_full_catalog_fields_for_hiv_pediatric_
     assert "Mucopolissacaridose" not in weak_names
 
 
+def test_medical_chat_pipeline_expands_hiv_pediatric_query_and_filters_wrong_docs() -> None:
+    expanded = expand_query_with_conitec_catalog("Como tratar HIV em crianças?", _catalog())
+    docs = [
+        (
+            _doc(
+                "tratamento pediátrico",
+                disease="Infecção pelo HIV em Crianças e Adolescentes",
+                diretriz="Manejo da Infecção pelo HIV em Crianças e Adolescentes - Módulo 2 - Diagnóstico, Manejo e Tratamento de Crianças e Adolescentes Vivendo com HIV",
+                section="TRATAMENTO",
+            ),
+            0.2,
+        ),
+        (_doc("texto AIJ", disease="Artrite Idiopática Juvenil", diretriz="Artrite Idiopática Juvenil", section="TRATAMENTO"), 0.9),
+        (_doc("texto MPS", disease="Mucopolissacaridose", diretriz="Mucopolissacaridose", section="TRATAMENTO"), 0.8),
+    ]
+
+    ranked = rerank_documents("Como tratar HIV em crianças?", expanded, docs, final_k=5)
+
+    assert expanded["clinical_understanding"]["intent"] == "tratamento"
+    assert expanded["catalog_candidates"][0]["disease"] == "Infecção pelo HIV em Crianças e Adolescentes"
+    assert "Manejo da Infecção pelo HIV em Crianças e Adolescentes" in expanded["expanded_query"]
+    assert [doc.metadata["disease"] for doc in ranked] == ["Infecção pelo HIV em Crianças e Adolescentes"]
+
+
+def test_medical_chat_pipeline_resolves_sgb_for_inclusion_criteria() -> None:
+    expanded = expand_query_with_conitec_catalog("Quais são os critérios de inclusão para sgb?", _catalog())
+
+    assert expanded["clinical_understanding"]["intent"] == "criterios_inclusao"
+    assert expanded["catalog_candidates"][0]["disease"] == "Síndrome de Guillain-Barré"
+    assert "Síndrome de Guillain-Barré" in expanded["expanded_query"]
+    assert "G61.0" in expanded["expanded_query"]
+    assert "CRITÉRIOS DE INCLUSÃO" in expanded["expanded_query"]
+    _assert_clean_expanded_query(expanded["expanded_query"])
+    assert expanded["structured_terms"]["cid10_codes"] == ["G61.0"]
+    assert expanded["structured_terms"]["intent"] == "criterios_inclusao"
+
+
+def test_medical_chat_pipeline_resolves_lupus_and_diagnostic_intent() -> None:
+    expanded = expand_query_with_conitec_catalog("Como eu reconheço uma criança com lupus?", _catalog())
+
+    assert expanded["clinical_understanding"]["intent"] == "diagnostico"
+    assert expanded["catalog_candidates"][0]["disease"] == "Lúpus Eritematoso Sistêmico"
+    assert "Lúpus Eritematoso Sistêmico" in expanded["expanded_query"]
+    assert "M32" in expanded["expanded_query"]
+    assert "DIAGNÓSTICO" in expanded["expanded_query"]
+    _assert_clean_expanded_query(expanded["expanded_query"])
+    assert "M32" in expanded["structured_terms"]["cid10_codes"]
+    assert expanded["structured_terms"]["intent"] == "diagnostico"
+
+
 def test_match_disease_from_catalog_detects_cid_from_catalog() -> None:
     match = match_disease_from_catalog("O que o PCDT diz sobre E27.1?", _catalog())
 
@@ -137,6 +228,17 @@ def test_understand_clinical_query_fallback_without_catalog() -> None:
     assert understanding["original_query"] == "O que o PCDT diz sobre E27.1?"
     assert understanding["detected_cid10_codes"] == ["E27.1"]
     assert understanding["detected_disease"] is None
+
+
+def test_catalog_fallback_works_when_biomedical_linkers_are_absent(monkeypatch) -> None:
+    monkeypatch.setattr(cqu_mod, "_entity_resolver", lambda: None)
+
+    understanding = understand_clinical_query("Quais são os critérios de inclusão para sgb?", _catalog())
+
+    assert understanding["linked_entities"] == []
+    assert understanding["detected_disease"]["name"] == "Síndrome de Guillain-Barré"
+    assert understanding["clinical_terms"] == []
+    assert understanding["catalog_candidates"][0]["source"] == "catalog_semantic"
 
 
 def test_extract_query_entities_detects_cid_and_intent() -> None:
@@ -195,8 +297,11 @@ def test_expand_query_with_conitec_catalog_is_restrictive_for_rheumatoid_arthrit
 
     assert expanded["matched_diseases"] == ["Artrite Reumatoide"]
     assert expanded["matched_medications"] == []
+    assert expanded["structured_terms"]["disease"] == "Artrite Reumatoide"
+    assert expanded["structured_terms"]["intent"] == "criterios_inclusao"
     assert "Artrite Reumatoide" in expanded["expanded_query"]
     assert "CRITÉRIOS DE INCLUSÃO" in expanded["expanded_query"]
+    _assert_clean_expanded_query(expanded["expanded_query"])
     assert "M05" not in expanded["expanded_query"]
     assert "M06" not in expanded["expanded_query"]
     assert "Metotrexato" not in expanded["expanded_query"]
@@ -343,7 +448,7 @@ def test_rerank_documents_expanded_cid_does_not_dominate_section_intent() -> Non
     ranked = rerank_documents("Quais são os critérios de inclusão para artrite reumatoide?", expansion, docs, final_k=2)
 
     assert ranked[0].metadata["section"] == "CRITÉRIOS DE INCLUSÃO"
-    assert any(reason.startswith("cid_expansion_hint_ignored:") for reason in ranked[1].metadata["ranking_reasons"])
+    assert any(reason.startswith("cid_catalog_hint_ignored:") for reason in ranked[1].metadata["ranking_reasons"])
 
 
 def test_rerank_documents_keeps_juvenile_arthritis_out_of_top_six_for_rheumatoid_query() -> None:
@@ -527,5 +632,25 @@ def test_build_audit_payload_and_jsonl_write(tmp_path: Path) -> None:
     line = (tmp_path / "audit.jsonl").read_text(encoding="utf-8").strip()
     parsed = json.loads(line)
     assert parsed["question"] == "Paciente com E27.1"
+    assert "structured_terms" in parsed
     assert parsed["documents"][0]["source_stem"] == "s"
     assert parsed["documents"][0]["cid10_codes"] == ["E27.1"]
+
+
+def test_expansion_is_json_serializable_and_keeps_structured_terms_out_of_chroma_text() -> None:
+    expanded = expand_query_with_conitec_catalog("Quais são os critérios de inclusão para sgb?", _catalog())
+
+    json.dumps(expanded, ensure_ascii=False)
+    json.dumps(expanded["structured_terms"], ensure_ascii=False)
+    _assert_clean_expanded_query(expanded["expanded_query"])
+    assert expanded["structured_terms"]["catalog_candidates"]
+
+
+def test_hiv_pediatric_expansion_has_catalog_candidates_and_not_only_intent() -> None:
+    expanded = expand_query_with_conitec_catalog("Como tratar HIV em crianças?", _catalog())
+
+    assert "Manejo da Infecção pelo HIV em Crianças e Adolescentes" in expanded["expanded_query"]
+    assert "TRATAMENTO" in expanded["expanded_query"]
+    assert expanded["expanded_query"] != "Como tratar HIV em crianças? TRATAMENTO"
+    assert expanded["structured_terms"]["catalog_candidates"]
+    _assert_clean_expanded_query(expanded["expanded_query"])

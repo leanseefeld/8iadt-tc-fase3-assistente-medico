@@ -38,7 +38,11 @@ def _build_messages(state: ChatRAGState) -> list:
     docs = state.get("retrieved_docs") or []
     context = format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
     user_text = state.get("query") or ""
-    understanding = _format_clinical_understanding(state.get("clinical_understanding") or {})
+    query_expansion = state.get("query_expansion") or {}
+    understanding = _format_clinical_understanding(
+        state.get("clinical_understanding") or {},
+        query_expansion.get("structured_terms") or {},
+    )
     # Bloco PCDT só na pergunta corrente (turno final do utilizador).
     final_human = (
         f"Pergunta do médico:\n{user_text}\n\n"
@@ -68,18 +72,32 @@ def _build_messages(state: ChatRAGState) -> list:
     return out
 
 
-def _format_clinical_understanding(understanding: dict) -> str:
+def _format_clinical_understanding(understanding: dict, structured_terms: dict | None = None) -> str:
+    structured_terms = structured_terms or {}
     disease = understanding.get("detected_disease") or {}
-    meds = understanding.get("detected_medications") or []
-    med_names = [str(item.get("name") or item) for item in meds if item]
+    entities = understanding.get("linked_entities") or []
+    candidates = understanding.get("catalog_candidates") or []
+    structured_disease = structured_terms.get("diretriz") or structured_terms.get("disease")
+    structured_cids = structured_terms.get("cid10_codes") or []
+    structured_sections = structured_terms.get("preferred_sections") or []
     return "\n".join(
         [
-            f"- Intenção: {understanding.get('intent') or 'não detectada'}",
-            f"- Doença detectada: {disease.get('name') or 'nenhuma'}",
-            f"- CID explícito: {', '.join(understanding.get('detected_cid10_codes') or []) or 'nenhum'}",
-            f"- Medicamento explícito: {', '.join(med_names) or 'nenhum'}",
+            f"- Intenção: {structured_terms.get('intent') or (understanding.get('intent_result') or {}).get('intent') or understanding.get('intent') or 'não detectada'}",
+            f"- Doença/Diretriz: {structured_disease or disease.get('name') or 'nenhuma'}",
+            f"- CID-10: {', '.join(structured_cids) or ', '.join(understanding.get('detected_cid10_codes') or []) or 'nenhum'}",
+            f"- Seções preferenciais: {_format_items(structured_sections)}",
+            f"- Entidades biomédicas linkadas: {_format_items([e.get('canonical') or e.get('text') for e in entities])}",
+            f"- Candidatos do catálogo: {_format_items([c.get('diretriz') or c.get('disease') for c in candidates])}",
         ]
     )
+
+
+def _format_items(values: list, limit: int = 5) -> str:
+    items = [str(value).strip() for value in values if str(value or "").strip()]
+    if not items:
+        return "nenhuma"
+    suffix = "..." if len(items) > limit else ""
+    return ", ".join(items[:limit]) + suffix
 
 
 def _build_llm(settings: Settings) -> ChatOllama:

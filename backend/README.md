@@ -94,14 +94,38 @@ grep '"event":"chat_response_done"' logs/assistente_medico.jsonl | head
 O fluxo de recuperação do chat agora é:
 
 ```text
-pergunta -> entendimento clínico -> expansão restritiva Conitec -> Chroma k=30 -> reranking por intenção -> top 6 -> prompt -> auditoria
+pergunta
+-> ClinicalIntentClassifier
+-> BiomedicalEntityResolver
+-> CatalogConceptResolver
+-> QueryExpansionFromCatalog
+-> Chroma k=30
+-> reranking consciente de catálogo
+-> top final
+-> prompt
+-> auditoria
 ```
 
-A expansão usa apenas o catálogo local `llm/data/processed/conitec/pcdt_catalog.jsonl`; a planilha da Conitec não é baixada em tempo de requisição. O chat interpreta a pergunta médica antes da busca, detectando intenção clínica, CID-10 explícito, medicamento explícito e uma diretriz/doença do catálogo quando houver match forte. A expansão é restritiva e sensível à intenção: perguntas de critérios de inclusão/exclusão adicionam apenas a doença canônica e a seção esperada, sem CIDs ou medicamentos automáticos.
+A expansão usa apenas o catálogo local `llm/data/processed/conitec/pcdt_catalog.jsonl`; a planilha da Conitec não é baixada em tempo de requisição. O chat interpreta a pergunta médica antes da busca, detectando intenção clínica, entidades biomédicas linkadas quando houver backend disponível, CID-10 explícito e candidatos de diretriz/doença do catálogo quando houver match forte.
 
-O reranking é heurístico e explicável. Quando uma doença é detectada com confiança alta, há pós-filtro rígido por `metadata.disease_normalized`: se sobrarem documentos da doença correta, doenças diferentes não entram no prompt só para completar o top 6. Ele mantém a posição original do Chroma como base, mas aplica boosts por doença/diretriz detectada, seção compatível com a intenção, CID explícito e medicamento explícito. CIDs vindos apenas da expansão recebem peso fraco ou são ignorados em perguntas de critérios. Para perguntas de critérios de inclusão, seções como CID-10, Fármacos, Tratamento e Diagnóstico diferencial são penalizadas em relação à seção `CRITÉRIOS DE INCLUSÃO`.
+A saída da expansão tem dois canais:
 
-Depois do rerank heurístico, é possível habilitar reranking por `sentence-transformers` CrossEncoder para reordenar os candidatos já recuperados. As bibliotecas clínicas e de reranking (`medspacy`, `spacy`, `rapidfuzz`, `sentence-transformers`) são dependências obrigatórias do backend; o modelo CrossEncoder só é carregado se `RAG_USE_CROSS_ENCODER_RERANK=true`. Se o modelo configurado falhar ao carregar, o fluxo mantém o ranking heurístico.
+- `expanded_query`: texto limpo enviado ao Chroma, com pergunta original, diretriz/doença canônica, um CID-10 quando houver um único código relevante, e seção preferencial. Não contém JSON, nomes de campos ou listas serializadas.
+- `structured_terms`: dados serializáveis usados por filtro, rerank, prompt e auditoria, incluindo doença, diretriz, CID-10, intenção, seções preferenciais, candidatos do catálogo, entidades linkadas e confiança.
+
+Medicamentos e CIDs múltiplos ficam em `structured_terms`; eles não entram automaticamente no texto vetorial quando isso poluiria a busca.
+
+O resolvedor biomédico tenta, nessa ordem, scispaCy com EntityLinker, QuickUMLS apontado por `QUICKUMLS_FP`/`QUICKUMLS_PATH`, e spaCy apenas como NER. Se nada estiver instalado ou configurado, ele retorna lista vazia; o fallback continua pelo matching semântico contra o catálogo, nunca pela primeira palavra da pergunta ou por sigla extraída isoladamente. Modelos não são baixados em runtime.
+
+O reranking é heurístico e explicável. Ele usa `structured_terms`, não parseia a string expandida, para decidir doença/diretriz, CIDs, intenção e seções preferenciais. Quando há candidato de catálogo confiável, documentos da mesma diretriz/doença têm prioridade e documentos de outra doença não sobem apenas por seção; se o filtro por catálogo não encontra documentos compatíveis, o fluxo registra baixa confiança e evita completar o top final com documentos errados. A posição original do Chroma continua como base, mas `catalog_candidate_match` pesa mais que `section_intent_match`. CIDs explícitos na pergunta geram `cid_explicit_match`; CIDs vindos do catálogo entram como reforço leve (`cid_catalog_hint`) e não dominam critérios de inclusão.
+
+Depois do rerank heurístico, é possível habilitar reranking por `sentence-transformers` CrossEncoder para reordenar os candidatos já recuperados. As dependências biomédicas (`spacy`, `medspacy`, `scispacy`) fazem parte da instalação padrão do backend. O reranking por CrossEncoder continua opcional:
+
+```bash
+pip install -e "backend[rerank]"
+```
+
+O modelo CrossEncoder só é carregado se `RAG_USE_CROSS_ENCODER_RERANK=true`. Se o modelo configurado falhar ao carregar, o fluxo mantém o ranking heurístico.
 
 O prompt enviado ao LLM inclui metadados ricos por documento:
 
@@ -113,17 +137,20 @@ O prompt enviado ao LLM inclui metadados ricos por documento:
 - fonte e páginas;
 - score final e motivos do ranking.
 - entendimento clínico da pergunta (intenção, doença, CID e medicamento explícitos).
+- entidades biomédicas linkadas e candidatos do catálogo.
 
 A resposta continua citando documentos pelo identificador `[n]`. A política de segurança de doses/posologia permanece sob o guardrail existente.
 
-Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com pergunta original, entendimento clínico, query expandida, termos adicionados, `k` inicial/final, status do filtro por doença, contagem antes/depois do filtro, uso de CrossEncoder, documentos usados, scores, motivos de ranking e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta.
+Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `original_query`, `expanded_query`, `structured_terms`, `added_terms`, documentos finais, scores, `ranking_reasons`, uso de CrossEncoder e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta. Para depurar expansão e auditoria, confira `query_expansion`, `clinical_understanding` e `rag_audit_payload` no retorno/stream do chat ou use o RAG Inspector em `llm/scripts/rag_inspector_app.py`.
 
 Exemplos rápidos para testar:
 
 ```text
 Quais critérios de inclusão para insuficiência adrenal?
 O que o PCDT fala sobre E27.1?
-HIV criança
+Como tratar HIV em crianças?
+Quais são os critérios de inclusão para sgb?
+Como eu reconheço uma criança com lupus?
 Tratamento com hidrocortisona
 ```
 

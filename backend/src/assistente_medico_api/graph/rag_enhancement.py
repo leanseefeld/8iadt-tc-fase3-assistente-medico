@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 
 from assistente_medico_api.graph.cross_encoder_reranker import apply_cross_encoder_rerank
 from assistente_medico_api.graph.clinical_query_understanding import (
+    INTENT_SECTION_LABELS,
     expand_query_for_medical_chat,
     normalize_text_for_match,
     understand_clinical_query,
@@ -36,6 +37,7 @@ except Exception:  # pragma: no cover - backend pode ser importado sem pacote ll
 
 
 _TREATMENT_INTENTS = {"tratamento", "dose", "medicamento"}
+_INTENT_SECTION_NORMS = {intent: normalize_text_for_match(label) for intent, label in INTENT_SECTION_LABELS.items()}
 
 # Legacy section-penalty lists are intentionally left empty to avoid
 # hard-coded clinical token rules dominating ranking. The catalog and
@@ -87,6 +89,97 @@ def _dedupe(values: Iterable[Any], *, limit: int | None = None) -> list[str]:
     return out
 
 
+def _public_catalog_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "diretriz": candidate.get("diretriz"),
+        "disease": candidate.get("disease"),
+        "score": float(candidate.get("score") or 0.0),
+        "matched_fields": _as_list(candidate.get("matched_fields")),
+        "reasons": _as_list(candidate.get("reasons")),
+        "source": candidate.get("source") or "catalog_semantic",
+    }
+
+
+def _build_structured_terms(
+    *,
+    understanding: dict[str, Any],
+    matched_entries: list[dict[str, Any]],
+    matched_cids: list[str],
+    cid_descriptions: list[str],
+    matched_meds: list[str],
+) -> dict[str, Any]:
+    disease = understanding.get("detected_disease") or {}
+    best_entry = matched_entries[0] if matched_entries else {}
+    intent = understanding.get("intent") or (understanding.get("intent_result") or {}).get("intent")
+    preferred_sections = _dedupe([INTENT_SECTION_LABELS.get(str(intent))] if intent in INTENT_SECTION_LABELS else [])
+    candidate_confidences = [
+        float(candidate.get("score") or 0.0)
+        for candidate in understanding.get("catalog_candidates") or []
+    ]
+    confidence = max(candidate_confidences or [float(disease.get("confidence") or 0.0)])
+    return {
+        "disease": best_entry.get("disease") or disease.get("name"),
+        "disease_normalized": normalize_text_for_match(
+            best_entry.get("disease_normalized") or disease.get("normalized") or disease.get("name") or ""
+        )
+        or None,
+        "diretriz": best_entry.get("diretriz") or best_entry.get("disease") or disease.get("name"),
+        "cid10_codes": _dedupe(matched_cids),
+        "cid10_descriptions": _dedupe(cid_descriptions),
+        "medications": _dedupe(matched_meds),
+        "intent": intent,
+        "preferred_sections": preferred_sections,
+        "catalog_candidates": [
+            _public_catalog_candidate(candidate)
+            for candidate in understanding.get("catalog_candidates") or []
+        ],
+        "linked_entities": [
+            dict(entity)
+            for entity in understanding.get("linked_entities") or []
+            if isinstance(entity, dict)
+        ],
+        "confidence": round(float(confidence or 0.0), 4),
+    }
+
+
+def _expanded_query_terms(
+    *,
+    structured_terms: dict[str, Any],
+    original_added_terms: list[str],
+    max_terms: int,
+) -> list[str]:
+    terms: list[str] = []
+    diretriz = structured_terms.get("diretriz")
+    disease = structured_terms.get("disease")
+    has_catalog_candidate = bool(structured_terms.get("catalog_candidates"))
+    if diretriz:
+        terms.append(str(diretriz))
+    elif disease:
+        terms.append(str(disease))
+
+    cid10_codes = _as_list(structured_terms.get("cid10_codes"))
+    if len(cid10_codes) == 1:
+        terms.append(cid10_codes[0])
+
+    if has_catalog_candidate:
+        terms.extend(_as_list(structured_terms.get("preferred_sections")))
+
+    # Preserve any existing conservative catalog-derived terms that are not
+    # field labels or serialized structures.
+    terms.extend(term for term in original_added_terms if not _looks_structured(term))
+    return _dedupe(terms, limit=max_terms)
+
+
+def _looks_structured(value: Any) -> bool:
+    text = str(value or "").strip()
+    return any(marker in text for marker in ("{", "}", "[", "]", ":", '"'))
+
+
+def _compose_expanded_query(original: str, added_terms: list[str]) -> str:
+    clean_terms = [term for term in added_terms if not _looks_structured(term)]
+    return f"{original} {' '.join(clean_terms)}".strip() if clean_terms else original
+
+
 def load_local_conitec_catalog(path: Path | None = None) -> dict[str, dict[str, Any]]:
     """Carrega o catálogo local processado; nunca baixa a planilha em runtime."""
     if path is None:
@@ -118,7 +211,7 @@ def extract_query_entities(query: str, catalog: Any | None = None) -> dict[str, 
         "cid10_codes": _dedupe(understanding.get("detected_cid10_codes") or []),
         "disease_terms": _dedupe([disease.get("name")] if disease else []),
         "medication_terms": _dedupe(medication_terms),
-        "section_intent": understanding.get("intent"),
+        "section_intent": None if not query.strip() else understanding.get("intent"),
     }
 
 
@@ -127,11 +220,23 @@ def expand_query_with_conitec_catalog(query: str, catalog: Any, max_terms: int =
     original = (query or "").strip()
     if not original or not catalog:
         understanding = understand_clinical_query(original, catalog)
+        structured_terms = _build_structured_terms(
+            understanding=understanding,
+            matched_entries=[],
+            matched_cids=[],
+            cid_descriptions=[],
+            matched_meds=[],
+        )
         return {
             "original_query": original,
             "expanded_query": original,
+            "structured_terms": structured_terms,
             "added_terms": [],
+            "source": "catalog_candidates",
             "expansion_reason": [],
+            "intent": understanding.get("intent_result") or {},
+            "linked_entities": understanding.get("linked_entities") or [],
+            "catalog_candidates": understanding.get("catalog_candidates") or [],
             "matched_diseases": [],
             "matched_cid10_codes": [],
             "matched_medications": [],
@@ -164,16 +269,33 @@ def expand_query_with_conitec_catalog(query: str, catalog: Any, max_terms: int =
         for med in _as_list(entry.get("medicamentos"))
         if include_related_meds or med in explicit_meds
     )
+    structured_terms = _build_structured_terms(
+        understanding=understanding,
+        matched_entries=matched_entries,
+        matched_cids=matched_cids,
+        cid_descriptions=descriptions,
+        matched_meds=matched_meds,
+    )
+    added_terms = _expanded_query_terms(
+        structured_terms=structured_terms,
+        original_added_terms=expansion["added_terms"],
+        max_terms=max_terms,
+    )
 
     return {
         "original_query": original,
-        "expanded_query": expansion["expanded_query"],
-        "added_terms": expansion["added_terms"],
+        "expanded_query": _compose_expanded_query(original, added_terms),
+        "structured_terms": structured_terms,
+        "added_terms": added_terms,
+        "source": "catalog_candidates",
         "expansion_reason": expansion["expansion_reason"],
+        "intent": understanding.get("intent_result") or {},
+        "linked_entities": understanding.get("linked_entities") or [],
+        "catalog_candidates": understanding.get("catalog_candidates") or [],
         "matched_diseases": matched_diseases,
         "matched_cid10_codes": matched_cids,
         "matched_medications": matched_meds,
-        "matched_terms": expansion["added_terms"],
+        "matched_terms": added_terms,
         "matched_cid10_descriptions": descriptions,
         "entities": entities,
         "clinical_understanding": understanding,
@@ -240,6 +362,15 @@ def _detected_disease_norm(understanding: dict[str, Any]) -> str:
     return normalize_text_for_match(disease.get("normalized") or disease.get("name") or "")
 
 
+def _structured_disease_norm(structured_terms: dict[str, Any] | None, understanding: dict[str, Any]) -> str:
+    if structured_terms:
+        value = structured_terms.get("disease_normalized") or structured_terms.get("disease") or structured_terms.get("diretriz")
+        norm = normalize_text_for_match(value)
+        if norm:
+            return norm
+    return _detected_disease_norm(understanding)
+
+
 def _query_document_relevance(query_norm: str, text_norm: str, meta_norm: str) -> float:
     if not query_norm:
         return 0.0
@@ -259,11 +390,13 @@ def filter_documents_by_detected_disease(
     documents: list[Any],
     understanding: dict[str, Any],
     *,
+    structured_terms: dict[str, Any] | None = None,
     min_confidence: float = 0.90,
 ) -> tuple[list[Any], dict[str, Any]]:
     """Aplica pós-filtro rígido por disease_normalized quando a doença é confiável."""
     disease = understanding.get("detected_disease") or {}
-    disease_norm = _detected_disease_norm(understanding)
+    disease_norm = _structured_disease_norm(structured_terms, understanding)
+    confidence = float((structured_terms or {}).get("confidence") or disease.get("confidence") or 0.0)
     before = len(documents)
     info = {
         "disease_filter_applied": False,
@@ -272,7 +405,7 @@ def filter_documents_by_detected_disease(
         "candidate_count_after_filter": before,
         "disease_filter_fallback": False,
     }
-    if not disease_norm or float(disease.get("confidence") or 0.0) < min_confidence:
+    if not disease_norm or confidence < min_confidence:
         return documents, info
 
     kept = []
@@ -308,6 +441,7 @@ def rerank_documents(
     final_k: int = 6,
     *,
     understanding: dict[str, Any] | None = None,
+    structured_terms: dict[str, Any] | None = None,
     use_cross_encoder: bool = False,
     cross_encoder_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
     cross_encoder_top_n: int = 15,
@@ -318,40 +452,41 @@ def rerank_documents(
         return []
 
     clinical_understanding = understanding or expanded_query.get("clinical_understanding") or {}
+    structured = structured_terms or expanded_query.get("structured_terms") or {}
     entities = expanded_query.get("entities") or extract_query_entities(query)
     explicit_cids = {
         code.upper()
         for code in (clinical_understanding.get("detected_cid10_codes") or entities.get("cid10_codes") or [])
     }
-    expanded_cids = {
+    catalog_cids = {
         code.upper()
-        for code in (expanded_query.get("matched_cid10_codes") or [])
+        for code in _as_list(structured.get("cid10_codes") or expanded_query.get("matched_cid10_codes") or [])
         if code.upper() not in explicit_cids
     }
-    detected_disease = clinical_understanding.get("detected_disease") or {}
-    disease_terms = [
-        normalize_text_for_match(t)
-        for t in (
-            [detected_disease.get("normalized") or detected_disease.get("name")]
-            if detected_disease
-            else entities.get("disease_terms") or expanded_query.get("matched_diseases") or []
-        )
-        if t
-    ]
+    disease_norm = _structured_disease_norm(structured, clinical_understanding)
+    disease_terms = [disease_norm] if disease_norm else []
     explicit_medication_terms = [
         normalize_text_for_match(item.get("name") if isinstance(item, dict) else item)
         for item in (clinical_understanding.get("detected_medications") or entities.get("medication_terms") or [])
     ]
     related_medication_terms = []
-    if (clinical_understanding.get("intent") or entities.get("section_intent")) in _TREATMENT_INTENTS:
+    intent = structured.get("intent") or clinical_understanding.get("intent") or entities.get("section_intent")
+    if intent in _TREATMENT_INTENTS:
         related_medication_terms = [
             normalize_text_for_match(t)
-            for t in (expanded_query.get("matched_medications") or [])
+            for t in _as_list(structured.get("medications") or expanded_query.get("matched_medications") or [])
         ]
     query_norm = normalize_text_for_match(query)
-    intent = clinical_understanding.get("intent") or entities.get("section_intent")
+    preferred_sections = [
+        normalize_text_for_match(section)
+        for section in _as_list(structured.get("preferred_sections"))
+    ]
 
-    candidate_docs, filter_info = filter_documents_by_detected_disease(documents, clinical_understanding)
+    candidate_docs, filter_info = filter_documents_by_detected_disease(
+        documents,
+        clinical_understanding,
+        structured_terms=structured,
+    )
     total = max(1, len(candidate_docs))
     fallback_wrong_disease = bool(filter_info.get("disease_filter_fallback"))
     ranked: list[tuple[float, Document]] = []
@@ -382,18 +517,19 @@ def rerank_documents(
                 boost += 5.0
                 reasons.append(f"cid_explicit_text:{cid}")
 
-        for cid in sorted(expanded_cids):
+        for cid in sorted(catalog_cids):
             if cid in meta_cids:
                 if intent == "criterios_inclusao":
-                    reasons.append(f"cid_expansion_hint_ignored:{cid}")
+                    reasons.append(f"cid_catalog_hint_ignored:{cid}")
                 else:
                     boost += 0.5
-                    reasons.append(f"cid_expansion_hint:{cid}")
+                    reasons.append(f"cid_catalog_hint:{cid}")
 
         for disease in disease_terms:
             if disease and _document_matches_disease(metadata, disease):
                 boost += 5.0
                 disease_match = True
+                reasons.append("catalog_candidate_match")
                 reasons.append(f"disease_exact_match:{_reason_slug(disease)}")
                 if filter_info.get("disease_filter_applied") and not filter_info.get("disease_filter_fallback"):
                     reasons.append(f"filtered_by_detected_disease:{_reason_slug(disease)}")
@@ -406,6 +542,8 @@ def rerank_documents(
         if disease_terms and _document_has_other_disease(metadata) and not disease_match:
             penalty += 2.0 if fallback_wrong_disease else 1.0
             doc_disease = metadata.get("disease") or metadata.get("diretriz") or metadata.get("source_stem") or "unknown"
+            reasons.append("catalog_candidate_mismatch")
+            reasons.append(f"penalty_wrong_disease:{_reason_slug(doc_disease)}")
             reasons.append(f"penalty_other_disease:{_reason_slug(doc_disease)}")
 
         for med in explicit_medication_terms:
@@ -424,39 +562,35 @@ def rerank_documents(
                     boost += 0.5
                     reasons.append(f"medication_related_hint:{_reason_slug(med)}")
 
-        # Section signals are kept but much weaker than before; they are only
-        # hints to rerank and must not dominate candidate selection.
-        if intent:
-            if intent == "criterios_inclusao" and "criterios de inclusao" in section_norm:
+        # Section signals are kept much weaker than catalog matches. They are
+        # derived from canonical section labels, not from clinical term lists.
+        expected_section = _INTENT_SECTION_NORMS.get(str(intent))
+        section_targets = preferred_sections or ([expected_section] if expected_section else [])
+        section_hit = any(section and section in section_norm for section in section_targets)
+        if intent and disease_terms and not disease_match and _document_has_other_disease(metadata):
+            if section_hit:
+                reasons.append("section_match_ignored_without_catalog_match")
+        elif section_hit:
+            if intent == "criterios_inclusao":
                 boost += 1.0
-                section_match = True
-                reasons.append("section_intent_match:criterios_inclusao")
-            elif intent == "criterios_exclusao" and "criterios de exclusao" in section_norm:
+            elif intent == "criterios_exclusao":
                 boost += 1.0
-                section_match = True
-                reasons.append("section_intent_match:criterios_exclusao")
-            elif intent == "diagnostico" and "diagnostico" in section_norm:
+            else:
                 boost += 0.8
-                section_match = True
-                reasons.append("section_intent_match:diagnostico")
-            elif intent == "tratamento" and "tratamento" in section_norm:
-                boost += 0.8
-                section_match = True
-                reasons.append("section_intent_match:tratamento")
-            elif intent == "medicamento" and any(term in section_norm for term in ("farmaco", "farmacos", "tratamento medicamentoso", "posologia")):
-                boost += 0.8
-                section_match = True
-                reasons.append("section_intent_match:medicamento")
-            elif intent == "monitoramento" and any(term in section_norm for term in ("monitoramento", "acompanhamento")):
-                boost += 0.8
-                section_match = True
-                reasons.append("section_intent_match:monitoramento")
+            section_match = True
+            reasons.append(f"section_intent_match:{intent}")
 
         # Combined disease+section signals provide a small additional signal
         # but should not overwhelm semantic relevance.
         if disease_match and section_match:
             boost += 1.0
             reasons.append("combined_disease_section_match")
+
+        if section_targets and section_norm and not section_hit and disease_match:
+            other_section = next((label for label in _INTENT_SECTION_NORMS.values() if label in section_norm), "")
+            if other_section:
+                penalty += 0.8
+                reasons.append(f"penalty_wrong_section:{_reason_slug(other_section)}")
 
         query_relevance = _query_document_relevance(query_norm, text_norm, meta_norm)
         if query_relevance >= 0.65:
@@ -586,7 +720,11 @@ def build_audit_payload(
         "question": question,
         "original_query": expansion.get("original_query") or question,
         "clinical_understanding": expansion.get("clinical_understanding") or {},
+        "intent": (expansion.get("clinical_understanding") or {}).get("intent_result") or {},
+        "linked_entities": (expansion.get("clinical_understanding") or {}).get("linked_entities") or [],
+        "catalog_candidates": (expansion.get("clinical_understanding") or {}).get("catalog_candidates") or [],
         "expanded_query": expansion.get("expanded_query") or question,
+        "structured_terms": expansion.get("structured_terms") or {},
         "added_terms": expansion.get("added_terms") or expansion.get("matched_terms") or [],
         "expansion_reason": expansion.get("expansion_reason") or [],
         "matched_diseases": expansion.get("matched_diseases") or [],
@@ -599,6 +737,9 @@ def build_audit_payload(
         "filtered_disease": first_meta.get("filtered_disease") or "",
         "candidate_count_before_filter": first_meta.get("candidate_count_before_filter"),
         "candidate_count_after_filter": first_meta.get("candidate_count_after_filter"),
+        "candidate_count_before_rerank": retrieval_candidates_k,
+        "candidate_count_after_catalog_filter": first_meta.get("candidate_count_after_filter"),
+        "final_documents": [document_audit_record(doc, i) for i, doc in enumerate(documents, start=1)],
         "use_cross_encoder": bool(expansion.get("use_cross_encoder", False)),
         "cross_encoder_model": expansion.get("cross_encoder_model"),
         "documents": [document_audit_record(doc, i) for i, doc in enumerate(documents, start=1)],

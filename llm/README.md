@@ -21,13 +21,17 @@ pip install -e "llm[semantic]"
 ollama pull nomic-embed-text
 ```
 
-Para reconhecimento biomédico (NER + entity linking) e resolução contra o catálogo Conitec é utilizada a biblioteca `spacy`. A instalação não baixa modelos de linguagem automaticamente; recomendamos instalar um modelo spaCy em Português se desejar melhor cobertura linguística:
+Para reconhecimento biomédico no chat médico, `spacy`, `medspacy` e `scispacy` fazem parte das dependências padrão. A instalação não baixa modelos de linguagem automaticamente:
 
 ```bash
-# instalar modelo Português (opcional)
+# NER genérico em português, opcional
 python -m spacy download pt_core_news_sm
-# (scispaCy models são tipicamente em inglês e opcionais)
+
+# QuickUMLS é opcional e exige base local previamente instalada
+export QUICKUMLS_FP=/caminho/quickumls
 ```
+
+O backend tenta scispaCy + EntityLinker, QuickUMLS e, por último, spaCy apenas como NER. Se esses backends não existirem, o chat continua funcionando com fallback pelo catálogo Conitec local, sem baixar modelos em runtime.
 
 Para usar o download Einstein com navegador (Playwright), instale também o Chromium:
 
@@ -187,7 +191,7 @@ Metadata principal dos chunks:
 - `disease`, `disease_normalized`, `metadata_source`;
 - quando houver match no catálogo Conitec: `diretriz`, `formato`, `cid10_codes`, `cid10_descriptions`, `medicamentos`, `portarias`, `datas_portaria`, `descricao_siglas`;
 
-Esses metadados permitem filtrar ou expandir buscas por doença, CID-10 e medicamento. Por exemplo, um PDF `20210428_pcdt_artrite_reativa.pdf` passa a receber `disease = "Artrite Reativa"` e `metadata_source = "conitec_xlsx"` quando a diretriz está no catálogo. Perguntas com siglas como `HIV` também podem ser expandidas via função `expand_query_terms` em `pcdt_ingest.reference_data.conitec_catalog`, retornando diretrizes, descrições CID-10, medicamentos e siglas relacionadas para melhorar recall.
+Esses metadados permitem ao chat resolver candidatos de catálogo, expandir a query de forma restritiva e filtrar/reranquear documentos por diretriz, doença e seção. Por exemplo, um PDF `20210428_pcdt_artrite_reativa.pdf` passa a receber `disease = "Artrite Reativa"` e `metadata_source = "conitec_xlsx"` quando a diretriz está no catálogo.
 
 Manifesto: `llm/data/manifests/pcdt_chunk_index.jsonl`.
 
