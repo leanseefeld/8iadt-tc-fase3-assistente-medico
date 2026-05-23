@@ -171,23 +171,6 @@ Formulário centralizado, largura máxima 640px, fundo em card.
 | Comorbidades | checkbox group | — | Carregadas do backend via `GET /api/assistant/comorbidities` |
 | Medicamentos em uso | textarea | — | Campo livre, uma linha por medicamento |
 
-### CID Mock List (mínimo necessário para os fluxos de teste)
-
-```ts
-const CID_LIST = [
-  { code: "L40.5", label: "Artrite Psoriásica" },
-  { code: "A41.9", label: "Sepse não especificada" },
-  { code: "T81.4", label: "Infecção pós-procedimento cirúrgico" },
-  { code: "E11.9", label: "Diabetes Mellitus tipo 2 sem complicações" },
-  { code: "I10",   label: "Hipertensão Essencial" },
-  { code: "J18.9", label: "Pneumonia não especificada" },
-  { code: "N17.9", label: "Insuficiência Renal Aguda" },
-  { code: "K92.1", label: "Melena" },
-  { code: "I63.9", label: "AVC Isquêmico" },
-  { code: "M05.3", label: "Artrite Reumatoide" },
-  // ... completar com mais 10+ para realismo
-];
-```
 
 ### Protocolo Mock por CID
 
