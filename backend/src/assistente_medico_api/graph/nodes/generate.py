@@ -49,16 +49,6 @@ def _build_messages(state: ChatRAGState) -> list:
         f"Pergunta do médico:\n{user_text}\n\n"
         f"Entendimento da pergunta:\n{understanding}\n\n"
         f"Contexto (trechos PCDT):\n{context}\n\n"
-        "Instruções:\n"
-        "- Responda com base exclusivamente nos documentos recuperados.\n"
-        "- Use o entendimento da pergunta apenas como apoio para priorizar os documentos; não trate esse entendimento como fonte clínica.\n"
-        "- Priorize documentos cuja diretriz, doença, seção e páginas sejam compatíveis com a pergunta do médico.\n"
-        "- Se a pergunta pedir uma seção específica, como critérios de inclusão, critérios de exclusão, diagnóstico, tratamento, monitoramento ou medicamentos, priorize documentos dessa seção.\n"
-        "- Se o entendimento indicar que a seção preferida não foi encontrada, diga que os documentos recuperados não trazem claramente a seção solicitada.\n"
-        "- Se os documentos recuperados não contiverem a informação solicitada, diga claramente que os documentos recuperados são insuficientes.\n"
-        "- Cite a diretriz, a seção e as páginas quando disponíveis.\n"
-        "- Não invente condutas, doses, critérios, contraindicações ou recomendações ausentes nos documentos.\n"
-        "- Não use conhecimento externo aos documentos recuperados.\n"
     )
     out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
     for turn in state.get("chat_history") or []:
