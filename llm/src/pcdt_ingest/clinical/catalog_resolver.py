@@ -194,8 +194,10 @@ class CatalogConceptResolver:
         df = self._token_document_frequency()
         rare_matches = {token for token in matched_tokens if df.get(token, 0) <= 1}
         common_matches = matched_tokens - rare_matches
-        if len(matched_tokens) < 2 and not rare_matches:
-            return 0.0, [], ["weak_single_catalog_context_match"]
+        if len(matched_tokens) < 2:
+            single_match = next(iter(matched_tokens))
+            if not rare_matches or not _is_single_token_concept_anchor(single_match, fields):
+                return 0.0, [], ["weak_single_catalog_context_match"]
         query_weight = sum(1.0 / max(1, df.get(token, 1)) for token in query_tokens)
         match_weight = sum(1.0 / max(1, df.get(token, 1)) for token in matched_tokens)
         weighted_coverage = match_weight / max(query_weight, 0.0001)
@@ -234,8 +236,6 @@ class CatalogConceptResolver:
         field_tokens = _tokens(field_norm)
         if field == "derived_acronym" and field_norm in query_tokens:
             return 0.96, "derived_acronym"
-        if field == "source_stem" and any(token in field_tokens for token in query_tokens if len(token) >= 3):
-            return 0.94, "source_stem_term"
         if len(_tokens(phrase_norm)) <= 1:
             return 0.0, "weak_single_term"
         if _contains_phrase(field_norm, phrase_norm):
@@ -335,6 +335,23 @@ def _prefix_overlap(left: set[str], right: set[str]) -> set[str]:
         if any(other.startswith(stem) or stem.startswith(other[:5]) for other in right if len(other) >= 5):
             out.add(token)
     return out
+
+
+def _is_single_token_concept_anchor(token: str, fields: Iterable[tuple[str, str]]) -> bool:
+    """Allow a single rare token only when it anchors the catalog concept itself."""
+    stem = token[:5] if len(token) >= 5 else token
+    for field, value in fields:
+        tokens = [item for item in normalize_text_for_match(value).split() if len(item) >= 4]
+        if not tokens:
+            continue
+        if field in {"disease", "disease_normalized", "diretriz", "diretriz_normalized"}:
+            first = tokens[0]
+            if first == token or (len(stem) >= 5 and first.startswith(stem)):
+                return True
+        if field in {"descricao_siglas", "derived_acronym"}:
+            if token in tokens or (len(stem) >= 5 and any(item.startswith(stem) for item in tokens)):
+                return True
+    return False
 
 
 def _acronym(value: str) -> str:

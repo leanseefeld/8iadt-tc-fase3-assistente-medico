@@ -42,6 +42,7 @@ def _build_messages(state: ChatRAGState) -> list:
     understanding = _format_clinical_understanding(
         state.get("clinical_understanding") or {},
         query_expansion.get("structured_terms") or {},
+        query_expansion.get("_complementary_retrieve_info") or {},
     )
     # Bloco PCDT só na pergunta corrente (turno final do utilizador).
     final_human = (
@@ -53,6 +54,7 @@ def _build_messages(state: ChatRAGState) -> list:
         "- Use o entendimento da pergunta apenas como apoio para priorizar os documentos; não trate esse entendimento como fonte clínica.\n"
         "- Priorize documentos cuja diretriz, doença, seção e páginas sejam compatíveis com a pergunta do médico.\n"
         "- Se a pergunta pedir uma seção específica, como critérios de inclusão, critérios de exclusão, diagnóstico, tratamento, monitoramento ou medicamentos, priorize documentos dessa seção.\n"
+        "- Se o entendimento indicar que a seção preferida não foi encontrada, diga que os documentos recuperados não trazem claramente a seção solicitada.\n"
         "- Se os documentos recuperados não contiverem a informação solicitada, diga claramente que os documentos recuperados são insuficientes.\n"
         "- Cite a diretriz, a seção e as páginas quando disponíveis.\n"
         "- Não invente condutas, doses, critérios, contraindicações ou recomendações ausentes nos documentos.\n"
@@ -72,8 +74,13 @@ def _build_messages(state: ChatRAGState) -> list:
     return out
 
 
-def _format_clinical_understanding(understanding: dict, structured_terms: dict | None = None) -> str:
+def _format_clinical_understanding(
+    understanding: dict,
+    structured_terms: dict | None = None,
+    complementary_info: dict | None = None,
+) -> str:
     structured_terms = structured_terms or {}
+    complementary_info = complementary_info or {}
     disease = understanding.get("detected_disease") or {}
     entities = understanding.get("linked_entities") or []
     candidates = understanding.get("catalog_candidates") or []
@@ -88,6 +95,7 @@ def _format_clinical_understanding(understanding: dict, structured_terms: dict |
             f"- Seções preferenciais: {_format_items(structured_sections)}",
             f"- Entidades biomédicas linkadas: {_format_items([e.get('canonical') or e.get('text') for e in entities])}",
             f"- Candidatos do catálogo: {_format_items([c.get('diretriz') or c.get('disease') for c in candidates])}",
+            f"- Seção preferida encontrada: {'não' if complementary_info.get('preferred_section_not_found') else 'sim' if complementary_info.get('preferred_section_found') else 'não informado'}",
         ]
     )
 

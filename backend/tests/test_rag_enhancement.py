@@ -5,8 +5,11 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 
+from assistente_medico_api.config import Settings
 from assistente_medico_api.graph import cross_encoder_reranker as ce_mod
 from assistente_medico_api.graph import clinical_query_understanding as cqu_mod
+from assistente_medico_api.graph.nodes import retrieve as retrieve_mod
+from assistente_medico_api.graph.nodes.retrieve import retrieve_node
 from assistente_medico_api.graph.clinical_query_understanding import (
     CatalogCandidateRetriever,
     detect_clinical_intent,
@@ -140,6 +143,18 @@ def _doc(text: str, **metadata) -> Document:
     return Document(page_content=text, metadata=metadata)
 
 
+class _FakeStore:
+    def __init__(self, *responses: list[tuple[Document, float]]) -> None:
+        self.responses = list(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def similarity_search_with_score(self, query: str, k: int = 6, **kwargs):
+        self.calls.append({"query": query, "k": k, "kwargs": kwargs})
+        if self.responses:
+            return self.responses.pop(0)
+        return []
+
+
 def test_detect_clinical_intent_minimum_cases() -> None:
     assert detect_clinical_intent("Quais são os critérios de inclusão para artrite reumatoide?") == "criterios_inclusao"
     assert detect_clinical_intent("Qual tratamento para asma?") == "tratamento"
@@ -226,6 +241,37 @@ def test_lupus_diagnostic_query_filters_other_diagnostic_documents() -> None:
 
     assert "Lúpus Eritematoso Sistêmico" in expanded["expanded_query"]
     assert [doc.metadata["disease"] for doc in ranked] == ["Lúpus Eritematoso Sistêmico"]
+
+
+def test_no_catalog_candidate_marks_low_confidence_and_keeps_section_match_weak() -> None:
+    expanded = expand_query_with_conitec_catalog("Como reconhecer uma criança?", _catalog())
+    docs = [
+        (_doc("diagnóstico Wilson", disease="Doença de Wilson", diretriz="Doença de Wilson", section="DIAGNÓSTICO"), 0.1),
+        (_doc("diagnóstico brucelose", disease="Brucelose", diretriz="Brucelose", section="DIAGNÓSTICO"), 0.2),
+    ]
+
+    ranked = rerank_documents("Como reconhecer uma criança?", expanded, docs, final_k=2)
+    payload = build_audit_payload(
+        question="Como reconhecer uma criança?",
+        expansion=expanded,
+        documents=ranked,
+        retrieval_candidates_k=2,
+        retrieval_final_k=2,
+    )
+
+    assert expanded["structured_terms"]["catalog_candidates"] == []
+    assert payload["catalog_candidate_missing"] is True
+    assert payload["low_confidence_retrieval"] is True
+    assert all(
+        not reason.startswith("section_intent_match:")
+        for doc in ranked
+        for reason in doc.metadata["ranking_reasons"]
+    )
+    assert any(
+        reason.startswith("section_intent_match_weak:")
+        for doc in ranked
+        for reason in doc.metadata["ranking_reasons"]
+    )
 
 
 def test_match_disease_from_catalog_detects_cid_from_catalog() -> None:
@@ -425,6 +471,76 @@ def test_rerank_documents_prefers_sgb_inclusion_section_over_cid10() -> None:
     assert [doc.metadata["section"] for doc in ranked] == ["CRITÉRIOS DE INCLUSÃO", "CID-10"]
     assert "section_intent_match:criterios_inclusao" in ranked[0].metadata["ranking_reasons"]
     assert any(reason.startswith("cid_catalog_hint_ignored:") for reason in ranked[1].metadata["ranking_reasons"])
+
+
+def test_retrieve_node_runs_complementary_search_for_sgb_missing_preferred_section(monkeypatch) -> None:
+    monkeypatch.setattr(retrieve_mod, "_cached_conitec_catalog", lambda: _catalog())
+    first = [
+        (
+            _doc(
+                "G61.0",
+                disease="Síndrome de Guillain-Barré",
+                diretriz="Síndrome de Guillain-Barré",
+                disease_normalized="sindrome de guillain barre",
+                section="CID-10",
+                cid10_codes=["G61.0"],
+            ),
+            0.1,
+        )
+    ]
+    second = [
+        (
+            _doc(
+                "serão incluídos pacientes",
+                disease="Síndrome de Guillain-Barré",
+                diretriz="Síndrome de Guillain-Barré",
+                disease_normalized="sindrome de guillain barre",
+                section="CRITÉRIOS DE INCLUSÃO",
+                cid10_codes=["G61.0"],
+            ),
+            0.2,
+        )
+    ]
+    store = _FakeStore(first, second)
+    settings = Settings(rag_retrieve_candidates_k=10, rag_retrieve_final_k=6)
+
+    out = retrieve_node({"query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
+    docs = out["retrieved_docs"]
+    audit = out["rag_audit_payload"]
+
+    assert len(store.calls) == 2
+    assert "CRITÉRIOS DE INCLUSÃO" in store.calls[1]["query"]
+    assert docs[0].metadata["section"] == "CRITÉRIOS DE INCLUSÃO"
+    assert audit["complementary_retrieve_used"] is True
+    assert audit["preferred_section_found"] is True
+
+
+def test_retrieve_node_marks_preferred_section_not_found_after_complementary_search(monkeypatch) -> None:
+    monkeypatch.setattr(retrieve_mod, "_cached_conitec_catalog", lambda: _catalog())
+    first = [
+        (
+            _doc(
+                "G61.0",
+                disease="Síndrome de Guillain-Barré",
+                diretriz="Síndrome de Guillain-Barré",
+                disease_normalized="sindrome de guillain barre",
+                section="CID-10",
+                cid10_codes=["G61.0"],
+            ),
+            0.1,
+        )
+    ]
+    store = _FakeStore(first, [])
+    settings = Settings(rag_retrieve_candidates_k=10, rag_retrieve_final_k=6)
+
+    out = retrieve_node({"query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
+    docs = out["retrieved_docs"]
+    audit = out["rag_audit_payload"]
+
+    assert len(store.calls) == 2
+    assert [doc.metadata["section"] for doc in docs] == ["CID-10"]
+    assert audit["preferred_section_not_found"] is True
+    assert audit["final_documents_count"] == 1
 
 
 def test_rerank_documents_boosts_inclusion_section_over_incompatible_sections() -> None:

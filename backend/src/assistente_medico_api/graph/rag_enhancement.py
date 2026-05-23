@@ -187,6 +187,122 @@ def _preferred_section_norms(intent: Any, structured_terms: dict[str, Any]) -> l
     return _dedupe(preferred)
 
 
+def _section_text_norm(metadata: dict[str, Any]) -> str:
+    return normalize_text_for_match(
+        " ".join(_as_list(metadata.get("section")) + _as_list(metadata.get("header_1")) + _as_list(metadata.get("header_2")))
+    )
+
+
+def _document_has_preferred_section(item: Any, preferred_sections: list[str]) -> bool:
+    if not preferred_sections:
+        return False
+    doc, _score = _doc_from_pair(item)
+    section_norm = _section_text_norm(dict(getattr(doc, "metadata", {}) or {}))
+    return any(section and section in section_norm for section in preferred_sections)
+
+
+def _document_pair_key(item: Any) -> tuple[str, str, str, str]:
+    doc, _score = _doc_from_pair(item)
+    metadata = dict(getattr(doc, "metadata", {}) or {})
+    return (
+        str(getattr(doc, "id", "") or ""),
+        str(metadata.get("source_stem") or metadata.get("source_pdf") or ""),
+        str(metadata.get("page_start") or ""),
+        normalize_text_for_match(str(getattr(doc, "page_content", "") or "")[:500]),
+    )
+
+
+def merge_retrieval_pairs(primary: list[Any], complementary: list[Any]) -> list[Any]:
+    """Merge Chroma result pairs preserving order and removing duplicate chunks."""
+    merged: list[Any] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in [*primary, *complementary]:
+        key = _document_pair_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def build_complementary_retrieve_plan(
+    *,
+    query: str,
+    expansion: dict[str, Any],
+    documents: list[Any],
+    final_k: int,
+) -> dict[str, Any]:
+    """Decide whether a disease/section-focused second retrieval is needed."""
+    understanding = expansion.get("clinical_understanding") or {}
+    structured = expansion.get("structured_terms") or {}
+    intent = structured.get("intent") or understanding.get("intent")
+    preferred_sections = _preferred_section_norms(intent, structured)
+    filtered_docs, filter_info = filter_documents_by_detected_disease(
+        documents,
+        understanding,
+        structured_terms=structured,
+    )
+    preferred_section_found = any(_document_has_preferred_section(item, preferred_sections) for item in filtered_docs)
+    has_confident_catalog_candidate = bool(filter_info.get("has_confident_catalog_candidate"))
+    should_run = bool(
+        has_confident_catalog_candidate
+        and preferred_sections
+        and (len(filtered_docs) < max(2, min(final_k, 4)) or not preferred_section_found)
+    )
+    disease = structured.get("diretriz") or structured.get("disease") or ""
+    section_terms = _as_list(structured.get("preferred_sections"))
+    if str(intent) == "tratamento":
+        section_terms.extend(["Tratamento medicamentoso", "Fármacos", "Esquemas"])
+    complementary_query = _compose_expanded_query(
+        "",
+        _dedupe([disease, *section_terms, query], limit=8),
+    )
+    disease_norm = _structured_disease_norm(structured, understanding)
+    return {
+        "should_run": should_run,
+        "query": complementary_query,
+        "metadata_filter": {"disease_normalized": disease_norm} if disease_norm else None,
+        "preferred_sections": preferred_sections,
+        "preferred_section_found_before": preferred_section_found,
+        "documents_after_catalog_filter_before": len(filtered_docs),
+        "initial_filter_info": filter_info,
+    }
+
+
+def apply_complementary_retrieve_info(
+    expansion: dict[str, Any],
+    *,
+    plan: dict[str, Any],
+    complementary_pairs: list[Any],
+    merged_pairs: list[Any],
+) -> None:
+    understanding = expansion.get("clinical_understanding") or {}
+    structured = expansion.get("structured_terms") or {}
+    filtered_docs, filter_info = filter_documents_by_detected_disease(
+        merged_pairs,
+        understanding,
+        structured_terms=structured,
+    )
+    preferred_sections = _as_list(plan.get("preferred_sections"))
+    preferred_section_found = any(_document_has_preferred_section(item, preferred_sections) for item in filtered_docs)
+    expansion["_complementary_retrieve_info"] = {
+        "used": bool(plan.get("should_run")),
+        "query": plan.get("query") or "",
+        "metadata_filter": plan.get("metadata_filter"),
+        "documents_from_complementary_search": len(complementary_pairs),
+        "documents_after_complementary_merge": len(merged_pairs),
+        "documents_after_catalog_filter": len(filtered_docs),
+        "preferred_section_found": preferred_section_found,
+        "preferred_section_not_found": bool(preferred_sections and not preferred_section_found),
+        "preferred_section_found_before": bool(plan.get("preferred_section_found_before", False)),
+    }
+    expansion["_catalog_filter_info"] = {
+        **filter_info,
+        "preferred_section_found": preferred_section_found,
+        "preferred_section_not_found": bool(preferred_sections and not preferred_section_found),
+    }
+
+
 def _looks_structured(value: Any) -> bool:
     text = str(value or "").strip()
     return any(marker in text for marker in ("{", "}", "[", "]", ":", '"'))
@@ -535,9 +651,7 @@ def rerank_documents(
         text = str(getattr(doc, "page_content", "") or "")
         text_norm = normalize_text_for_match(text)
         meta_norm = _metadata_text(metadata)
-        section_norm = normalize_text_for_match(
-            " ".join(_as_list(metadata.get("section")) + _as_list(metadata.get("header_1")) + _as_list(metadata.get("header_2")))
-        )
+        section_norm = _section_text_norm(metadata)
         source_norm = normalize_text_for_match(metadata.get("source_stem") or "")
 
         base = 1.0 - (idx / total)
@@ -605,7 +719,11 @@ def rerank_documents(
             if section_hit:
                 reasons.append("section_match_ignored_without_catalog_match")
         elif section_hit:
-            if intent == "criterios_inclusao":
+            if not has_confident_catalog_candidate and not disease_match:
+                boost += 0.2
+                section_match = True
+                reasons.append(f"section_intent_match_weak:{intent}")
+            elif intent == "criterios_inclusao":
                 boost += 8.0 if disease_match and has_confident_catalog_candidate else 1.0
             elif intent == "criterios_exclusao":
                 boost += 8.0 if disease_match and has_confident_catalog_candidate else 1.0
@@ -613,8 +731,9 @@ def rerank_documents(
                 boost += 8.0 if disease_match and has_confident_catalog_candidate else 0.8
             else:
                 boost += 6.0 if disease_match and has_confident_catalog_candidate else 0.8
-            section_match = True
-            reasons.append(f"section_intent_match:{intent}")
+            if not section_match:
+                section_match = True
+                reasons.append(f"section_intent_match:{intent}")
 
         # Combined disease+section signals provide a small additional signal
         # but should not overwhelm semantic relevance.
@@ -772,6 +891,10 @@ def build_audit_payload(
 ) -> dict[str, Any]:
     first_meta = dict(documents[0].metadata or {}) if documents else {}
     filter_info = expansion.get("_catalog_filter_info") or {}
+    complementary_info = expansion.get("_complementary_retrieve_info") or {}
+    structured_terms = expansion.get("structured_terms") or {}
+    catalog_candidates = (structured_terms.get("catalog_candidates") or (expansion.get("clinical_understanding") or {}).get("catalog_candidates") or [])
+    has_confident_catalog_candidate = bool(filter_info.get("has_confident_catalog_candidate", False))
     return {
         "audit_id": audit_id or str(uuid.uuid4()),
         "question": question,
@@ -779,9 +902,9 @@ def build_audit_payload(
         "clinical_understanding": expansion.get("clinical_understanding") or {},
         "intent": (expansion.get("clinical_understanding") or {}).get("intent_result") or {},
         "linked_entities": (expansion.get("clinical_understanding") or {}).get("linked_entities") or [],
-        "catalog_candidates": (expansion.get("clinical_understanding") or {}).get("catalog_candidates") or [],
+        "catalog_candidates": catalog_candidates,
         "expanded_query": expansion.get("expanded_query") or question,
-        "structured_terms": expansion.get("structured_terms") or {},
+        "structured_terms": structured_terms,
         "added_terms": expansion.get("added_terms") or expansion.get("matched_terms") or [],
         "expansion_reason": expansion.get("expansion_reason") or [],
         "matched_diseases": expansion.get("matched_diseases") or [],
@@ -790,7 +913,9 @@ def build_audit_payload(
         "matched_terms": expansion.get("matched_terms") or [],
         "retrieval_candidates_k": retrieval_candidates_k,
         "retrieval_final_k": retrieval_final_k,
-        "has_confident_catalog_candidate": bool(filter_info.get("has_confident_catalog_candidate", False)),
+        "has_confident_catalog_candidate": has_confident_catalog_candidate,
+        "catalog_candidate_missing": not bool(catalog_candidates),
+        "low_confidence_retrieval": not has_confident_catalog_candidate,
         "disease_filter_applied": bool(first_meta.get("disease_filter_applied", False)),
         "filtered_disease": first_meta.get("filtered_disease") or "",
         "candidate_count_before_filter": filter_info.get("candidate_count_before_filter", first_meta.get("candidate_count_before_filter")),
@@ -800,6 +925,15 @@ def build_audit_payload(
         "documents_after_catalog_filter": filter_info.get("candidate_count_after_filter", first_meta.get("candidate_count_after_filter")),
         "documents_removed_by_catalog_filter": filter_info.get("documents_removed_by_catalog_filter") or [],
         "catalog_filter_fallback": bool(filter_info.get("disease_filter_fallback", False)),
+        "complementary_retrieve": complementary_info,
+        "complementary_retrieve_used": bool(complementary_info.get("used", False)),
+        "complementary_query": complementary_info.get("query") or "",
+        "preferred_section_found": bool(
+            complementary_info.get("preferred_section_found", filter_info.get("preferred_section_found", False))
+        ),
+        "preferred_section_not_found": bool(
+            complementary_info.get("preferred_section_not_found", filter_info.get("preferred_section_not_found", False))
+        ),
         "candidate_count_after_catalog_filter": filter_info.get("candidate_count_after_filter", first_meta.get("candidate_count_after_filter")),
         "final_documents_count": len(documents),
         "returned_less_than_final_k": len(documents) < retrieval_final_k,

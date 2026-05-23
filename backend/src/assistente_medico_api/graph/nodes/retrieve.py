@@ -13,10 +13,13 @@ from langchain_core.documents import Document
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.graph.rag_enhancement import (
+    apply_complementary_retrieve_info,
+    build_complementary_retrieve_plan,
     build_audit_payload,
     expand_query_with_conitec_catalog,
     format_rich_context_block,
     load_local_conitec_catalog,
+    merge_retrieval_pairs,
     rerank_documents,
 )
 
@@ -100,6 +103,37 @@ def retrieve_node(
         else None
     )
     pairs = store.similarity_search_with_score(retrieval_query, k=candidates_k)
+    complement_pairs = []
+    try:
+        complement_plan = build_complementary_retrieve_plan(
+            query=query,
+            expansion=expansion,
+            documents=pairs,
+            final_k=final_k,
+        )
+        if complement_plan.get("should_run"):
+            complement_query = str(complement_plan.get("query") or "").strip()
+            metadata_filter = complement_plan.get("metadata_filter")
+            try:
+                complement_pairs = store.similarity_search_with_score(
+                    complement_query,
+                    k=candidates_k,
+                    filter=metadata_filter,
+                )
+            except TypeError:
+                complement_pairs = store.similarity_search_with_score(complement_query, k=candidates_k)
+            except Exception as exc:
+                _logger.debug("Falha na busca complementar com filtro; tentando sem filtro. erro=%s", exc)
+                complement_pairs = store.similarity_search_with_score(complement_query, k=candidates_k)
+        pairs = merge_retrieval_pairs(pairs, complement_pairs)
+        apply_complementary_retrieve_info(
+            expansion,
+            plan=complement_plan,
+            complementary_pairs=complement_pairs,
+            merged_pairs=pairs,
+        )
+    except Exception as exc:
+        _logger.warning("Falha na busca complementar; seguindo com candidatos iniciais. erro=%s", exc)
     try:
         docs = rerank_documents(
             query=query,

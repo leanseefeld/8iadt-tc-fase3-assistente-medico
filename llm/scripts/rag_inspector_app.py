@@ -220,11 +220,24 @@ class InspectableStore:
     def __init__(self, store: Any) -> None:
         self._store = store
         self.last_pairs: list[tuple[Document, float]] = []
+        self.calls: list[dict[str, Any]] = []
 
-    def similarity_search_with_score(self, query: str, k: int = 6):
-        pairs = self._store.similarity_search_with_score(query, k=k)
+    def similarity_search_with_score(self, query: str, k: int = 6, **kwargs):
+        pairs = self._store.similarity_search_with_score(query, k=k, **kwargs)
         self.last_pairs = list(pairs)
+        self.calls.append({"query": query, "k": k, "kwargs": kwargs, "pairs": list(pairs)})
         return pairs
+
+    @property
+    def first_pairs(self) -> list[tuple[Document, float]]:
+        return list(self.calls[0]["pairs"]) if self.calls else []
+
+    @property
+    def merged_pairs(self) -> list[tuple[Document, float]]:
+        out: list[tuple[Document, float]] = []
+        for call in self.calls:
+            out.extend(cast(list[tuple[Document, float]], call.get("pairs") or []))
+        return out
 
 
 def _message_to_payload(message: Any) -> dict[str, str]:
@@ -538,7 +551,8 @@ def main() -> None:
                     retrieve_out = retrieve_node(cast(Any, final_state), store=cast(Any, inspectable_store), settings=backend_settings)
                     timing = replace(timing, retrieve_ms=(time.perf_counter() - t0) * 1000.0)
                     final_state.update(retrieve_out)
-                    raw_candidates = inspectable_store.last_pairs
+                    raw_candidates = inspectable_store.merged_pairs or inspectable_store.last_pairs
+                    final_state["_inspector_retrieve_calls"] = inspectable_store.calls
                 except Exception as exc:
                     errors.append(f"Falha no retrieve do backend: {_format_exception(exc)}")
 
@@ -590,6 +604,9 @@ def main() -> None:
             audit_payload = cast(dict[str, Any], final_state.get("rag_audit_payload") or {})
             structured_terms = cast(dict[str, Any], query_expansion.get("structured_terms") or {})
             catalog_filter = cast(dict[str, Any], audit_payload or query_expansion.get("_catalog_filter_info") or {})
+            retrieve_calls = cast(list[dict[str, Any]], final_state.get("_inspector_retrieve_calls") or [])
+            first_retrieve_count = len(cast(list[Any], retrieve_calls[0].get("pairs") or [])) if retrieve_calls else len(raw_candidates)
+            complementary_count = len(cast(list[Any], retrieve_calls[1].get("pairs") or [])) if len(retrieve_calls) > 1 else 0
 
             payload: dict[str, Any] = {
                 "timestamp": _now_iso(),
@@ -623,13 +640,25 @@ def main() -> None:
                     "expanded_query": query_expansion.get("expanded_query") or final_state.get("retrieval_query") or query,
                     "structured_terms": structured_terms,
                     "catalog_candidates": structured_terms.get("catalog_candidates") or query_expansion.get("catalog_candidates") or [],
+                    "first_retrieve_count": first_retrieve_count,
+                    "complementary_retrieve_count": complementary_count,
+                    "retrieve_calls": [
+                        {
+                            "query": call.get("query") or "",
+                            "k": call.get("k"),
+                            "kwargs": call.get("kwargs") or {},
+                            "result_count": len(cast(list[Any], call.get("pairs") or [])),
+                        }
+                        for call in retrieve_calls
+                    ],
                     "catalog_filter": {
                         "has_confident_catalog_candidate": catalog_filter.get("has_confident_catalog_candidate", False),
                         "documents_before_filter": catalog_filter.get("documents_before_filter")
                         or catalog_filter.get("candidate_count_before_filter")
-                        or len(raw_candidates),
+                        or first_retrieve_count,
                         "documents_after_catalog_filter": catalog_filter.get("documents_after_catalog_filter")
                         or catalog_filter.get("candidate_count_after_filter"),
+                        "complementary_retrieve": catalog_filter.get("complementary_retrieve") or {},
                         "documents_removed_by_catalog_filter": catalog_filter.get("documents_removed_by_catalog_filter") or [],
                         "catalog_filter_fallback": catalog_filter.get("catalog_filter_fallback", False),
                         "final_documents_count": catalog_filter.get("final_documents_count", len(docs)),
@@ -715,12 +744,45 @@ def main() -> None:
             k_cols[2].metric("candidatos Chroma", str(len(candidate_rows)))
 
             filter_payload = cast(dict[str, Any], retrieve_payload.get("catalog_filter") or {})
-            f_cols = st.columns(5)
+            f_cols = st.columns(6)
             f_cols[0].metric("catálogo confiante", "sim" if filter_payload.get("has_confident_catalog_candidate") else "não")
-            f_cols[1].metric("antes filtro", str(filter_payload.get("documents_before_filter") or "-"))
+            f_cols[1].metric("1º retrieve", str(retrieve_payload.get("first_retrieve_count") or "-"))
             f_cols[2].metric("após filtro", str(filter_payload.get("documents_after_catalog_filter") or "-"))
-            f_cols[3].metric("top final", str(filter_payload.get("final_documents_count") or len(rows)))
-            f_cols[4].metric("fallback", "sim" if filter_payload.get("catalog_filter_fallback") else "não")
+            f_cols[3].metric("complementar", str(retrieve_payload.get("complementary_retrieve_count") or 0))
+            f_cols[4].metric("top final", str(filter_payload.get("final_documents_count") or len(rows)))
+            f_cols[5].metric("fallback", "sim" if filter_payload.get("catalog_filter_fallback") else "não")
+            comp_info = cast(dict[str, Any], filter_payload.get("complementary_retrieve") or {})
+            if comp_info:
+                with st.expander("Busca complementar", expanded=True):
+                    st.json(
+                        {
+                            "used": comp_info.get("used"),
+                            "query": comp_info.get("query"),
+                            "metadata_filter": comp_info.get("metadata_filter"),
+                            "documents_from_complementary_search": comp_info.get("documents_from_complementary_search"),
+                            "documents_after_complementary_merge": comp_info.get("documents_after_complementary_merge"),
+                            "preferred_section_found": comp_info.get("preferred_section_found"),
+                            "preferred_section_not_found": comp_info.get("preferred_section_not_found"),
+                        },
+                        expanded=False,
+                    )
+            calls = cast(list[dict[str, Any]], retrieve_payload.get("retrieve_calls") or [])
+            if calls:
+                with st.expander("Chamadas Chroma", expanded=False):
+                    st.dataframe(
+                        [
+                            {
+                                "ordem": idx + 1,
+                                "query": call.get("query") or "",
+                                "k": call.get("k"),
+                                "result_count": call.get("result_count"),
+                                "kwargs": json.dumps(call.get("kwargs") or {}, ensure_ascii=False),
+                            }
+                            for idx, call in enumerate(calls)
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
             if filter_payload.get("returned_less_than_final_k"):
                 st.info("Retornou menos documentos que k final porque o filtro de catálogo removeu resultados incompatíveis.")
             removed = cast(list[dict[str, Any]], filter_payload.get("documents_removed_by_catalog_filter") or [])
