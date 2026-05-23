@@ -24,6 +24,7 @@ import sys
 from typing import Any, cast
 
 import asyncio
+import builtins
 import streamlit as st
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -98,9 +99,6 @@ except ModuleNotFoundError as exc:
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
 
-DEFAULT_FALLBACK_CHAT_MODEL = "gemma4:e2b"
-
-
 @dataclass(frozen=True)
 class InspectorSettings:
     ollama_base_url: str
@@ -109,6 +107,12 @@ class InspectorSettings:
     chroma_persist_dir: str
     chroma_collection: str
     retrieval_k: int
+    rag_retrieve_candidates_k: int
+    rag_retrieve_final_k: int
+    rag_require_catalog_match_when_confident: bool
+    rag_min_final_score_with_catalog: float
+    rag_audit_enabled: bool
+    rag_audit_jsonl: str
     llm_stream_timeout_s: float
 
 
@@ -135,6 +139,12 @@ def _default_settings() -> InspectorSettings:
         chroma_persist_dir=str(chroma_dir),
         chroma_collection=backend_cfg.chroma_collection,
         retrieval_k=backend_cfg.retrieval_k,
+        rag_retrieve_candidates_k=backend_cfg.rag_retrieve_candidates_k,
+        rag_retrieve_final_k=backend_cfg.rag_retrieve_final_k,
+        rag_require_catalog_match_when_confident=backend_cfg.rag_require_catalog_match_when_confident,
+        rag_min_final_score_with_catalog=backend_cfg.rag_min_final_score_with_catalog,
+        rag_audit_enabled=backend_cfg.rag_audit_enabled,
+        rag_audit_jsonl=str(backend_cfg.rag_audit_jsonl),
         llm_stream_timeout_s=backend_cfg.llm_stream_timeout_s,
     )
 
@@ -163,24 +173,34 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _backend_settings(cfg: InspectorSettings, *, chat_model: str | None = None) -> Settings:
+def _format_exception(exc: BaseException) -> str:
+    """Mensagem compacta preservando tipo quando ``str(exc)`` vem vazio."""
+    exc_type = f"{type(exc).__module__}.{type(exc).__name__}"
+    message = str(exc).strip() or repr(exc)
+    if isinstance(exc, TimeoutError | builtins.TimeoutError | asyncio.TimeoutError) or "Timeout" in type(exc).__name__:
+        return (
+            f"{exc_type}: {message}. "
+            "Possível timeout de geração; aumente `Timeout geração (s)`, reduza `k`/contexto "
+            "ou use um modelo mais rápido."
+        )
+    return f"{exc_type}: {message}"
+
+
+def _backend_settings(cfg: InspectorSettings) -> Settings:
     return Settings(
         ollama_base_url=cfg.ollama_base_url,
         ollama_embed_model=cfg.ollama_embed_model,
-        ollama_chat_model=chat_model or cfg.ollama_chat_model,
+        ollama_chat_model=cfg.ollama_chat_model,
         chroma_persist_dir=Path(cfg.chroma_persist_dir),
         chroma_collection=cfg.chroma_collection,
         retrieval_k=int(cfg.retrieval_k),
+        rag_retrieve_candidates_k=int(cfg.rag_retrieve_candidates_k),
+        rag_retrieve_final_k=int(cfg.rag_retrieve_final_k),
+        rag_require_catalog_match_when_confident=bool(cfg.rag_require_catalog_match_when_confident),
+        rag_min_final_score_with_catalog=float(cfg.rag_min_final_score_with_catalog),
+        rag_audit_enabled=bool(cfg.rag_audit_enabled),
+        rag_audit_jsonl=Path(cfg.rag_audit_jsonl),
         llm_stream_timeout_s=float(cfg.llm_stream_timeout_s),
-    )
-
-
-def _is_ollama_memory_error(exc: Exception) -> bool:
-    txt = str(exc).lower()
-    return (
-        "requires more system memory" in txt
-        or "status code: 500" in txt and "memory" in txt
-        or "insufficient memory" in txt
     )
 
 
@@ -200,11 +220,24 @@ class InspectableStore:
     def __init__(self, store: Any) -> None:
         self._store = store
         self.last_pairs: list[tuple[Document, float]] = []
+        self.calls: list[dict[str, Any]] = []
 
-    def similarity_search_with_score(self, query: str, k: int = 6):
-        pairs = self._store.similarity_search_with_score(query, k=k)
+    def similarity_search_with_score(self, query: str, k: int = 6, **kwargs):
+        pairs = self._store.similarity_search_with_score(query, k=k, **kwargs)
         self.last_pairs = list(pairs)
+        self.calls.append({"query": query, "k": k, "kwargs": kwargs, "pairs": list(pairs)})
         return pairs
+
+    @property
+    def first_pairs(self) -> list[tuple[Document, float]]:
+        return list(self.calls[0]["pairs"]) if self.calls else []
+
+    @property
+    def merged_pairs(self) -> list[tuple[Document, float]]:
+        out: list[tuple[Document, float]] = []
+        for call in self.calls:
+            out.extend(cast(list[tuple[Document, float]], call.get("pairs") or []))
+        return out
 
 
 def _message_to_payload(message: Any) -> dict[str, str]:
@@ -235,6 +268,36 @@ def _score_summary(scores: list[float]) -> dict[str, float] | None:
         "worst": max(scores),
         "spread": max(scores) - min(scores),
         "mean": sum(scores) / len(scores),
+    }
+
+
+def _doc_payload(doc: Document, rank: int) -> dict[str, Any]:
+    meta = dict(doc.metadata or {})
+    return {
+        "rank": rank,
+        "source_label": format_source_label(doc),
+        "doc_id": getattr(doc, "id", None),
+        "metadata": meta,
+        "dense_score": meta.get("dense_score"),
+        "dense_rank": meta.get("dense_rank"),
+        "dense_rank_score": meta.get("dense_rank_score"),
+        "heuristic_score": meta.get("heuristic_score"),
+        "final_score": meta.get("final_score"),
+        "ranking_reasons": meta.get("ranking_reasons") or [],
+        "content_preview": (doc.page_content or "").strip()[:500],
+        "content": (doc.page_content or "").strip(),
+    }
+
+
+def _candidate_payload(doc: Document, score: float, rank: int) -> dict[str, Any]:
+    return {
+        "rank": rank,
+        "dense_score": float(score),
+        "source_label": format_source_label(doc),
+        "doc_id": getattr(doc, "id", None),
+        "metadata": dict(doc.metadata or {}),
+        "content_preview": (doc.page_content or "").strip()[:500],
+        "content": (doc.page_content or "").strip(),
     }
 
 
@@ -289,15 +352,57 @@ def main() -> None:
         cfg = InspectorSettings(
             ollama_base_url=st.text_input("Ollama base URL", value=cfg0.ollama_base_url),
             ollama_embed_model=st.text_input("Modelo de embedding", value=cfg0.ollama_embed_model),
-            ollama_chat_model=st.text_input("Modelo de chat", value=cfg0.ollama_chat_model),
+            ollama_chat_model=st.text_input(
+                "Modelo de chat",
+                value="llama3.2:3b",
+                help=(
+                    "Padrão do painel para caber em máquinas com menos memória. "
+                    f"Modelo configurado no backend: {cfg0.ollama_chat_model}."
+                ),
+            ),
             chroma_persist_dir=st.text_input("Chroma persist dir", value=cfg0.chroma_persist_dir),
             chroma_collection=st.text_input("Chroma collection", value=cfg0.chroma_collection),
-            retrieval_k=st.number_input("k (retrieval)", min_value=1, max_value=50, value=int(cfg0.retrieval_k), step=1),
+            retrieval_k=st.number_input(
+                "k legado (retrieval_k)",
+                min_value=1,
+                max_value=50,
+                value=int(cfg0.retrieval_k),
+                step=1,
+                help="Mantido por compatibilidade; o backend atual usa k inicial e k final abaixo.",
+            ),
+            rag_retrieve_candidates_k=st.number_input(
+                "k inicial RAG (candidatos)",
+                min_value=1,
+                max_value=100,
+                value=int(cfg0.rag_retrieve_candidates_k),
+                step=1,
+            ),
+            rag_retrieve_final_k=st.number_input(
+                "k final RAG (rerank)",
+                min_value=1,
+                max_value=50,
+                value=int(cfg0.rag_retrieve_final_k),
+                step=1,
+            ),
+            rag_require_catalog_match_when_confident=st.checkbox(
+                "Exigir match de catálogo quando confiante",
+                value=bool(cfg0.rag_require_catalog_match_when_confident),
+            ),
+            rag_min_final_score_with_catalog=st.number_input(
+                "Score mínimo com catálogo",
+                min_value=-10.0,
+                max_value=20.0,
+                value=float(cfg0.rag_min_final_score_with_catalog),
+                step=0.5,
+            ),
+            rag_audit_enabled=st.checkbox("Registrar auditoria RAG", value=bool(cfg0.rag_audit_enabled)),
+            rag_audit_jsonl=st.text_input("Arquivo auditoria RAG", value=cfg0.rag_audit_jsonl),
             llm_stream_timeout_s=st.number_input("Timeout LLM (s)", min_value=5.0, max_value=600.0, value=float(cfg0.llm_stream_timeout_s), step=5.0),
         )
-        auto_fallback_model = st.checkbox("Fallback automático para modelo leve", value=True)
-        fallback_model_name = st.text_input("Modelo fallback (nome)", value=DEFAULT_FALLBACK_CHAT_MODEL)
-        st.caption("Dica: o path default do Chroma é `vectorstore/chroma` na raiz do repositório.")
+        st.caption(
+            "Dica: o path default do Chroma é `vectorstore/chroma` na raiz do repositório. "
+            "Os defaults vêm da mesma classe Settings usada pela API."
+        )
 
     tab_run, tab_vectorstore, tab_export = st.tabs(["Executar & inspecionar", "Vectorstore", "Exportar JSON"])
 
@@ -320,7 +425,7 @@ def main() -> None:
             run_mode = st.radio(
                 "Modo de execução",
                 options=["RAG apenas", "RAG + geração LLM", "Fluxo completo (geração + guardrail)"],
-                index=0,
+                index=2,
                 horizontal=True,
             )
             rag_focus_mode = run_mode == "RAG apenas"
@@ -332,7 +437,7 @@ def main() -> None:
 
         with col_r:
             st.subheader("Flow diagram (atual)")
-            flow_text = "backend.rewrite  →  backend.retrieve  →  backend.prompt_preview"
+            flow_text = "backend.rewrite  →  backend.retrieve(expand + chroma + rerank)  →  backend.prompt_preview"
             if run_generate:
                 flow_text = f"{flow_text}  →  backend.generate"
             if run_guardrail:
@@ -379,10 +484,9 @@ def main() -> None:
                 total_ms=None,
             )
             embed_info: dict[str, Any] | None = None
-            retrieved: list[tuple[Document, float]] = []
+            raw_candidates: list[tuple[Document, float]] = []
             answer_text: str | None = None
             generation_model_used: str | None = None
-            generation_fallback_used = False
             prompt_messages: list[dict[str, str]] | None = None
             context_text: str | None = None
             final_state: dict[str, Any] = {
@@ -407,7 +511,7 @@ def main() -> None:
                     if isinstance(t, dict) and str(t.get("role")) in {"user", "assistant"} and str(t.get("content", "")).strip()
                 ]
             except Exception as exc:
-                errors.append(f"Histórico JSON inválido; executando sem histórico: {exc!s}")
+                errors.append(f"Histórico JSON inválido; executando sem histórico: {_format_exception(exc)}")
 
             # --- Load store ---
             try:
@@ -415,7 +519,7 @@ def main() -> None:
                 store = _load_store(cfg)
                 timing = replace(timing, store_ms=(time.perf_counter() - t0) * 1000.0)
             except Exception as exc:
-                errors.append(f"Falha ao abrir Chroma: {exc!s}")
+                errors.append(f"Falha ao abrir Chroma: {_format_exception(exc)}")
                 store = None
 
             # --- Embedding analysis (optional) ---
@@ -432,7 +536,7 @@ def main() -> None:
                         "vector_tail": vec[-8:] if len(vec) >= 8 else vec,
                     }
                 except Exception as exc:
-                    errors.append(f"Falha ao analisar embedding via Ollama: {exc!s}")
+                    errors.append(f"Falha ao analisar embedding via Ollama: {_format_exception(exc)}")
 
             # --- Backend rewrite + retrieve ---
             if store is not None and query.strip():
@@ -447,11 +551,12 @@ def main() -> None:
                     retrieve_out = retrieve_node(cast(Any, final_state), store=cast(Any, inspectable_store), settings=backend_settings)
                     timing = replace(timing, retrieve_ms=(time.perf_counter() - t0) * 1000.0)
                     final_state.update(retrieve_out)
-                    retrieved = inspectable_store.last_pairs
+                    raw_candidates = inspectable_store.merged_pairs or inspectable_store.last_pairs
+                    final_state["_inspector_retrieve_calls"] = inspectable_store.calls
                 except Exception as exc:
-                    errors.append(f"Falha no retrieve do backend: {exc!s}")
+                    errors.append(f"Falha no retrieve do backend: {_format_exception(exc)}")
 
-            docs = cast(list[Document], final_state.get("retrieved_docs") or [d for d, _ in retrieved])
+            docs = cast(list[Document], final_state.get("retrieved_docs") or [d for d, _ in raw_candidates])
 
             # --- Backend context + prompt preview ---
             try:
@@ -461,7 +566,7 @@ def main() -> None:
                 prompt_messages = [_message_to_payload(m) for m in messages]
                 timing = replace(timing, assemble_ms=(time.perf_counter() - t0) * 1000.0)
             except Exception as exc:
-                errors.append(f"Falha ao montar contexto/prompt: {exc!s}")
+                errors.append(f"Falha ao montar contexto/prompt: {_format_exception(exc)}")
 
             # --- Backend generate (optional) ---
             if run_generate and query.strip():
@@ -474,35 +579,7 @@ def main() -> None:
                     generation_model_used = cfg.ollama_chat_model
                     timing = replace(timing, generate_ms=(time.perf_counter() - t0) * 1000.0)
                 except Exception as exc:
-                    if auto_fallback_model and _is_ollama_memory_error(exc) and fallback_model_name.strip():
-                        try:
-                            fallback_name = fallback_model_name.strip()
-                            fallback_settings = _backend_settings(cfg, chat_model=fallback_name)
-                            t0 = time.perf_counter()
-                            with st.status(
-                                f"Modelo principal sem memória; tentando fallback `{fallback_name}`...",
-                                expanded=False,
-                            ):
-                                generate_out = cast(
-                                    dict[str, Any],
-                                    _run_async(generate_node(cast(Any, final_state), fallback_settings)),
-                                )
-                            final_state.update(generate_out)
-                            answer_text = str(final_state.get("answer") or "")
-                            generation_model_used = fallback_name
-                            generation_fallback_used = True
-                            timing = replace(timing, generate_ms=(time.perf_counter() - t0) * 1000.0)
-                            errors.append(
-                                "Modelo principal sem memória; resposta gerada com fallback "
-                                f"`{fallback_name}`."
-                            )
-                        except Exception as fallback_exc:
-                            errors.append(
-                                "Falha na geração do backend: "
-                                f"{exc!s}. Fallback `{fallback_model_name.strip()}` também falhou: {fallback_exc!s}"
-                            )
-                    else:
-                        errors.append(f"Falha na geração do backend: {exc!s}")
+                    errors.append(f"Falha na geração do backend com `{cfg.ollama_chat_model}`: {_format_exception(exc)}")
 
             if run_guardrail and answer_text:
                 try:
@@ -512,11 +589,24 @@ def main() -> None:
                     answer_text = str(final_state.get("answer") or "")
                     timing = replace(timing, guardrail_ms=(time.perf_counter() - t0) * 1000.0)
                 except Exception as exc:
-                    errors.append(f"Falha no guardrail do backend: {exc!s}")
+                    errors.append(f"Falha no guardrail do backend: {_format_exception(exc)}")
 
             timing = replace(timing, total_ms=(time.perf_counter() - run_started) * 1000.0)
-            scores = [float(s) for _, s in retrieved]
-            score_summary = _score_summary(scores)
+            candidate_scores = [float(s) for _, s in raw_candidates]
+            dense_score_summary = _score_summary(candidate_scores)
+            final_scores = [
+                float(doc.metadata["final_score"])
+                for doc in docs
+                if isinstance(doc.metadata, dict) and doc.metadata.get("final_score") is not None
+            ]
+            final_score_summary = _score_summary(final_scores)
+            query_expansion = cast(dict[str, Any], final_state.get("query_expansion") or {})
+            audit_payload = cast(dict[str, Any], final_state.get("rag_audit_payload") or {})
+            structured_terms = cast(dict[str, Any], query_expansion.get("structured_terms") or {})
+            catalog_filter = cast(dict[str, Any], audit_payload or query_expansion.get("_catalog_filter_info") or {})
+            retrieve_calls = cast(list[dict[str, Any]], final_state.get("_inspector_retrieve_calls") or [])
+            first_retrieve_count = len(cast(list[Any], retrieve_calls[0].get("pairs") or [])) if retrieve_calls else len(raw_candidates)
+            complementary_count = len(cast(list[Any], retrieve_calls[1].get("pairs") or [])) if len(retrieve_calls) > 1 else 0
 
             payload: dict[str, Any] = {
                 "timestamp": _now_iso(),
@@ -533,26 +623,53 @@ def main() -> None:
                 "embedding": embed_info,
                 "backend_state": {
                     "retrieval_query": final_state.get("retrieval_query") or "",
+                    "clinical_understanding": final_state.get("clinical_understanding") or {},
+                    "query_expansion": query_expansion,
                     "sources": final_state.get("sources") or [],
                     "reasoning_steps": final_state.get("reasoning_steps") or [],
+                    "rag_audit_payload": audit_payload,
+                    "audit_id": final_state.get("audit_id") or audit_payload.get("audit_id") or "",
                     "guardrail_status": final_state.get("guardrail_status") or "",
                     "guardrail_reason": final_state.get("guardrail_reason") or "",
                 },
                 "retrieve": {
-                    "k": int(cfg.retrieval_k),
-                    "query_used": final_state.get("retrieval_query") or query,
-                    "score_summary": score_summary,
-                    "results": [
+                    "legacy_k": int(cfg.retrieval_k),
+                    "candidates_k": int(cfg.rag_retrieve_candidates_k),
+                    "final_k": int(cfg.rag_retrieve_final_k),
+                    "rewrite_query": final_state.get("retrieval_query") or query,
+                    "expanded_query": query_expansion.get("expanded_query") or final_state.get("retrieval_query") or query,
+                    "structured_terms": structured_terms,
+                    "catalog_candidates": structured_terms.get("catalog_candidates") or query_expansion.get("catalog_candidates") or [],
+                    "first_retrieve_count": first_retrieve_count,
+                    "complementary_retrieve_count": complementary_count,
+                    "retrieve_calls": [
                         {
-                            "rank": i + 1,
-                            "score": float(score),
-                            "source_label": format_source_label(doc),
-                            "doc_id": getattr(doc, "id", None),
-                            "metadata": doc.metadata,
-                            "content_preview": (doc.page_content or "").strip()[:500],
-                            "content": (doc.page_content or "").strip(),
+                            "query": call.get("query") or "",
+                            "k": call.get("k"),
+                            "kwargs": call.get("kwargs") or {},
+                            "result_count": len(cast(list[Any], call.get("pairs") or [])),
                         }
-                        for i, (doc, score) in enumerate(retrieved)
+                        for call in retrieve_calls
+                    ],
+                    "catalog_filter": {
+                        "has_confident_catalog_candidate": catalog_filter.get("has_confident_catalog_candidate", False),
+                        "documents_before_filter": catalog_filter.get("documents_before_filter")
+                        or catalog_filter.get("candidate_count_before_filter")
+                        or first_retrieve_count,
+                        "documents_after_catalog_filter": catalog_filter.get("documents_after_catalog_filter")
+                        or catalog_filter.get("candidate_count_after_filter"),
+                        "complementary_retrieve": catalog_filter.get("complementary_retrieve") or {},
+                        "documents_removed_by_catalog_filter": catalog_filter.get("documents_removed_by_catalog_filter") or [],
+                        "catalog_filter_fallback": catalog_filter.get("catalog_filter_fallback", False),
+                        "final_documents_count": catalog_filter.get("final_documents_count", len(docs)),
+                        "returned_less_than_final_k": catalog_filter.get("returned_less_than_final_k", len(docs) < int(cfg.rag_retrieve_final_k)),
+                    },
+                    "dense_score_summary": dense_score_summary,
+                    "final_score_summary": final_score_summary,
+                    "final_results": [_doc_payload(doc, i + 1) for i, doc in enumerate(docs)],
+                    "candidate_results": [
+                        _candidate_payload(doc, score, i + 1)
+                        for i, (doc, score) in enumerate(raw_candidates)
                     ],
                 },
                 "context": {"text": context_text or ""},
@@ -562,7 +679,6 @@ def main() -> None:
                     "answer": answer_text or "",
                     "model_requested": cfg.ollama_chat_model,
                     "model_used": generation_model_used or "",
-                    "fallback_used": generation_fallback_used,
                 },
                 "timing": asdict(timing),
                 "errors": errors,
@@ -597,25 +713,104 @@ def main() -> None:
             st.json(
                 {
                     "retrieval_query": backend_state.get("retrieval_query") or "",
+                    "clinical_understanding": backend_state.get("clinical_understanding") or {},
+                    "query_expansion": backend_state.get("query_expansion") or {},
                     "sources": backend_state.get("sources") or [],
                     "reasoning_steps": backend_state.get("reasoning_steps") or [],
+                    "audit_id": backend_state.get("audit_id") or "",
                     "guardrail_status": backend_state.get("guardrail_status") or "",
                     "guardrail_reason": backend_state.get("guardrail_reason") or "",
                 },
                 expanded=False,
             )
 
-            st.subheader("✅ Retrieve detalhado (docs + score)")
+            st.subheader("✅ Retrieve detalhado (backend: expansão + Chroma + rerank)")
             retrieve_payload = cast(dict[str, Any], payload.get("retrieve") or {})
-            rows = cast(list[dict[str, Any]], retrieve_payload.get("results") or [])
-            st.caption(f"Consulta usada no Chroma: `{retrieve_payload.get('query_used') or ''}`")
-            score_summary = cast(dict[str, Any] | None, retrieve_payload.get("score_summary"))
+            rows = cast(list[dict[str, Any]], retrieve_payload.get("final_results") or [])
+            candidate_rows = cast(list[dict[str, Any]], retrieve_payload.get("candidate_results") or [])
+            st.caption(f"Query reescrita: `{retrieve_payload.get('rewrite_query') or ''}`")
+            st.caption(f"Query expandida enviada ao Chroma: `{retrieve_payload.get('expanded_query') or ''}`")
+            with st.expander("Structured terms e candidatos do catálogo", expanded=True):
+                st.json(
+                    {
+                        "structured_terms": retrieve_payload.get("structured_terms") or {},
+                        "catalog_candidates": retrieve_payload.get("catalog_candidates") or [],
+                    },
+                    expanded=False,
+                )
+            k_cols = st.columns(3)
+            k_cols[0].metric("k candidatos", str(retrieve_payload.get("candidates_k") or "-"))
+            k_cols[1].metric("k final", str(retrieve_payload.get("final_k") or "-"))
+            k_cols[2].metric("candidatos Chroma", str(len(candidate_rows)))
+
+            filter_payload = cast(dict[str, Any], retrieve_payload.get("catalog_filter") or {})
+            f_cols = st.columns(6)
+            f_cols[0].metric("catálogo confiante", "sim" if filter_payload.get("has_confident_catalog_candidate") else "não")
+            f_cols[1].metric("1º retrieve", str(retrieve_payload.get("first_retrieve_count") or "-"))
+            f_cols[2].metric("após filtro", str(filter_payload.get("documents_after_catalog_filter") or "-"))
+            f_cols[3].metric("complementar", str(retrieve_payload.get("complementary_retrieve_count") or 0))
+            f_cols[4].metric("top final", str(filter_payload.get("final_documents_count") or len(rows)))
+            f_cols[5].metric("fallback", "sim" if filter_payload.get("catalog_filter_fallback") else "não")
+            comp_info = cast(dict[str, Any], filter_payload.get("complementary_retrieve") or {})
+            if comp_info:
+                with st.expander("Busca complementar", expanded=True):
+                    st.json(
+                        {
+                            "used": comp_info.get("used"),
+                            "query": comp_info.get("query"),
+                            "metadata_filter": comp_info.get("metadata_filter"),
+                            "documents_from_complementary_search": comp_info.get("documents_from_complementary_search"),
+                            "documents_after_complementary_merge": comp_info.get("documents_after_complementary_merge"),
+                            "preferred_section_found": comp_info.get("preferred_section_found"),
+                            "preferred_section_not_found": comp_info.get("preferred_section_not_found"),
+                        },
+                        expanded=False,
+                    )
+            calls = cast(list[dict[str, Any]], retrieve_payload.get("retrieve_calls") or [])
+            if calls:
+                with st.expander("Chamadas Chroma", expanded=False):
+                    st.dataframe(
+                        [
+                            {
+                                "ordem": idx + 1,
+                                "query": call.get("query") or "",
+                                "k": call.get("k"),
+                                "result_count": call.get("result_count"),
+                                "kwargs": json.dumps(call.get("kwargs") or {}, ensure_ascii=False),
+                            }
+                            for idx, call in enumerate(calls)
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            if filter_payload.get("returned_less_than_final_k"):
+                st.info("Retornou menos documentos que k final porque o filtro de catálogo removeu resultados incompatíveis.")
+            removed = cast(list[dict[str, Any]], filter_payload.get("documents_removed_by_catalog_filter") or [])
+            if removed:
+                with st.expander("Documentos removidos pelo filtro de catálogo", expanded=False):
+                    st.dataframe(
+                        [
+                            {
+                                "disease": r.get("disease") or "",
+                                "diretriz": r.get("diretriz") or "",
+                                "section": r.get("section") or "",
+                                "source_stem": r.get("source_stem") or "",
+                                "dense_score": r.get("dense_score"),
+                                "reason": r.get("reason") or "",
+                            }
+                            for r in removed
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+            score_summary = cast(dict[str, Any] | None, retrieve_payload.get("final_score_summary"))
             if score_summary:
                 score_cols = st.columns(4)
-                score_cols[0].metric("best score", f"{float(score_summary['best']):.4f}")
-                score_cols[1].metric("worst score", f"{float(score_summary['worst']):.4f}")
-                score_cols[2].metric("spread", f"{float(score_summary['spread']):.4f}")
-                score_cols[3].metric("mean", f"{float(score_summary['mean']):.4f}")
+                score_cols[0].metric("best final", f"{float(score_summary['best']):.4f}")
+                score_cols[1].metric("worst final", f"{float(score_summary['worst']):.4f}")
+                score_cols[2].metric("spread final", f"{float(score_summary['spread']):.4f}")
+                score_cols[3].metric("mean final", f"{float(score_summary['mean']):.4f}")
             if not rows:
                 st.info("Sem resultados. Verifique se o Chroma tem vetores e se a coleção está correta.")
             else:
@@ -623,10 +818,15 @@ def main() -> None:
                     [
                         {
                             "rank": r["rank"],
-                            "score": r["score"],
+                            "final_score": r.get("final_score"),
+                            "dense_score": r.get("dense_score"),
+                            "dense_rank": r.get("dense_rank"),
+                            "heuristic_score": r.get("heuristic_score"),
+                            "cross_encoder_score": r.get("metadata", {}).get("cross_encoder_score"),
                             "source": r["source_label"],
                             "source_stem": (r.get("metadata") or {}).get("source_stem", ""),
                             "pages": f"{(r.get('metadata') or {}).get('page_start', '?')}-{(r.get('metadata') or {}).get('page_end', '?')}",
+                            "ranking_reasons": ", ".join(str(x) for x in (r.get("ranking_reasons") or [])),
                             "preview": r["content_preview"].replace("\n", " "),
                         }
                         for r in rows
@@ -637,10 +837,38 @@ def main() -> None:
 
                 with st.expander("Ver cada documento completo (conteúdo + metadados)", expanded=False):
                     for r in rows:
-                        st.markdown(f"**#{r['rank']} — score={r['score']!r} — {r['source_label']}**")
+                        st.markdown(
+                            f"**#{r['rank']} — final={r.get('final_score')!r} "
+                            f"— dense={r.get('dense_score')!r} — {r['source_label']}**"
+                        )
                         st.json(r.get("metadata") or {}, expanded=False)
                         st.text((r.get("content") or r.get("content_preview") or "").strip())
                         st.divider()
+
+                with st.expander("Candidatos densos crus do Chroma antes do rerank", expanded=False):
+                    dense_summary = cast(dict[str, Any] | None, retrieve_payload.get("dense_score_summary"))
+                    if dense_summary:
+                        st.caption(
+                            "Resumo score denso: "
+                            f"best={float(dense_summary['best']):.4f}, "
+                            f"worst={float(dense_summary['worst']):.4f}, "
+                            f"mean={float(dense_summary['mean']):.4f}"
+                        )
+                    st.dataframe(
+                        [
+                            {
+                                "dense_rank": r["rank"],
+                                "dense_score": r["dense_score"],
+                                "source": r["source_label"],
+                                "source_stem": (r.get("metadata") or {}).get("source_stem", ""),
+                                "pages": f"{(r.get('metadata') or {}).get('page_start', '?')}-{(r.get('metadata') or {}).get('page_end', '?')}",
+                                "preview": r["content_preview"].replace("\n", " "),
+                            }
+                            for r in candidate_rows
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
             st.subheader("✅ Context assembly (como o contexto é montado)")
             st.text_area("Contexto montado", value=(payload.get("context") or {}).get("text") or "", height=220)
@@ -663,10 +891,7 @@ def main() -> None:
                 st.info("Geração LLM desabilitada nesta execução (modo foco RAG ou opção manual).")
             else:
                 if requested:
-                    if gen.get("fallback_used"):
-                        st.caption(f"Modelo solicitado: `{requested}` | modelo usado: `{used}` (fallback)")
-                    else:
-                        st.caption(f"Modelo usado: `{used or requested}`")
+                    st.caption(f"Modelo usado: `{used or requested}`")
                 if backend_state.get("guardrail_status"):
                     st.caption(
                         "Guardrail: "
@@ -692,7 +917,7 @@ def main() -> None:
                 )
 
             if educational_mode:
-                scores = [float(r.get("score") or 0.0) for r in rows]
+                scores = [float(r.get("final_score") or r.get("dense_score") or 0.0) for r in rows]
                 _render_educational_tips(
                     query=(payload.get("input") or {}).get("query") or "",
                     has_docs=bool(rows),

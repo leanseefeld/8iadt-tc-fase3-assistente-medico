@@ -7,6 +7,7 @@ Este documento descreve uma linha de implementação sugerida após a ingestão 
 | Etapa | Abordagem sugerida |
 |--------|---------------------|
 | Listagem / PDF / manifestos PCDT | **httpx** + **BeautifulSoup**: uma página de listagem CONITEC, tabela PCDT, `download-pcdt`. Não usar **sklearn `Pipeline`** como orquestrador principal: ele é para `fit`/`transform` em matrizes de features. |
+| Catálogo Conitec PCDT/CID/medicamentos | **pandas + openpyxl**: leitura explícita da planilha oficial da Conitec via `build-conitec-catalog`, cache em `llm/data/processed/conitec/pcdt_catalog.jsonl` e uso no chunking para enriquecer metadados. |
 | Download Einstein (CSV/XLSX dentro de ZIP) | **Playwright** (headed, para aceite de termos) ou download manual + flag `--zip`. Extração e catalogação via `zipfile` stdlib. |
 | Limpeza e junção Einstein (CSV/XLSX) | **pandas** (ou Polars): dicionário, `ID_PACIENTE`, separador `\|`. Ver [datasource_albert-einstein.md](../../datasource_albert-einstein.md). |
 | Modelo supervisionado clássico em cima de features tabulares | Aí sim **sklearn `Pipeline`** (imputação, encoding, escalonamento, classificador/regressor). |
@@ -15,10 +16,33 @@ Este documento descreve uma linha de implementação sugerida após a ingestão 
 ## Estágios RAG (PCDT e, se aplicável, texto derivado de exames)
 
 1. **Extrair**: PDF → sidecar JSONL por página (`processed/pcdt/<nome>.pages.jsonl`, comando `extract-pcdt-markdown`); Markdown combinado opcional com `--with-combined-md`.
-2. **Limpar**: normalizar espaços, remover cabeçalhos/rodapés repetidos, sumários ruidosos, formulários e tabelas OCR malformadas; idioma `pt-BR` na metadata.
-3. **Fragmentar**: `chunk-pcdt` gera `chunks/pcdt/<nome>.chunks.jsonl` a partir dos sidecars limpos quando existem. A fragmentação costura páginas antes de dividir texto, calcula `page_start`/`page_end` por spans globais e normaliza títulos PCDT para preencher melhor `section` e `header_*`. O modo padrão vem de `llm/config.py` e pode ser sobrescrito por `--chunk-strategy recursive|semantic`; o modo `semantic` usa `SemanticChunker` por seção lógica com `nomic-embed-text` via Ollama. A metadata inclui `chunk_strategy` e `disease`.
-4. **Embeddings**: lotes com o modelo de embedding escolhido.
-5. **Recuperação**: busca híbrida (BM25 + denso) costuma funcionar bem em documentos longos normativos.
+2. **Gerar catálogo Conitec**: `build-conitec-catalog` lê a planilha oficial de diretrizes/CID/medicamentos e grava `processed/conitec/pcdt_catalog.jsonl`. Não há download em import time; a URL só é usada via CLI ou função explícita.
+3. **Limpar**: normalizar espaços, remover cabeçalhos/rodapés repetidos, tabelas de índice/sumário, formulários, tabelas OCR malformadas, anexos/apêndices e referências finais.
+4. **Fragmentar**: `chunk-pcdt` gera `chunks/pcdt/<nome>.chunks.jsonl` a partir dos sidecars limpos quando existem. A fragmentação costura páginas antes de dividir texto, calcula `page_start`/`page_end` por spans globais e normaliza títulos PCDT para preencher melhor `section` e `header_*`. O modo padrão vem de `llm/config.py` e pode ser sobrescrito por `--chunk-strategy recursive|semantic`; o modo `semantic` usa `SemanticChunker` por seção lógica com `nomic-embed-text` via Ollama.
+5. **Enriquecer metadados**: quando há match seguro entre o PDF e a `Diretriz` do catálogo, `disease`, `disease_normalized`, `diretriz`, CID-10, medicamentos, portarias e siglas vêm da planilha (`metadata_source = "conitec_xlsx"`). Sem match confiável, a heurística antiga continua ativa (`metadata_source = "heuristic"`).
+6. **Embeddings**: lotes com o modelo de embedding escolhido. Metadados estruturados permanecem nos `.chunks.jsonl`; para Chroma, listas são convertidas para JSON string pela etapa de indexação.
+7. **Recuperação**: busca híbrida (BM25 + denso) costuma funcionar bem em documentos longos normativos. O catálogo também expõe expansão de query para termos como `HIV`, agregando diretrizes, descrições CID-10, medicamentos e siglas relacionadas.
+
+Fluxo local completo:
+
+```bash
+download-pcdt
+build-conitec-catalog
+extract-pcdt-markdown --workers 6
+clean-pcdt-extracted --workers 6
+chunk-pcdt --workers 6
+build-vectorstore
+```
+
+Para depurar a recuperação e a montagem de prompt sem subir backend/frontend, use o RAG Inspector:
+
+```bash
+cd llm
+ollama pull llama3.2:3b
+streamlit run scripts/rag_inspector_app.py
+```
+
+O Inspector usa `llama3.2:3b` por padrão e não tenta fallback automático para outro modelo; falhas de geração aparecem como erro da execução.
 
 ## Fine-tuning supervisionado (SFT)
 

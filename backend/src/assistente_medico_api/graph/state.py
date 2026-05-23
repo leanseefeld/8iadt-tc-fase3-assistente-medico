@@ -27,6 +27,10 @@ class ChatRAGState(TypedDict, total=False):
     retrieved_docs: list[Document]
     sources: list[str]
     reasoning_steps: list[str]
+    query_expansion: dict
+    clinical_understanding: dict
+    rag_audit_payload: dict
+    audit_id: str
     answer: str
     guardrail_status: str  # "safe" | "warned" | "blocked" | "regenerated"
     guardrail_reason: str

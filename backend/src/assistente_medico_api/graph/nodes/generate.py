@@ -23,6 +23,8 @@ _SYSTEM_PROMPT = """\
 Você é um assistente clínico de apoio a médicos no Brasil.
 Você realizou uma busca por Protocolos Clínicos e Diretrizes Terapêuticas (PCDT) para responder a mensagem.
 Cite os resultados pelo identificador [n] correspondente ao trecho.
+Use exclusivamente os documentos recuperados abaixo. Quando responder, mencione a diretriz, a seção e as páginas quando disponíveis.
+Se os documentos não contiverem informação suficiente, diga isso claramente.
 Recomende mas não prescreva medicamentos, doses ou esquemas terapêuticos específicos: o médico responsável decide.
 Se os resultados da busca não forem suficientes, diga que documentos relevantes não foram encontrados.
 Evite inventar dados clínicos.
@@ -36,11 +38,17 @@ def _build_messages(state: ChatRAGState) -> list:
     docs = state.get("retrieved_docs") or []
     context = format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
     user_text = state.get("query") or ""
+    query_expansion = state.get("query_expansion") or {}
+    understanding = _format_clinical_understanding(
+        state.get("clinical_understanding") or {},
+        query_expansion.get("structured_terms") or {},
+        query_expansion.get("_complementary_retrieve_info") or {},
+    )
     # Bloco PCDT só na pergunta corrente (turno final do utilizador).
     final_human = (
         f"Pergunta do médico:\n{user_text}\n\n"
-        f"Resultado da busca (trechos PCDT):\n{context}\n\n"
-        "Responda com base nos resultados encontrados quando aplicável."
+        f"Entendimento da pergunta:\n{understanding}\n\n"
+        f"Contexto (trechos PCDT):\n{context}\n\n"
     )
     out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
     for turn in state.get("chat_history") or []:
@@ -54,6 +62,40 @@ def _build_messages(state: ChatRAGState) -> list:
             out.append(AIMessage(content=text))
     out.append(HumanMessage(content=final_human))
     return out
+
+
+def _format_clinical_understanding(
+    understanding: dict,
+    structured_terms: dict | None = None,
+    complementary_info: dict | None = None,
+) -> str:
+    structured_terms = structured_terms or {}
+    complementary_info = complementary_info or {}
+    disease = understanding.get("detected_disease") or {}
+    entities = understanding.get("linked_entities") or []
+    candidates = understanding.get("catalog_candidates") or []
+    structured_disease = structured_terms.get("diretriz") or structured_terms.get("disease")
+    structured_cids = structured_terms.get("cid10_codes") or []
+    structured_sections = structured_terms.get("preferred_sections") or []
+    return "\n".join(
+        [
+            f"- Intenção: {structured_terms.get('intent') or (understanding.get('intent_result') or {}).get('intent') or understanding.get('intent') or 'não detectada'}",
+            f"- Doença/Diretriz: {structured_disease or disease.get('name') or 'nenhuma'}",
+            f"- CID-10: {', '.join(structured_cids) or ', '.join(understanding.get('detected_cid10_codes') or []) or 'nenhum'}",
+            f"- Seções preferenciais: {_format_items(structured_sections)}",
+            f"- Entidades biomédicas linkadas: {_format_items([e.get('canonical') or e.get('text') for e in entities])}",
+            f"- Candidatos do catálogo: {_format_items([c.get('diretriz') or c.get('disease') for c in candidates])}",
+            f"- Seção preferida encontrada: {'não' if complementary_info.get('preferred_section_not_found') else 'sim' if complementary_info.get('preferred_section_found') else 'não informado'}",
+        ]
+    )
+
+
+def _format_items(values: list, limit: int = 5) -> str:
+    items = [str(value).strip() for value in values if str(value or "").strip()]
+    if not items:
+        return "nenhuma"
+    suffix = "..." if len(items) > limit else ""
+    return ", ".join(items[:limit]) + suffix
 
 
 def _build_llm(settings: Settings) -> ChatOllama:

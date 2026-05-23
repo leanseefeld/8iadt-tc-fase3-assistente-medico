@@ -15,7 +15,7 @@ from assistente_medico_api.api.comorbidities import router as comorbidities_rout
 from assistente_medico_api.api.medications import router as medications_router
 from assistente_medico_api.api.patients import router as patients_router
 from assistente_medico_api.api.prescriptions import router as prescriptions_router
-from assistente_medico_api.config import Settings
+from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
 from assistente_medico_api.observability.logging_setup import configure_logging
 from assistente_medico_api.observability.middleware import RequestContextMiddleware
@@ -29,9 +29,8 @@ async def lifespan(app: FastAPI):
     settings = Settings()
     # Import tardio: depende do pacote llm instalado.
     from pcdt_ingest.embed import build_ollama_embeddings, open_chroma_vectorstore
-    from pcdt_ingest.paths import vectorstore_chroma_dir
 
-    chroma_path = settings.chroma_persist_dir or vectorstore_chroma_dir()
+    chroma_path = resolve_chroma_persist_dir(settings)
     embeddings = build_ollama_embeddings(
         model=settings.ollama_embed_model,
         base_url=settings.ollama_base_url,

@@ -26,6 +26,10 @@ dependencies = [
     "ruff>=0.6",
     "tqdm>=4.67",
     "streamlit>=1.40",
+    "rapidfuzz>=3.6",
+    "spacy>=3.7",
+    "medspacy>=1.2",
+    "scispacy>=0.6.2",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +42,7 @@ download-pcdt = "pcdt_ingest.cli_pcdt:main"
 download-clinical-exams = "pcdt_ingest.cli_exams:main"
 extract-pcdt-markdown = "pcdt_ingest.cli_extract:main"
 chunk-pcdt = "pcdt_ingest.cli_chunk:main"
+build-conitec-catalog = "pcdt_ingest.cli_conitec_catalog:main"
 build-vectorstore = "pcdt_ingest.cli_embed:main"
 view-pcdt-chunks = "pcdt_ingest.cli_view_pcdt_chunks:main"
 clean-pcdt-extracted = "pcdt_ingest.cli_clean:main"

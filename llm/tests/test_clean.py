@@ -344,6 +344,81 @@ def test_lone_annex_toc_and_figure_caption_are_removed() -> None:
     assert "removed_figure_caption" in flags
 
 
+def test_index_table_block_is_removed() -> None:
+    text, flags, _stats = clean_page_markdown(
+        "SUMÁRIO\n"
+        "| Seção | Página |\n"
+        "|---|---|\n"
+        "| INTRODUÇÃO | 5 |\n"
+        "| DIAGNÓSTICO | 7 |\n"
+        "| REFERÊNCIAS | 31 |\n"
+        "## **1. INTRODUÇÃO**\n"
+        "Texto clínico válido para manter.",
+        repeated_keys=set(),
+        config=CleanConfig(min_words=3),
+    )
+
+    assert "SUMÁRIO" not in text
+    assert "Seção | Página" not in text
+    assert "REFERÊNCIAS | 31" not in text
+    assert "## **1. INTRODUÇÃO**" in text
+    assert "Texto clínico válido" in text
+    assert "removed_toc_heading" in flags
+
+
+def test_references_section_is_truncated() -> None:
+    text, flags, _stats = clean_page_markdown(
+        "## **8. MONITORAMENTO**\n"
+        "Texto clínico válido para manter.\n"
+        "## **REFERÊNCIAS**\n"
+        "1. Autor A. Artigo bibliográfico.\n"
+        "2. Autor B. Outro artigo.",
+        repeated_keys=set(),
+        config=CleanConfig(min_words=3),
+    )
+
+    assert "MONITORAMENTO" in text
+    assert "Texto clínico válido" in text
+    assert "REFERÊNCIAS" not in text
+    assert "Autor A" not in text
+    assert "removed_trailing_nonclinical_section" in flags
+
+
+def test_annex_section_does_not_truncate_following_pages() -> None:
+    rows = [
+        {"page": 1, "markdown": "## **1. INTRODUÇÃO**\nTexto clínico válido para manter."},
+        {"page": 2, "markdown": "## **ANEXO I**\nTexto clínico complementar relevante."},
+        {"page": 3, "markdown": "Continuação clínica do anexo com orientações relevantes."},
+    ]
+
+    results, stats, _doc_class = clean_pages(rows, config=CleanConfig(min_words=3))
+
+    assert results[0].record["markdown"]
+    assert "ANEXO I" in results[1].record["markdown"]
+    assert results[1].skipped is False
+    assert results[2].record["markdown"]
+    assert results[2].skipped is False
+    assert stats.pages_skipped == 0
+
+
+def test_references_section_truncates_following_pages() -> None:
+    rows = [
+        {"page": 1, "markdown": "## **1. INTRODUÇÃO**\nTexto clínico válido para manter."},
+        {"page": 2, "markdown": "## **REFERÊNCIAS**\n1. Autor A. Artigo bibliográfico."},
+        {"page": 3, "markdown": "2. Autor B. Continuação bibliográfica."},
+    ]
+
+    results, stats, _doc_class = clean_pages(rows, config=CleanConfig(min_words=3))
+
+    assert results[0].record["markdown"]
+    assert results[1].record["markdown"] == ""
+    assert results[1].skipped is True
+    assert results[2].record["markdown"] == ""
+    assert results[2].skipped is True
+    assert results[2].skip_reason == "after_trailing_nonclinical_section"
+    assert stats.pages_skipped == 2
+
+
 def test_broken_repeated_table_header_block_is_removed() -> None:
     text, flags, _stats = clean_page_markdown(
         "Texto clínico antes.\n"

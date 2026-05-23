@@ -19,6 +19,9 @@ from pcdt_ingest.clean.heuristics import (
     is_malformed_table_block,
     is_markdown_heading_line,
     is_pcdt_title_line,
+    is_toc_heading_line,
+    is_toc_line,
+    is_trailing_nonclinical_section_heading,
     is_table_line,
     is_table_caption_line,
     line_skip_reason,
@@ -50,6 +53,22 @@ def _remove_structural_noise_blocks(
     i = 0
     while i < len(lines):
         line = lines[i]
+        if is_toc_heading_line(line) or is_toc_line(line):
+            j = i + 1
+            while j < len(lines):
+                current = lines[j]
+                if is_pcdt_title_line(current):
+                    break
+                if is_markdown_heading_line(current) and not is_toc_line(current):
+                    break
+                if current.strip() and not (is_toc_line(current) or is_table_line(current)):
+                    break
+                j += 1
+            stats.lines_removed += sum(1 for item in lines[i:j] if item.strip())
+            _append_flag(flags, cleaning_flag_for_reason("toc_heading" if is_toc_heading_line(line) else "toc_line"))
+            i = j
+            continue
+
         if is_form_start_line(line):
             removed = sum(1 for rest in lines[i:] if rest.strip())
             stats.lines_removed += removed
@@ -101,6 +120,19 @@ def _remove_structural_noise_blocks(
         out.append(line)
         i += 1
     return out
+
+
+def _truncate_trailing_nonclinical_sections(text: str, *, flags: list[str], stats: CleanStats) -> str:
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not is_trailing_nonclinical_section_heading(line):
+            continue
+        removed = sum(1 for item in lines[i:] if item.strip())
+        if removed:
+            stats.lines_removed += removed
+            _append_flag(flags, "removed_trailing_nonclinical_section")
+        return "\n".join(lines[:i]).strip()
+    return text
 
 
 def _table_line_to_text(line: str) -> tuple[str, bool]:
@@ -249,6 +281,7 @@ def clean_page_markdown(
         flags.append("dehyphenated")
         stats.dehyphenated_pages += 1
     text = compact_spaces(text)
+    text = _truncate_trailing_nonclinical_sections(text, flags=flags, stats=stats)
 
     if is_junk_text(text, min_words=config.min_words):
         flags.append("junk_text")
@@ -274,17 +307,26 @@ def clean_pages(
 
     results: list[PageCleanResult] = []
     total = CleanStats()
+    truncate_following_pages = False
     for row in rows:
         page = int(row.get("page") or 0)
         original = str(row.get("markdown") or "")
-        cleaned, flags, stats = clean_page_markdown(
-            original,
-            repeated_keys=repeated_keys,
-            config=cfg,
-        )
+        if truncate_following_pages:
+            cleaned = ""
+            flags = ["removed_trailing_nonclinical_section"]
+            stats = CleanStats(pages_analyzed=1)
+        else:
+            cleaned, flags, stats = clean_page_markdown(
+                original,
+                repeated_keys=repeated_keys,
+                config=cfg,
+            )
         skipped = False
         skip_reason: str | None = None
-        if cfg.skip_initial_admin_pages and page and page < clinical_start_page:
+        if truncate_following_pages:
+            skipped = True
+            skip_reason = "after_trailing_nonclinical_section"
+        elif cfg.skip_initial_admin_pages and page and page < clinical_start_page:
             skipped = True
             skip_reason = "before_clinical_content"
         elif "junk_text" in flags:
@@ -310,6 +352,8 @@ def clean_pages(
                 stats=stats,
             )
         )
+        if "removed_trailing_nonclinical_section" in flags:
+            truncate_following_pages = True
 
     return results, total, doc_class
 

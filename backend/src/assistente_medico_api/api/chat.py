@@ -147,6 +147,7 @@ async def post_chat(
             sources=list(final.get("sources") or []),
             reasoning=list(final.get("reasoning_steps") or []),
             thread_id=thread_id,
+            audit_id=final.get("audit_id") or None,
             guardrail_status=final.get("guardrail_status") or None,
             guardrail_reason=final.get("guardrail_reason") or None,
         )
@@ -198,6 +199,7 @@ async def post_chat(
                                 "status": output.get("guardrail_status"),
                                 "reason": output.get("guardrail_reason"),
                                 "answer": output.get("answer"),
+                                "auditId": output.get("audit_id"),
                             }
                         ),
                     }

@@ -21,6 +21,10 @@ from pcdt_ingest.paths import (
     ensure_data_dirs,
 )
 from pcdt_ingest.pipeline_config import get_config
+from pcdt_ingest.reference_data.conitec_catalog import (
+    DEFAULT_CATALOG_RELATIVE_PATH,
+    read_catalog_jsonl,
+)
 
 _log = get_logger("cli_chunk")
 
@@ -124,6 +128,20 @@ def main(argv: list[str] | None = None) -> int:
         default=int(get_config("CHUNK_OVERLAP_TOKENS", 50)),
         help="Sobreposição entre chunks em tokens estimados.",
     )
+    parser.add_argument(
+        "--conitec-catalog",
+        type=Path,
+        default=None,
+        help=(
+            "Catálogo Conitec JSONL para enriquecer disease/CID/medicamentos. "
+            "Se omitido, usa llm/data/processed/conitec/pcdt_catalog.jsonl quando existir."
+        ),
+    )
+    parser.add_argument(
+        "--no-conitec-catalog",
+        action="store_true",
+        help="Desativa enriquecimento pelo catálogo Conitec e usa apenas a heurística antiga.",
+    )
     args = parser.parse_args(argv)
 
     if args.workers < 1:
@@ -151,6 +169,17 @@ def main(argv: list[str] | None = None) -> int:
     cleaned_dir = default_cleaned_processed_dir()
     chunks_dir = default_chunks_dir()
     manifests_dir = root / DIR_MANIFESTS
+    conitec_catalog: dict[str, dict] | None = None
+    conitec_catalog_mtime: float | None = None
+    if not args.no_conitec_catalog:
+        catalog_path = args.conitec_catalog or (root / DEFAULT_CATALOG_RELATIVE_PATH)
+        if catalog_path.is_file():
+            conitec_catalog = read_catalog_jsonl(catalog_path)
+            conitec_catalog_mtime = catalog_path.stat().st_mtime
+            _log.info("catálogo Conitec carregado: %s (%s diretrizes)", catalog_path, len(conitec_catalog))
+        elif args.conitec_catalog:
+            print(f"Erro: catálogo Conitec não encontrado: {catalog_path}", file=sys.stderr)
+            return 2
 
     if args.only_manifest:
         stems = _load_manifest_stems(root)
@@ -185,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
             semantic_breakpoint_percentile=args.semantic_breakpoint_percentile,
             chunk_tokens=args.chunk_tokens,
             overlap_tokens=args.overlap_tokens,
+            conitec_catalog=conitec_catalog,
+            conitec_catalog_mtime=conitec_catalog_mtime,
         )
         _log.info("%s: %s (%s chunks)", stem, row.get("status"), row.get("chunk_count"))
         return row

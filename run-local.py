@@ -167,6 +167,19 @@ def main() -> int:
             print("Instalando dependências opcionais do chunking semântico...")
             run_checked([str(venv_python), "-m", "pip", "install", "-e", f"{repo_root / 'llm'}[semantic]"], repo_root)
 
+        # Try to download recommended spaCy Portuguese model if spaCy is
+        # available in the created virtualenv. This is safe (non-fatal) and
+        # helps users who opt into the medical NLP extras to have the model
+        # ready locally.
+        try:
+            # Check if spacy is importable in the venv. This will raise if
+            # spacy is not installed yet in the venv (no fatal error).
+            run_checked([str(venv_python), "-c", "import importlib; importlib.import_module('spacy')"], repo_root)
+            print("Baixando modelo spaCy 'pt_core_news_sm' (pode demorar)...")
+            run_checked([str(venv_python), "-m", "spacy", "download", "pt_core_news_sm"], repo_root)
+        except Exception:
+            print("Aviso: spaCy não disponível no ambiente ou falha ao baixar 'pt_core_news_sm'. Para habilitar NLP médico, instale 'llm[medical-nlp]' e rode: python -m spacy download pt_core_news_sm")
+
         print("Instalando dependências do frontend...")
         run_checked(["npm", "install"], repo_root / "frontend")
 
@@ -221,7 +234,8 @@ def main() -> int:
         llm_env["PYTHONPATH"] = f"{llm_src}{os.pathsep}{llm_env.get('PYTHONPATH', '')}"
 
         steps = [
-            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--max-files", "15", "--force"]),
+            ("download-pcdt", ["pcdt_ingest.cli_pcdt", "--force"]),
+            ("build-conitec-catalog", ["pcdt_ingest.cli_conitec_catalog"]),
             ("extract-pcdt-markdown", ["pcdt_ingest.cli_extract", "--workers", "6", "--force"]),
             ("clean-pcdt-extracted", ["pcdt_ingest.cli_clean", "--verbose", "--force"]),
             (
@@ -241,7 +255,7 @@ def main() -> int:
                     str(args.overlap_tokens),
                 ],
             ),
-            ("build-vectorstore", ["pcdt_ingest.cli_embed", "--max-files", "15","--force", "--verbose"])
+            ("build-vectorstore", ["pcdt_ingest.cli_embed", "--force", "--verbose"])
         ]
 
         for display_name, module_info in steps:

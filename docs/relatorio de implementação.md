@@ -262,6 +262,12 @@ Porém, essa estratégia ainda estava falhando quando o tamanho do chunk ultrapa
 
 Dessa forma, implementamos a divisão por sentença, usando o `nltk`, e unimos em sentenças até atingir o limite de tokens, garantindo que o chunk gerado tenha um valor semântico completo. Além disso, adicionamento heurísticas para melhorar a coerência textual dos fragmentos.
 
+Conforme imagem abaixo, a busca das informações na base rag foi bem mais limpa, recebendo informações completas e o modelo sem ajuste fino conseguiu responder a mesma pergunta feita anteriormente.
+
+![Imagem: acidente escopiônico - parte 5](./assets/repeticao_pergunta_escorpiao_1.png)
+
+![Imagem: acidente escopiônico - parte 6](./assets/repeticao_pergunta_escorpiao_2.png)
+
 
 ## Cálculo de memória e tamanho de contexto
 
