@@ -1,18 +1,29 @@
-"""Testes para logging estruturado JSON, middleware de request_id e helper `audit`."""
+"""Testes para JsonFormatter legado, middleware de request_id e auditoria clínica JSONL."""
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import date
+from pathlib import Path
 
 import httpx
 import pytest
 
+from assistente_medico_api.config import Settings, resolve_runtime_path
 from assistente_medico_api.main import create_app
-from assistente_medico_api.observability.audit import audit
+from assistente_medico_api.observability.clinical_audit_jsonl import (
+    ClinicalAuditAction,
+    append_clinical_audit_line,
+    clinical_audit,
+)
 from assistente_medico_api.observability.context import (
+    reset_audit_context,
     reset_request_id,
+    reset_user_id,
+    set_audit_context,
     set_request_id,
+    set_user_id,
 )
 from assistente_medico_api.observability.json_formatter import JsonFormatter
 
@@ -22,11 +33,11 @@ def test_json_formatter_includes_standard_fields_and_extras():
     rid_tok = set_request_id("test-req-z9")
     try:
         record = logging.LogRecord(
-            name="assistente_medico.http",
+            name="assistente_medico.manual",
             level=logging.INFO,
             pathname="somewhere/api.py",
             lineno=42,
-            msg="http_request",
+            msg="custom_event",
             args=(),
             exc_info=None,
         )
@@ -43,45 +54,50 @@ def test_json_formatter_includes_standard_fields_and_extras():
     assert data["thread_id"] == "thread-aaa"
     assert data["patient_id"] == "patient-bbb"
     assert data["latency_ms"] == 33.44
-    assert data["event"] == "http_request"
-    assert data["level"] == "INFO"
-    assert data["extras"]["method"] == "GET"
+    assert data["event"] == "custom_event"
 
 
-def test_audit_writes_parseable_json_line():
-    import io
+def test_clinical_audit_jsonl_shape_and_daily_file(tmp_path: Path):
+    cfg = Settings(log_dir=tmp_path / "logs", clinical_audit_enabled=True)
+    log_dir = resolve_runtime_path(cfg.log_dir)
 
-    lg = logging.getLogger("assistente_medico.audit.clinical")
-    saved_handlers = list(lg.handlers)
-    saved_propagate = lg.propagate
-    saved_level = lg.level
-    buf = io.StringIO()
-    h = logging.StreamHandler(buf)
-    h.setFormatter(JsonFormatter())
+    ctx_tok = set_audit_context("demo")
+    uid_tok = set_user_id("doc-test-01")
+    rid_inner = set_request_id("req-xyz")
+
     try:
-        lg.handlers.clear()
-        lg.propagate = False
-        lg.setLevel(logging.INFO)
-        lg.addHandler(h)
-
-        audit(
-            "event_x",
-            kind="clinical",
-            patient_id="pt-sample",
-            extra_field=123,
-            text_snippet="ok",
+        clinical_audit(
+            ClinicalAuditAction.NOVO_EXAME,
+            patient_id="pt-a",
+            patient_name="Paciente Demo",
+            descricao="Um exame novo (teste).",
+            detalhes={"exam_id": "ex-1"},
+            settings=cfg,
         )
-
-        data = json.loads(buf.getvalue().strip())
-        assert data["event"] == "event_x"
-        assert data["patient_id"] == "pt-sample"
-        assert data["extras"]["extra_field"] == 123
-        assert data["extras"]["text_snippet"] == "ok"
+        today = date.today().isoformat()
+        path = log_dir / f"audit_clinical_{today}.jsonl"
+        assert path.is_file()
+        line = path.read_text(encoding="utf-8").strip()
+        data = json.loads(line)
+        assert data["acao"] == "novo_exame"
+        assert data["medico_id"] == "doc-test-01"
+        assert data["request_id"] == "req-xyz"
+        assert data["patient_id"] == "pt-a"
+        assert "ts" not in data
+        assert "level" not in data
+        assert "logger" not in data
+        assert "detalhes" in data
     finally:
-        lg.removeHandler(h)
-        lg.handlers[:] = saved_handlers
-        lg.propagate = saved_propagate
-        lg.setLevel(saved_level)
+        reset_request_id(rid_inner)
+        reset_user_id(uid_tok)
+        reset_audit_context(ctx_tok)
+
+
+def test_append_clinical_audit_line_accepts_plain_dict(tmp_path: Path):
+    cfg = Settings(log_dir=tmp_path / "zlogs", clinical_audit_enabled=True)
+    append_clinical_audit_line(cfg, {"acao": "x", "descricao": "y"})
+    p = resolve_runtime_path(cfg.log_dir) / f"audit_clinical_{date.today().isoformat()}.jsonl"
+    assert json.loads(p.read_text(encoding="utf-8").strip())["acao"] == "x"
 
 
 @pytest.mark.asyncio

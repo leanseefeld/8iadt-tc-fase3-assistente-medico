@@ -26,6 +26,7 @@ from assistente_medico_api.schemas.chat import (
 from assistente_medico_api.graph.state import ChatHistoryTurnState
 from assistente_medico_api.services.protocol_map import get_protocol_for_cid
 from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 from assistente_medico_api.observability.context import set_patient_id, set_thread_id
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -129,6 +130,17 @@ async def post_chat(
         accept=(accept or ""),
         stream=wants_stream,
     )
+    clinical_audit(
+        ClinicalAuditAction.CONVERSA_ASSISTENTE_SOLICITADA,
+        patient_id=body.patient_id,
+        descricao="Pedido de conversa com o assistente (chat RAG).",
+        detalhes={
+            "thread_id": thread_id,
+            "stream": wants_stream,
+            "accept": truncate(accept or "", n=120),
+            "pergunta_truncada": truncate(body.message, n=400),
+        },
+    )
 
     # --- Caminho JSON: usa API async (grafo contém nós async) ---
     if not wants_stream:
@@ -139,15 +151,28 @@ async def post_chat(
                 status_code=503,
                 detail=f"Falha ao executar o assistente: {exc!s}",
             ) from exc
+        lat = round((time.perf_counter() - t_started) * 1000, 2)
         audit(
             "chat_response_done",
             kind="chat",
-            latency_ms=round((time.perf_counter() - t_started) * 1000, 2),
+            latency_ms=lat,
             thread_id=thread_id,
             patient_id=(body.patient_id or None),
             mode="json",
             guardrail_status=final.get("guardrail_status"),
             tokens_streamed=0,
+        )
+        clinical_audit(
+            ClinicalAuditAction.CONVERSA_ASSISTENTE_FINALIZADA,
+            patient_id=body.patient_id,
+            descricao="Resposta do assistente entregue (modo JSON).",
+            detalhes={
+                "thread_id": thread_id,
+                "modo": "json",
+                "latency_ms": lat,
+                "tokens_streamed": 0,
+                "guardrail_status": final.get("guardrail_status"),
+            },
         )
         return ChatResponseJson(
             text=final.get("answer") or "",
@@ -162,18 +187,31 @@ async def post_chat(
     # --- Caminho SSE: astream_events emite on_chat_model_stream por token ---
     async def event_gen():
         tokens_streamed = 0
-        guard_status = None
+        guard_status: str | None = None
 
         def finalize_audit() -> None:
+            lat = round((time.perf_counter() - t_started) * 1000, 2)
             audit(
                 "chat_response_done",
                 kind="chat",
-                latency_ms=round((time.perf_counter() - t_started) * 1000, 2),
+                latency_ms=lat,
                 thread_id=thread_id,
                 patient_id=(body.patient_id or None),
                 mode="sse",
                 guardrail_status=guard_status,
                 tokens_streamed=tokens_streamed,
+            )
+            clinical_audit(
+                ClinicalAuditAction.CONVERSA_ASSISTENTE_FINALIZADA,
+                patient_id=body.patient_id,
+                descricao="Resposta do assistente entregue (modo SSE).",
+                detalhes={
+                    "thread_id": thread_id,
+                    "modo": "sse",
+                    "latency_ms": lat,
+                    "tokens_streamed": tokens_streamed,
+                    "guardrail_status": guard_status,
+                },
             )
 
         try:
@@ -295,11 +333,28 @@ async def post_decision_flow(
     lines.append(f"[{_flow_ts(now, 4)}] Alerta enviado: equipes notificadas conforme regras")
     lines.append(f"[{_flow_ts(now, 5)}] Fluxo concluido")
 
+    flow_latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+
     audit(
         "decision_flow_done",
         kind="chat",
-        latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+        latency_ms=flow_latency_ms,
         patient_id=body.patient_id,
+    )
+
+    clinical_audit(
+        ClinicalAuditAction.EXECUCAO_FLUXO_DECISAO,
+        patient_id=body.patient_id,
+        patient_name=patient.name,
+        descricao=f"Fluxo de decisão executado para {patient.name} (protótipo).",
+        detalhes={
+            "latency_ms": flow_latency_ms,
+            "protocolo": proto.protocol_ref,
+            "exames_carregados": len(exams),
+            "acoes_sugeridas": len(items),
+            "alerta_sepse_meta": meta.sepsis_critical,
+            "alerta_farmacia_meta": meta.pharmacy_interaction,
+        },
     )
 
     return DecisionFlowResponse(lines=lines, meta=meta)

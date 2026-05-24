@@ -17,10 +17,18 @@ export async function patchExamHttp(
   patientId: string,
   examId: string,
   patch: Partial<Pick<Exam, 'status' | 'result' | 'interpretation'>>,
+  options?: { auditContextDemo?: boolean },
 ): Promise<Exam> {
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  });
+  if (options?.auditContextDemo) {
+    headers.set('X-Audit-Context', 'demo');
+  }
   const res = await apiFetch(`${API_BASE_URL}/patients/${patientId}/exams/${examId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers,
     body: JSON.stringify(patch),
   });
   if (!res.ok) {

@@ -189,7 +189,7 @@ export function DashboardPage() {
     } else {
       patch = { vitalSigns: { ...vs, bloodPressure: vValue.trim() } };
     }
-    const updated = await patchPatientMock(patient.id, patch);
+    const updated = await patchPatientMock(patient.id, patch, { vitalsAuditDemo: true });
     if (updated && patch.vitalSigns != null) {
       if (vField === 'spo2' && patch.vitalSigns.oxygenSaturation < 92) {
         showToast('SpO2 crítica — alerta emitido para a equipe médica.');

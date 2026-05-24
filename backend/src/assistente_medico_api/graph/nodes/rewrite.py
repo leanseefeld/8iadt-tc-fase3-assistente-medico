@@ -10,6 +10,7 @@ from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.generate import _build_llm
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 
 _REWRITE_SYSTEM = """\
 Você reformula a última pergunta do médico como uma única consulta autocontida para busca \
@@ -45,15 +46,23 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
     steps = list(state.get("reasoning_steps") or [])
     if not query:
         steps.append("Reescrita: pergunta vazia — sem consulta de busca.")
+        lm = round((time.perf_counter() - t0) * 1000, 2)
         audit(
             "rag_rewrite_done",
             kind="rag",
-            latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+            latency_ms=lm,
             patient_id=pid,
             query_snippet="",
             retrieval_query_snippet="",
             used_history=False,
             note="empty_query",
+        )
+        clinical_audit(
+            ClinicalAuditAction.REESCRITA_CONSULTA_RAG,
+            patient_id=pid,
+            descricao="Reescrita RAG: pergunta vazia.",
+            detalhes={"latency_ms": lm, "used_history": False, "nota": "empty_query"},
+            settings=settings,
         )
         return {"retrieval_query": "", "reasoning_steps": steps}
 
@@ -69,6 +78,17 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
             query_snippet=truncate(query),
             retrieval_query_snippet=truncate(query),
             used_history=False,
+        )
+        clinical_audit(
+            ClinicalAuditAction.REESCRITA_CONSULTA_RAG,
+            patient_id=pid,
+            descricao="Reescrita RAG: uso da pergunta literal (sem histórico no turno).",
+            detalhes={
+                "latency_ms": latency_ms,
+                "used_history": False,
+                "consulta_truncada": truncate(query, n=400),
+            },
+            settings=settings,
         )
         return {"retrieval_query": query, "reasoning_steps": steps}
 
@@ -99,6 +119,18 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
             retrieval_query_snippet=truncate(raw),
             used_history=True,
         )
+        clinical_audit(
+            ClinicalAuditAction.REESCRITA_CONSULTA_RAG,
+            patient_id=pid,
+            descricao="Reescrita RAG: consulta condensada a partir do histórico.",
+            detalhes={
+                "latency_ms": latency_ms,
+                "used_history": True,
+                "consulta_truncada": truncate(query, n=400),
+                "consulta_recuperacao_truncada": truncate(raw, n=400),
+            },
+            settings=settings,
+        )
         return {"retrieval_query": raw, "reasoning_steps": steps}
     except Exception:
         steps.append(
@@ -114,5 +146,17 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
             retrieval_query_snippet=truncate(query),
             used_history=True,
             note="rewrite_failed_fallback_literal",
+        )
+        clinical_audit(
+            ClinicalAuditAction.REESCRITA_CONSULTA_RAG,
+            patient_id=pid,
+            descricao="Reescrita RAG falhou — fallback para pergunta literal.",
+            detalhes={
+                "latency_ms": latency_ms,
+                "used_history": True,
+                "nota": "rewrite_failed_fallback_literal",
+                "consulta_truncada": truncate(query, n=400),
+            },
+            settings=settings,
         )
         return {"retrieval_query": query, "reasoning_steps": steps}

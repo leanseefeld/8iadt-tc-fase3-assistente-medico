@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -20,6 +21,34 @@ from assistente_medico_api.models import (
     SuggestedItem,
     VitalSigns,
 )  # noqa: F401
+
+
+_CLINICAL_AUDIT_ENV_KEY = "MEDICO_CLINICAL_AUDIT_ENABLED"
+_clinical_audit_env_backup: tuple[bool, str] | None = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Não criar/atualizar `logs/audit_clinical_*.jsonl` durante a suíte de testes."""
+    global _clinical_audit_env_backup  # noqa: PLW0603
+    key = _CLINICAL_AUDIT_ENV_KEY
+    had = key in os.environ
+    prev = os.environ[key] if had else ""
+    _clinical_audit_env_backup = (had, prev)
+    os.environ[key] = "false"
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Restaura o valor anterior de MEDICO_CLINICAL_AUDIT_ENABLED."""
+    global _clinical_audit_env_backup  # noqa: PLW0603
+    if _clinical_audit_env_backup is None:
+        return
+    key = _CLINICAL_AUDIT_ENV_KEY
+    had, prev = _clinical_audit_env_backup
+    if had:
+        os.environ[key] = prev
+    else:
+        os.environ.pop(key, None)
+    _clinical_audit_env_backup = None
 
 
 @pytest_asyncio.fixture

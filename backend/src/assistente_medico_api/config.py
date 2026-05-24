@@ -48,9 +48,9 @@ class Settings(BaseSettings):
         description="Arquivo JSONL local para auditoria das interações RAG.",
     )
     rag_audit_enabled: bool = Field(
-        default=True,
+        default=False,
         validation_alias=AliasChoices("MEDICO_RAG_AUDIT_ENABLED", "RAG_AUDIT_ENABLED"),
-        description="Ativa escrita de auditoria RAG em JSONL.",
+        description="Ativa escrita técnica de interações RAG em JSONL separado (`rag_audit_jsonl`).",
     )
     rag_use_cross_encoder_rerank: bool = Field(
         default=False,
@@ -102,6 +102,15 @@ class Settings(BaseSettings):
         default="INFO",
         description="Nível de log efetivo (ex.: INFO, DEBUG) para pacote assistente_medico.*.",
     )
+    clinical_audit_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MEDICO_CLINICAL_AUDIT_ENABLED", "CLINICAL_AUDIT_ENABLED"),
+        description=(
+            "Se True, acrescenta linhas ao JSONL diário `audit_clinical_*.jsonl` sob `log_dir`. "
+            "Durante pytest, o `conftest` define `MEDICO_CLINICAL_AUDIT_ENABLED=false` para não poluir logs."
+        ),
+    )
+
 
 def resolve_runtime_path(path: Path) -> Path:
     """Resolve paths relativos da configuração a partir da raiz do repositório."""

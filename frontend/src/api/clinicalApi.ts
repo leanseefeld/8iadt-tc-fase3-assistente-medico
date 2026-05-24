@@ -94,7 +94,16 @@ export async function getPatientVitalsHistoryMock(id: string) {
   return patientsHttp.getPatientVitalsHistoryHttp(id);
 }
 
-export async function patchPatientMock(id: string, patch: PatchPatientBody) {
+export type PatchPatientOptions = {
+  vitalsAuditDemo?: boolean;
+  examResultAuditDemo?: boolean;
+};
+
+export async function patchPatientMock(
+  id: string,
+  patch: PatchPatientBody,
+  options?: PatchPatientOptions,
+) {
   const { exams, suggestedItems, vitalSigns, ...corePatch } = patch;
   let patient = await patientsHttp.patchPatientHttp(id, corePatch);
   if (!patient) {
@@ -102,7 +111,9 @@ export async function patchPatientMock(id: string, patch: PatchPatientBody) {
   }
 
   if (vitalSigns) {
-    const afterVitals = await patientsHttp.patchVitalsHttp(id, vitalSigns);
+    const afterVitals = await patientsHttp.patchVitalsHttp(id, vitalSigns, {
+      auditContextDemo: options?.vitalsAuditDemo,
+    });
     if (!afterVitals) {
       return null;
     }
@@ -114,11 +125,16 @@ export async function patchPatientMock(id: string, patch: PatchPatientBody) {
       if (!examPatch.id) {
         continue;
       }
-      await examsHttp.patchExamHttp(id, examPatch.id, {
-        status: examPatch.status,
-        result: examPatch.result,
-        interpretation: examPatch.interpretation,
-      });
+      await examsHttp.patchExamHttp(
+        id,
+        examPatch.id,
+        {
+          status: examPatch.status,
+          result: examPatch.result,
+          interpretation: examPatch.interpretation,
+        },
+        options?.examResultAuditDemo ? { auditContextDemo: true } : undefined,
+      );
     }
   }
 
