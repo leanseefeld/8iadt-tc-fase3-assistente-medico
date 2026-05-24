@@ -3,18 +3,19 @@ import { useEffect, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  patchAssistantMessageFeedback,
   postAssistantChatMock,
   quickQuestionsForCid,
 } from '@/api/clinicalApi';
 import {
   AssistantMessageMeta,
-  assistantMessageHasMeta,
+  assistantMessageShowsFooter,
   type ExpandedMetaPanel,
 } from '@/components/chat/AssistantMessageMeta';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
-import type { GuardrailStatus } from '@/types/domain';
+import type { GuardrailStatus, MessageFeedbackRating } from '@/types/domain';
 
 interface ChatMessage {
   id: string;
@@ -27,6 +28,10 @@ interface ChatMessage {
   /** Painel de meta aberto; no máximo um por mensagem. */
   expandedPanel?: ExpandedMetaPanel | null;
   guardrailStatus?: GuardrailStatus;
+  /** Id da mensagem no SQLite (para PATCH de feedback). */
+  persistedMessageId?: string;
+  feedbackRating?: MessageFeedbackRating;
+  feedbackSubmitting?: boolean;
 }
 
 function patchAssistantMessage(
@@ -46,11 +51,56 @@ export function ChatPage() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [assistantThreadId, setAssistantThreadId] = useState<string | null>(null);
+  const [feedbackBusyMessageId, setFeedbackBusyMessageId] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     setMessages([]);
     setAssistantThreadId(null);
   }, [activePatientId]);
+
+  async function handleFeedbackSelect(
+    localMessageId: string,
+    clicked: MessageFeedbackRating,
+  ) {
+    const msg = messages.find((m) => m.id === localMessageId);
+    if (!msg?.persistedMessageId || !assistantThreadId) {
+      return;
+    }
+    const previous = msg.feedbackRating;
+    const nextRating = previous === clicked ? undefined : clicked;
+
+    setMessages((m) =>
+      patchAssistantMessage(m, localMessageId, {
+        feedbackRating: nextRating,
+        feedbackSubmitting: true,
+      }),
+    );
+    setFeedbackBusyMessageId(localMessageId);
+
+    try {
+      await patchAssistantMessageFeedback(
+        assistantThreadId,
+        msg.persistedMessageId,
+        nextRating ?? null,
+      );
+    } catch {
+      setMessages((m) =>
+        patchAssistantMessage(m, localMessageId, {
+          feedbackRating: previous,
+        }),
+      );
+      showToast('Não foi possível salvar sua avaliação. Tente novamente.');
+    } finally {
+      setFeedbackBusyMessageId(null);
+      setMessages((m) =>
+        patchAssistantMessage(m, localMessageId, {
+          feedbackSubmitting: false,
+        }),
+      );
+    }
+  }
 
   function toggleMessagePanel(messageId: string, panel: ExpandedMetaPanel) {
     setMessages((m) =>
@@ -79,11 +129,7 @@ export function ChatPage() {
     if (!trimmed) {
       return;
     }
-    // Turnos anteriores concluídos (sem a pergunta atual, enviada em `message`).
-    const messageHistory = messages
-      .filter((m) => !m.streaming && m.text.trim())
-      .map((m) => ({ role: m.role, content: m.text }));
-
+    // Histórico multi-turno: servidor (threadId + checkpointer); não enviar messageHistory.
     setMessages((m) => [
       ...m,
       { id: `u-${Date.now()}`, role: 'user', text: trimmed },
@@ -98,7 +144,6 @@ export function ChatPage() {
     try {
       const res = await postAssistantChatMock(activePatientId!, trimmed, {
         threadId: assistantThreadId ?? undefined,
-        messageHistory,
         onToken: (delta) => {
           setMessages((m) =>
             patchAssistantMessage(m, assistantId, {
@@ -127,6 +172,7 @@ export function ChatPage() {
           ...(res.guardrailStatus
             ? { guardrailStatus: res.guardrailStatus }
             : {}),
+          ...(res.messageId ? { persistedMessageId: res.messageId } : {}),
         }),
       );
       if (res.threadId) {
@@ -176,7 +222,7 @@ export function ChatPage() {
             ) : (
               <div
                 key={msg.id}
-                className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
+                className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'group items-start'}`}
               >
                 <div
                   className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
@@ -198,7 +244,7 @@ export function ChatPage() {
                   </div>
                   {msg.role === 'assistant' &&
                   !msg.streaming &&
-                  assistantMessageHasMeta(msg) ? (
+                  assistantMessageShowsFooter(msg) ? (
                     <AssistantMessageMeta
                       messageId={msg.id}
                       sources={msg.sources ?? []}
@@ -206,6 +252,15 @@ export function ChatPage() {
                       expandedPanel={msg.expandedPanel ?? null}
                       onTogglePanel={(panel) =>
                         toggleMessagePanel(msg.id, panel)
+                      }
+                      showFeedback={Boolean(msg.persistedMessageId)}
+                      feedbackRating={msg.feedbackRating}
+                      feedbackDisabled={
+                        feedbackBusyMessageId === msg.id ||
+                        Boolean(msg.feedbackSubmitting)
+                      }
+                      onFeedbackSelect={(rating) =>
+                        void handleFeedbackSelect(msg.id, rating)
                       }
                     />
                   ) : null}

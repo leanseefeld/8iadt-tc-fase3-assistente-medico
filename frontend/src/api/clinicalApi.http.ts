@@ -2,7 +2,12 @@
  * Transporte HTTP para endpoints do assistente.
  */
 import { apiFetch, API_BASE_URL } from '@/api/client';
-import type { ChatResponse, DecisionFlowResponse } from '@/types/domain';
+import type {
+  ChatResponse,
+  DecisionFlowResponse,
+  MessageFeedbackPatchResponse,
+  MessageFeedbackRating,
+} from '@/types/domain';
 import {
   consumeAssistantChatSse,
   type ChatStreamHandlers,
@@ -10,14 +15,7 @@ import {
 
 export type { ChatStreamHandlers };
 
-/** Turnos anteriores à `message` atual (contrato alinhado ao backend). */
-export type AssistantMessageHistoryItem = {
-  role: 'user' | 'assistant';
-  content: string;
-};
-
 export type AssistantChatRequestOptions = ChatStreamHandlers & {
-  messageHistory?: AssistantMessageHistoryItem[];
   /** Memória de conversa no servidor; omitir na primeira mensagem da sessão. */
   threadId?: string;
 };
@@ -28,14 +26,10 @@ export async function postAssistantChatMock(
   options?: AssistantChatRequestOptions,
 ): Promise<ChatResponse> {
   const url = `${API_BASE_URL}/assistant/chat`;
-  const messageHistory = options?.messageHistory;
   const body = JSON.stringify({
     patientId,
     message,
     ...(options?.threadId ? { threadId: options.threadId } : {}),
-    ...(messageHistory?.length
-      ? { messageHistory: messageHistory }
-      : {}),
   });
   const useSse = Boolean(
     options && (options.onToken != null || options.onMeta != null),
@@ -87,6 +81,28 @@ async function parseHttpErrorDetail(res: Response): Promise<string> {
     /* corpo não é JSON */
   }
   return raw.slice(0, 280);
+}
+
+export async function patchAssistantMessageFeedback(
+  conversationId: string,
+  messageId: string,
+  feedbackRating: MessageFeedbackRating | null,
+): Promise<MessageFeedbackPatchResponse> {
+  const res = await apiFetch(
+    `${API_BASE_URL}/assistant/conversations/${conversationId}/messages/${messageId}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ feedbackRating }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await parseHttpErrorDetail(res));
+  }
+  return (await res.json()) as MessageFeedbackPatchResponse;
 }
 
 export async function postAssistantDecisionFlowMock(

@@ -7,6 +7,11 @@ import httpx
 
 from assistente_medico_api.main import create_app
 
+CHAT_JSON_HEADERS = {
+    "Accept": "application/json",
+    "X-User-Id": "dr-contract",
+}
+
 
 class DummyGraph:
     def __init__(self):
@@ -34,6 +39,7 @@ class DummyGraph:
             "answer": "ok-json",
             "sources": ["S1"],
             "reasoning_steps": ["R1"],
+            "generate_llm_output": "ok-json",
         }
 
     async def astream_events(self, initial, config=None, *, version: str):
@@ -47,18 +53,19 @@ class DummyGraph:
 
 
 @pytest.mark.asyncio
-async def test_post_chat_json_uses_ainvoke_not_invoke():
-    app: FastAPI = create_app()
+async def test_post_chat_json_uses_ainvoke_not_invoke(
+    app: FastAPI,
+    async_client: httpx.AsyncClient,
+    chat_patient,
+):
     dummy = DummyGraph()
     app.state.chat_graph = dummy
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/assistant/chat",
-            headers={"Accept": "application/json"},
-            json={"patientId": "p1", "message": "hi"},
-        )
+    res = await async_client.post(
+        "/api/assistant/chat",
+        headers=CHAT_JSON_HEADERS,
+        json={"patientId": "p1", "message": "hi"},
+    )
 
     assert res.status_code == 200
     payload = res.json()
@@ -66,6 +73,7 @@ async def test_post_chat_json_uses_ainvoke_not_invoke():
     assert payload["sources"] == ["S1"]
     assert payload["reasoning"] == ["R1"]
     assert "threadId" in payload and payload["threadId"]
+    assert payload["messageId"].startswith("msg-")
     assert dummy.ainvoke_calls == 1
     assert dummy.invoke_calls == 0
     assert dummy.last_initial.get("chat_history") == []
@@ -75,25 +83,26 @@ async def test_post_chat_json_uses_ainvoke_not_invoke():
 
 
 @pytest.mark.asyncio
-async def test_post_chat_json_pushes_message_history_into_graph_state():
-    app: FastAPI = create_app()
+async def test_post_chat_json_pushes_message_history_into_graph_state(
+    app: FastAPI,
+    async_client: httpx.AsyncClient,
+    chat_patient,
+):
     dummy = DummyGraph()
     app.state.chat_graph = dummy
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/assistant/chat",
-            headers={"Accept": "application/json"},
-            json={
-                "patientId": "p1",
-                "message": "follow-up",
-                "messageHistory": [
-                    {"role": "user", "content": "o que é X?"},
-                    {"role": "assistant", "content": "X é ..."},
-                ],
-            },
-        )
+    res = await async_client.post(
+        "/api/assistant/chat",
+        headers=CHAT_JSON_HEADERS,
+        json={
+            "patientId": "p1",
+            "message": "follow-up",
+            "messageHistory": [
+                {"role": "user", "content": "o que é X?"},
+                {"role": "assistant", "content": "X é ..."},
+            ],
+        },
+    )
 
     assert res.status_code == 200
     assert dummy.ainvoke_calls == 1
@@ -116,26 +125,46 @@ class DummyGraphWithCheckpointHistory(DummyGraph):
 
 
 @pytest.mark.asyncio
-async def test_post_chat_json_omits_chat_history_when_checkpoint_has_it():
+async def test_post_chat_json_omits_chat_history_when_checkpoint_has_it(
+    app: FastAPI,
+    async_client: httpx.AsyncClient,
+    chat_patient,
+    test_session_factory,
+):
     """Com histórico persistido, o update não reenvia `chat_history` (merge no grafo)."""
-    app: FastAPI = create_app()
+    from datetime import UTC, datetime
+
+    from assistente_medico_api.graph.nodes.generate import GENERATE_SYSTEM_PROMPT
+    from assistente_medico_api.models.conversation import Conversation
+
+    async with test_session_factory() as session:
+        session.add(
+            Conversation(
+                id="thread-fixo",
+                doctor_id="dr-contract",
+                patient_id="p1",
+                system_prompt=GENERATE_SYSTEM_PROMPT,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
     dummy = DummyGraphWithCheckpointHistory()
     app.state.chat_graph = dummy
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/assistant/chat",
-            headers={"Accept": "application/json"},
-            json={
-                "patientId": "p1",
-                "threadId": "thread-fixo",
-                "message": "follow-up",
-                "messageHistory": [
-                    {"role": "user", "content": "isto deve ser ignorado"},
-                ],
-            },
-        )
+    res = await async_client.post(
+        "/api/assistant/chat",
+        headers=CHAT_JSON_HEADERS,
+        json={
+            "patientId": "p1",
+            "threadId": "thread-fixo",
+            "message": "follow-up",
+            "messageHistory": [
+                {"role": "user", "content": "isto deve ser ignorado"},
+            ],
+        },
+    )
 
     assert res.status_code == 200
     assert "chat_history" not in dummy.last_initial
@@ -145,32 +174,31 @@ async def test_post_chat_json_omits_chat_history_when_checkpoint_has_it():
 
 
 @pytest.mark.asyncio
-async def test_post_chat_sse_error_event_then_ends():
-    app: FastAPI = create_app()
+async def test_post_chat_sse_error_event_then_ends(
+    app: FastAPI,
+    async_client: httpx.AsyncClient,
+    chat_patient,
+):
     dummy = DummyGraph()
     app.state.chat_graph = dummy
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/assistant/chat",
-            headers={"Accept": "text/event-stream"},
-            json={"patientId": "p1", "message": "hi"},
-        )
+    res = await async_client.post(
+        "/api/assistant/chat",
+        headers={
+            "Accept": "text/event-stream",
+            "X-User-Id": "dr-contract",
+        },
+        json={"patientId": "p1", "message": "hi"},
+    )
 
     assert res.status_code == 200
     text = res.text
-    # SSE payload should include an error event.
     assert "event: error" in text
-    # And must not hang: response fully materialized.
     assert text.strip().endswith("}")
 
-    # Parse last data line for the error event.
-    # sse-starlette formats as `event: ...` and `data: ...`
     data_lines = [ln for ln in text.splitlines() if ln.startswith("data: ")]
     assert data_lines, text
     last = data_lines[-1].removeprefix("data: ").strip()
     obj = json.loads(last)
     assert "detail" in obj
     assert "boom" in obj["detail"]
-

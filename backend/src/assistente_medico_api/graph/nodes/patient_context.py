@@ -189,7 +189,6 @@ def format_patient_context(
     pending_exams, completed_exams = format_exam_sections(exams, cutoff=cutoff, reference=ref)
 
     lines = [
-        "Contexto do paciente admitido:",
         f"- Nome: {patient.name}",
         f"- Sexo biológico (nascimento): {format_sex_label(patient.sex)}",
     ]

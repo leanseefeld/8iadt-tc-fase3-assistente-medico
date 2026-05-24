@@ -15,6 +15,8 @@ from assistente_medico_api.main import create_app
 from assistente_medico_api.models import (
     AgentLogEntry,
     Alert,
+    Conversation,
+    ConversationMessage,
     Exam,
     Patient,
     Prescription,
@@ -84,3 +86,21 @@ async def async_client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+@pytest_asyncio.fixture
+async def chat_patient(test_session_factory: async_sessionmaker[AsyncSession]):
+    """Paciente mínimo para testes do endpoint de chat."""
+    async with test_session_factory() as session:
+        session.add(
+            Patient(
+                id="p1",
+                name="Paciente Teste",
+                age=40,
+                sex="M",
+                cid_code="A41.9",
+                cid_label="Sepse",
+                observations="",
+            )
+        )
+        await session.commit()

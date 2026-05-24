@@ -5,16 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import json
 import time
-import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
 from assistente_medico_api.deps import get_session
-from assistente_medico_api.repositories import patient_repo
+from assistente_medico_api.services import chat_persistence
+from assistente_medico_api.repositories import conversation_repo, patient_repo
 from assistente_medico_api.schemas.chat import (
     ChatHistoryTurnModel,
     ChatRequest,
@@ -22,12 +22,18 @@ from assistente_medico_api.schemas.chat import (
     DecisionFlowMeta,
     DecisionFlowRequest,
     DecisionFlowResponse,
+    MessageFeedbackPatchRequest,
+    MessageFeedbackPatchResponse,
 )
 from assistente_medico_api.graph.state import ChatHistoryTurnState
 from assistente_medico_api.services.protocol_map import get_protocol_for_cid
 from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.observability.context import (
+    get_user_id,
+    set_patient_id,
+    set_thread_id,
+)
 from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
-from assistente_medico_api.observability.context import set_patient_id, set_thread_id
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -58,6 +64,7 @@ async def _invoke_payload_and_config(
     request: Request,
     body: ChatRequest,
     graph,
+    thread_id: str,
 ) -> tuple[dict, dict, str]:
     """
     Monta o update de estado e o RunnableConfig (thread_id) para o grafo com checkpointer.
@@ -65,7 +72,7 @@ async def _invoke_payload_and_config(
     Se já existe chat_history no checkpoint, não reenvia `chat_history` no update (merge).
     Caso contrário, semeia a partir de `messageHistory` no corpo (clientes sem threadId).
     """
-    tid = (body.thread_id or "").strip() or str(uuid.uuid4())
+    tid = thread_id
     config: dict = {"configurable": {"thread_id": tid}}
     snap = await graph.aget_state(config)
     vals = snap.values or {}
@@ -106,15 +113,36 @@ def _flow_ts(base: datetime, offset_seconds: int) -> str:
     return (base + timedelta(seconds=offset_seconds)).strftime("%H:%M:%S")
 
 
+def _require_doctor_id() -> str:
+    """Exige identificação do médico (header X-User-Id) para persistir conversas."""
+    doctor_id = (get_user_id() or "").strip()
+    if not doctor_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Header X-User-Id obrigatorio para o chat.",
+        )
+    return doctor_id
+
+
 @router.post("/chat")
 async def post_chat(
     request: Request,
     body: ChatRequest,
+    session: AsyncSession = Depends(get_session),
     accept: Annotated[str | None, Header(alias="Accept")] = None,
 ):
     """Chat RAG: SSE com graph.astream_events(); JSON de fallback com graph.invoke()."""
     graph = _get_graph(request)
-    initial, config, thread_id = await _invoke_payload_and_config(request, body, graph)
+    doctor_id = _require_doctor_id()
+    conversation, thread_id = await chat_persistence.resolve_conversation(
+        session,
+        thread_id=body.thread_id,
+        doctor_id=doctor_id,
+        patient_id=body.patient_id,
+    )
+    initial, config, thread_id = await _invoke_payload_and_config(
+        request, body, graph, thread_id
+    )
     wants_stream = bool(accept and "text/event-stream" in accept.lower())
 
     set_thread_id(thread_id)
@@ -151,6 +179,14 @@ async def post_chat(
                 status_code=503,
                 detail=f"Falha ao executar o assistente: {exc!s}",
             ) from exc
+        assistant_message_id = await chat_persistence.append_turn(
+            session,
+            conversation=conversation,
+            doctor_message=body.message,
+            final_state=final,
+        )
+        await session.commit()
+
         lat = round((time.perf_counter() - t_started) * 1000, 2)
         audit(
             "chat_response_done",
@@ -179,6 +215,7 @@ async def post_chat(
             sources=list(final.get("sources") or []),
             reasoning=list(final.get("reasoning_steps") or []),
             thread_id=thread_id,
+            message_id=assistant_message_id,
             audit_id=final.get("audit_id") or None,
             guardrail_status=final.get("guardrail_status") or None,
             guardrail_reason=final.get("guardrail_reason") or None,
@@ -263,9 +300,21 @@ async def post_chat(
                             "data": json.dumps({"content": str(piece)}),
                         }
 
+            snap = await graph.aget_state(config)
+            final_sse: ChatRAGState = snap.values or {}
+            assistant_message_id = await chat_persistence.append_turn(
+                session,
+                conversation=conversation,
+                doctor_message=body.message,
+                final_state=final_sse,
+            )
+            await session.commit()
+
             yield {
                 "event": "done",
-                "data": json.dumps({"threadId": thread_id}),
+                "data": json.dumps(
+                    {"threadId": thread_id, "messageId": assistant_message_id}
+                ),
             }
 
         except Exception as exc:
@@ -279,6 +328,48 @@ async def post_chat(
         finalize_audit()
 
     return EventSourceResponse(event_gen())
+
+
+@router.patch(
+    "/conversations/{conversation_id}/messages/{message_id}",
+    response_model=MessageFeedbackPatchResponse,
+)
+async def patch_message_feedback(
+    conversation_id: str,
+    message_id: str,
+    body: MessageFeedbackPatchRequest,
+    session: AsyncSession = Depends(get_session),
+) -> MessageFeedbackPatchResponse:
+    """Avalia ou remove avaliação de uma mensagem do assistente."""
+    doctor_id = _require_doctor_id()
+    conversation = await conversation_repo.get_conversation_by_id(session, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    if conversation.doctor_id != doctor_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Conversa pertence a outro medico",
+        )
+
+    message = await conversation_repo.get_message_by_id(session, message_id)
+    if message is None or message.conversation_id != conversation_id:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    if message.author != "assistant":
+        raise HTTPException(
+            status_code=400,
+            detail="Apenas mensagens do assistente podem ser avaliadas",
+        )
+
+    updated = await conversation_repo.set_message_feedback(
+        session,
+        message,
+        body.feedback_rating,
+    )
+    await session.commit()
+    return MessageFeedbackPatchResponse(
+        message_id=updated.id,
+        feedback_rating=updated.feedback_rating,  # type: ignore[arg-type]
+    )
 
 
 @router.post("/decision-flow", response_model=DecisionFlowResponse)

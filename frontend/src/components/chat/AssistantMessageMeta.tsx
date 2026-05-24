@@ -1,3 +1,6 @@
+import { AssistantMessageFeedback } from '@/components/chat/AssistantMessageFeedback';
+import type { MessageFeedbackRating } from '@/types/domain';
+
 export type ExpandedMetaPanel = 'sources' | 'reasoning';
 
 export interface AssistantMessageMetaProps {
@@ -6,6 +9,11 @@ export interface AssistantMessageMetaProps {
   reasoning: string[];
   expandedPanel: ExpandedMetaPanel | null;
   onTogglePanel: (panel: ExpandedMetaPanel) => void;
+  /** Exibe 👍/👎 à direita quando há id persistido e conversa ativa. */
+  showFeedback?: boolean;
+  feedbackRating?: MessageFeedbackRating;
+  feedbackDisabled?: boolean;
+  onFeedbackSelect?: (rating: MessageFeedbackRating) => void;
 }
 
 function metaToggleButtonClass(active: boolean): string {
@@ -17,13 +25,17 @@ function metaToggleButtonClass(active: boolean): string {
   return `${base} bg-transparent hover:bg-slate-200/80`;
 }
 
-/** Rodapé sob demanda: fontes e passos de raciocínio do turno (accordion inline). */
+/** Rodapé: fontes/raciocínio à esquerda; feedback 👍/👎 à direita. */
 export function AssistantMessageMeta({
   messageId,
   sources,
   reasoning,
   expandedPanel,
   onTogglePanel,
+  showFeedback = false,
+  feedbackRating,
+  feedbackDisabled = false,
+  onFeedbackSelect,
 }: AssistantMessageMetaProps) {
   const sourcesPanelId = `${messageId}-sources-panel`;
   const reasoningPanelId = `${messageId}-reasoning-panel`;
@@ -32,30 +44,39 @@ export function AssistantMessageMeta({
 
   return (
     <div className="mt-2 flex w-full flex-col items-start gap-1 border-t border-slate-200/90 pt-2">
-      <div className="flex flex-wrap justify-start gap-1">
-        {sources.length > 0 ? (
-          <button
-            type="button"
-            onClick={() => onTogglePanel('sources')}
-            aria-expanded={sourcesActive}
-            aria-controls={sourcesPanelId}
-            aria-pressed={sourcesActive}
-            className={metaToggleButtonClass(sourcesActive)}
-          >
-            <span aria-hidden>🔍</span> Fontes ({sources.length})
-          </button>
-        ) : null}
-        {reasoning.length > 0 ? (
-          <button
-            type="button"
-            onClick={() => onTogglePanel('reasoning')}
-            aria-expanded={reasoningActive}
-            aria-controls={reasoningPanelId}
-            aria-pressed={reasoningActive}
-            className={metaToggleButtonClass(reasoningActive)}
-          >
-            <span aria-hidden>🧠</span> Raciocínio ({reasoning.length})
-          </button>
+      <div className="flex w-full items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap justify-start gap-1">
+          {sources.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => onTogglePanel('sources')}
+              aria-expanded={sourcesActive}
+              aria-controls={sourcesPanelId}
+              aria-pressed={sourcesActive}
+              className={metaToggleButtonClass(sourcesActive)}
+            >
+              <span aria-hidden>🔍</span> Fontes ({sources.length})
+            </button>
+          ) : null}
+          {reasoning.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => onTogglePanel('reasoning')}
+              aria-expanded={reasoningActive}
+              aria-controls={reasoningPanelId}
+              aria-pressed={reasoningActive}
+              className={metaToggleButtonClass(reasoningActive)}
+            >
+              <span aria-hidden>🧠</span> Raciocínio ({reasoning.length})
+            </button>
+          ) : null}
+        </div>
+        {showFeedback && onFeedbackSelect ? (
+          <AssistantMessageFeedback
+            rating={feedbackRating}
+            disabled={feedbackDisabled}
+            onSelect={onFeedbackSelect}
+          />
         ) : null}
       </div>
       {sourcesActive && sources.length > 0 ? (
@@ -86,12 +107,23 @@ export function AssistantMessageMeta({
   );
 }
 
-/** Indica se a mensagem tem meta para exibir após o streaming. */
+/** Indica se a mensagem tem meta (fontes/raciocínio) para exibir após o streaming. */
 export function assistantMessageHasMeta(msg: {
   sources?: string[];
   reasoning?: string[];
 }): boolean {
   return (
     (msg.sources?.length ?? 0) > 0 || (msg.reasoning?.length ?? 0) > 0
+  );
+}
+
+/** Exibe a barra de rodapé (meta e/ou feedback). */
+export function assistantMessageShowsFooter(msg: {
+  sources?: string[];
+  reasoning?: string[];
+  persistedMessageId?: string;
+}): boolean {
+  return (
+    assistantMessageHasMeta(msg) || Boolean(msg.persistedMessageId?.trim())
   );
 }
