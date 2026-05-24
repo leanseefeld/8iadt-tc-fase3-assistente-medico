@@ -72,6 +72,7 @@ async def _invoke_payload_and_config(
     payload: dict = {
         "query": body.message.strip(),
         "patient_id": body.patient_id,
+        "conversation_id": tid,
         "retrieved_docs": [],
         "sources": [],
         "reasoning_steps": [],
@@ -82,6 +83,7 @@ async def _invoke_payload_and_config(
         "candidate_docs": [],
         "context_sufficient": False,
         "insufficiency_reason": None,
+        "audit_trace": {"pipeline_version": "separated_nodes_v2", "steps": []},
     }
     if not has_persisted_history:
         payload["chat_history"] = _normalize_message_history(body)

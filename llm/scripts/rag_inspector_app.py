@@ -46,6 +46,7 @@ try:
     )
     from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
     from assistente_medico_api.services.rag_pipeline_service import (
+        run_full_graph_debug,
         run_rerank_and_validate_context,
         run_retrieve,
         run_rewrite_query,
@@ -93,6 +94,9 @@ except ModuleNotFoundError as exc:
     async def run_rerank_and_validate_context(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
+    async def run_full_graph_debug(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
     async def rewrite_query_node(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
@@ -123,6 +127,12 @@ class InspectorSettings:
     rag_min_final_score_with_catalog: float
     rag_audit_enabled: bool
     rag_audit_jsonl: str
+    rag_pipeline_version: str
+    rag_max_retrieve_attempts: int
+    rag_use_llm_rerank: bool
+    rag_llm_rerank_top_n: int
+    rag_require_source_for_clinical_answer: bool
+    rag_debug: bool
     llm_stream_timeout_s: float
 
 
@@ -155,6 +165,12 @@ def _default_settings() -> InspectorSettings:
         rag_min_final_score_with_catalog=backend_cfg.rag_min_final_score_with_catalog,
         rag_audit_enabled=backend_cfg.rag_audit_enabled,
         rag_audit_jsonl=str(backend_cfg.rag_audit_jsonl),
+        rag_pipeline_version=backend_cfg.rag_pipeline_version,
+        rag_max_retrieve_attempts=backend_cfg.rag_max_retrieve_attempts,
+        rag_use_llm_rerank=backend_cfg.rag_use_llm_rerank,
+        rag_llm_rerank_top_n=backend_cfg.rag_llm_rerank_top_n,
+        rag_require_source_for_clinical_answer=backend_cfg.rag_require_source_for_clinical_answer,
+        rag_debug=backend_cfg.rag_debug,
         llm_stream_timeout_s=backend_cfg.llm_stream_timeout_s,
     )
 
@@ -210,6 +226,12 @@ def _backend_settings(cfg: InspectorSettings) -> Settings:
         rag_min_final_score_with_catalog=float(cfg.rag_min_final_score_with_catalog),
         rag_audit_enabled=bool(cfg.rag_audit_enabled),
         rag_audit_jsonl=Path(cfg.rag_audit_jsonl),
+        rag_pipeline_version=cfg.rag_pipeline_version,
+        rag_max_retrieve_attempts=int(cfg.rag_max_retrieve_attempts),
+        rag_use_llm_rerank=bool(cfg.rag_use_llm_rerank),
+        rag_llm_rerank_top_n=int(cfg.rag_llm_rerank_top_n),
+        rag_require_source_for_clinical_answer=bool(cfg.rag_require_source_for_clinical_answer),
+        rag_debug=bool(cfg.rag_debug),
         llm_stream_timeout_s=float(cfg.llm_stream_timeout_s),
     )
 
@@ -407,6 +429,27 @@ def main() -> None:
             ),
             rag_audit_enabled=st.checkbox("Registrar auditoria RAG", value=bool(cfg0.rag_audit_enabled)),
             rag_audit_jsonl=st.text_input("Arquivo auditoria RAG", value=cfg0.rag_audit_jsonl),
+            rag_pipeline_version=st.text_input("Pipeline version", value=cfg0.rag_pipeline_version),
+            rag_max_retrieve_attempts=st.number_input(
+                "Máximo de buscas RAG",
+                min_value=1,
+                max_value=2,
+                value=int(cfg0.rag_max_retrieve_attempts),
+                step=1,
+            ),
+            rag_use_llm_rerank=st.checkbox("Usar LLM rerank", value=bool(cfg0.rag_use_llm_rerank)),
+            rag_llm_rerank_top_n=st.number_input(
+                "Top N para LLM rerank",
+                min_value=1,
+                max_value=50,
+                value=int(cfg0.rag_llm_rerank_top_n),
+                step=1,
+            ),
+            rag_require_source_for_clinical_answer=st.checkbox(
+                "Exigir fonte para resposta clínica",
+                value=bool(cfg0.rag_require_source_for_clinical_answer),
+            ),
+            rag_debug=st.checkbox("Debug RAG", value=bool(cfg0.rag_debug)),
             llm_stream_timeout_s=st.number_input("Timeout LLM (s)", min_value=5.0, max_value=600.0, value=float(cfg0.llm_stream_timeout_s), step=5.0),
         )
         st.caption(
@@ -548,49 +591,30 @@ def main() -> None:
                 except Exception as exc:
                     errors.append(f"Falha ao analisar embedding via Ollama: {_format_exception(exc)}")
 
-            # --- Backend rewrite + retrieve ---
+            # --- Backend debug graph (same central services used by chat) ---
             if store is not None and query.strip():
                 try:
-                    t0 = time.perf_counter()
-                    rewrite_out = cast(dict[str, Any], _run_async(rewrite_query_node(cast(Any, final_state), backend_settings)))
-                    timing = replace(timing, rewrite_ms=(time.perf_counter() - t0) * 1000.0)
-                    final_state.update(rewrite_out)
-
                     inspectable_store = InspectableStore(store)
                     t0 = time.perf_counter()
-                    rewrite_structured = run_rewrite_query(
-                        str(final_state.get("retrieval_query") or final_state.get("query") or ""),
-                        final_state.get("memory_context") or {},
-                        backend_settings,
-                    )
-                    final_state.update(rewrite_structured)
-                    retrieve_structured = run_retrieve(
-                        expanded_query=str(final_state.get("expanded_query") or final_state.get("retrieval_query") or ""),
-                        structured_terms=cast(dict[str, Any], final_state.get("structured_terms") or {}),
-                        store=cast(Any, inspectable_store),
-                        settings=backend_settings,
-                        retrieve_attempt=1,
-                    )
-                    final_state.update(retrieve_structured)
-                    rerank_structured = cast(
+                    debug_result = cast(
                         dict[str, Any],
                         _run_async(
-                            run_rerank_and_validate_context(
-                                query=str(final_state.get("query") or ""),
-                                expanded_query=str(final_state.get("expanded_query") or final_state.get("retrieval_query") or ""),
-                                structured_terms=cast(dict[str, Any], final_state.get("structured_terms") or {}),
-                                clinical_understanding=cast(dict[str, Any], final_state.get("clinical_understanding") or {}),
-                                candidate_docs=cast(list[Document], final_state.get("candidate_docs") or []),
+                            run_full_graph_debug(
+                                query=query,
                                 settings=backend_settings,
+                                store=cast(Any, inspectable_store),
+                                conversation_id="rag-inspector",
+                                chat_history=cast(list[dict[str, str]], final_state.get("chat_history") or []),
                             )
                         ),
                     )
-                    final_state.update(rerank_structured)
+                    final_state.update(cast(dict[str, Any], debug_result.get("state") or {}))
                     timing = replace(timing, retrieve_ms=(time.perf_counter() - t0) * 1000.0)
+                    timing = replace(timing, rewrite_ms=timing.retrieve_ms)
                     raw_candidates = inspectable_store.merged_pairs or inspectable_store.last_pairs
                     final_state["_inspector_retrieve_calls"] = inspectable_store.calls
                 except Exception as exc:
-                    errors.append(f"Falha no retrieve do backend: {_format_exception(exc)}")
+                    errors.append(f"Falha no fluxo RAG de debug do backend: {_format_exception(exc)}")
 
             docs = cast(list[Document], final_state.get("retrieved_docs") or [d for d, _ in raw_candidates])
 
@@ -638,7 +662,10 @@ def main() -> None:
             final_score_summary = _score_summary(final_scores)
             query_expansion = cast(dict[str, Any], final_state.get("query_expansion") or {})
             audit_payload = cast(dict[str, Any], final_state.get("rag_audit_payload") or {})
-            structured_terms = cast(dict[str, Any], query_expansion.get("structured_terms") or {})
+            rewrite_result = cast(dict[str, Any], final_state.get("rewrite_result") or {})
+            rerank_result = cast(dict[str, Any], final_state.get("rerank_result") or {})
+            retrieve_result = cast(dict[str, Any], final_state.get("retrieve_result") or {})
+            structured_terms = cast(dict[str, Any], final_state.get("structured_terms") or rewrite_result.get("structured_terms") or query_expansion.get("structured_terms") or {})
             catalog_filter = cast(dict[str, Any], audit_payload or query_expansion.get("_catalog_filter_info") or {})
             retrieve_calls = cast(list[dict[str, Any]], final_state.get("_inspector_retrieve_calls") or [])
             first_retrieve_count = len(cast(list[Any], retrieve_calls[0].get("pairs") or [])) if retrieve_calls else len(raw_candidates)
@@ -655,12 +682,19 @@ def main() -> None:
                     "guardrail_enabled": bool(run_guardrail),
                     "uses_backend_nodes": True,
                     "uses_compiled_langgraph": False,
+                    "uses_shared_debug_pipeline": True,
                 },
                 "embedding": embed_info,
                 "backend_state": {
                     "retrieval_query": final_state.get("retrieval_query") or "",
                     "clinical_understanding": final_state.get("clinical_understanding") or {},
                     "query_expansion": query_expansion,
+                    "memory_result": final_state.get("memory_result") or {},
+                    "router_result": final_state.get("router_result") or {},
+                    "rewrite_result": rewrite_result,
+                    "retrieve_result": retrieve_result,
+                    "rerank_result": rerank_result,
+                    "audit_trace": final_state.get("audit_trace") or {},
                     "sources": final_state.get("sources") or [],
                     "reasoning_steps": final_state.get("reasoning_steps") or [],
                     "rag_audit_payload": audit_payload,
@@ -673,9 +707,12 @@ def main() -> None:
                     "candidates_k": int(cfg.rag_retrieve_candidates_k),
                     "final_k": int(cfg.rag_retrieve_final_k),
                     "rewrite_query": final_state.get("retrieval_query") or query,
-                    "expanded_query": query_expansion.get("expanded_query") or final_state.get("retrieval_query") or query,
+                    "expanded_query": final_state.get("expanded_query") or rewrite_result.get("expanded_query") or query_expansion.get("expanded_query") or final_state.get("retrieval_query") or query,
                     "structured_terms": structured_terms,
-                    "catalog_candidates": structured_terms.get("catalog_candidates") or query_expansion.get("catalog_candidates") or [],
+                    "catalog_candidates": final_state.get("catalog_candidates") or structured_terms.get("catalog_candidates") or query_expansion.get("catalog_candidates") or [],
+                    "context_quality": rerank_result.get("context_quality"),
+                    "failure_type": rerank_result.get("failure_type"),
+                    "insufficiency_reason": rerank_result.get("insufficiency_reason"),
                     "first_retrieve_count": first_retrieve_count,
                     "complementary_retrieve_count": complementary_count,
                     "retrieve_calls": [
@@ -738,6 +775,8 @@ def main() -> None:
             exec_cols[1].metric("Nodes backend", "sim" if mode.get("uses_backend_nodes") else "não")
             exec_cols[2].metric("LangGraph compilado", "sim" if mode.get("uses_compiled_langgraph") else "não")
             exec_cols[3].metric("Guardrail", "sim" if mode.get("guardrail_enabled") else "não")
+            if mode.get("uses_shared_debug_pipeline"):
+                st.caption("Inspector usando `run_full_graph_debug`, o mesmo serviço central chamado pelo fluxo real do chat.")
             if not mode.get("uses_compiled_langgraph"):
                 st.caption(
                     "Este painel chama os nodes reais do backend em sequência para expor scores, prompt e tempos. "
@@ -749,8 +788,12 @@ def main() -> None:
             st.json(
                 {
                     "retrieval_query": backend_state.get("retrieval_query") or "",
-                    "clinical_understanding": backend_state.get("clinical_understanding") or {},
-                    "query_expansion": backend_state.get("query_expansion") or {},
+                    "memory_result": backend_state.get("memory_result") or {},
+                    "router_result": backend_state.get("router_result") or {},
+                    "rewrite_result": backend_state.get("rewrite_result") or {},
+                    "retrieve_result": backend_state.get("retrieve_result") or {},
+                    "rerank_result": backend_state.get("rerank_result") or {},
+                    "audit_trace": backend_state.get("audit_trace") or {},
                     "sources": backend_state.get("sources") or [],
                     "reasoning_steps": backend_state.get("reasoning_steps") or [],
                     "audit_id": backend_state.get("audit_id") or "",
@@ -771,6 +814,9 @@ def main() -> None:
                     {
                         "structured_terms": retrieve_payload.get("structured_terms") or {},
                         "catalog_candidates": retrieve_payload.get("catalog_candidates") or [],
+                        "context_quality": retrieve_payload.get("context_quality"),
+                        "failure_type": retrieve_payload.get("failure_type"),
+                        "insufficiency_reason": retrieve_payload.get("insufficiency_reason"),
                     },
                     expanded=False,
                 )
@@ -1001,6 +1047,13 @@ def main() -> None:
                 "Baixar JSON da última execução",
                 data=raw,
                 file_name=f"rag-inspector-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json",
+                mime="application/json",
+            )
+            audit_raw = json.dumps((payload.get("backend_state") or {}).get("audit_trace") or {}, ensure_ascii=False, indent=2)
+            st.download_button(
+                "Baixar audit_trace JSON",
+                data=audit_raw,
+                file_name=f"rag-audit-trace-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json",
                 mime="application/json",
             )
             st.text_area("Preview do JSON", value=raw[:12000], height=240)

@@ -12,12 +12,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.config import resolve_runtime_path
+from assistente_medico_api.graph.context_formatting import format_context_block
 from assistente_medico_api.graph.rag_enhancement import append_audit_jsonl
 from assistente_medico_api.graph.nodes.generate import _build_llm
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.services.rag_pipeline_service import append_audit_step
 
 GuardrailVerdict = Literal["SEGURO", "AVISO", "BLOQUEAR"]
+_logger = logging.getLogger(__name__)
 
 # Mensagem padrão exibida quando o guardrail bloqueia mesmo após regeneração.
 _SAFE_BLOCKED_MESSAGE = (
@@ -113,8 +116,6 @@ async def _regenerate_strict(state: ChatRAGState, settings: Settings) -> str:
     Regenera a resposta com system prompt endurecido usando ainvoke — não emite tokens
     para o cliente (evita vazar conteúdo bloqueado via on_chat_model_stream).
     """
-    from assistente_medico_api.graph.nodes.retrieve import format_context_block
-
     llm = _build_llm(settings)
     docs = state.get("retrieved_docs") or []
     context = format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
@@ -334,11 +335,26 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
                 _logger.warning("rag_audit_write_failed; erro=%s", audit_exc)
                 steps.append("Auditoria RAG: falha ao registrar, resposta preservada.")
 
+    guardrail_result = {
+        "status": guardrail_status,
+        "reason": reason,
+        "classifier_verdict": verdict,
+    }
+    audit_trace = append_audit_step(
+        {**dict(state), "guardrail_result": guardrail_result},
+        node="guardrail",
+        input_summary={"answer_chars": len(original_answer)},
+        output_summary=guardrail_result,
+        settings=settings,
+    )
+
     return {
         "answer": final_answer,
         "chat_history": hist,
         "audit_id": audit_id,
         "rag_audit_payload": audit_payload,
+        "audit_trace": audit_trace,
+        "guardrail_result": guardrail_result,
         "guardrail_status": guardrail_status,
         "guardrail_reason": reason,
         "reasoning_steps": steps,

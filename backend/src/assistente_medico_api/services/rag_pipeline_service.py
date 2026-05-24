@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from datetime import UTC, datetime
 from functools import lru_cache
 import json
-import re
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
+from pydantic import BaseModel, Field, ValidationError
 
-from assistente_medico_api.config import Settings
-from assistente_medico_api.graph.clinical_query_understanding import normalize_text_for_match
+from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
+from assistente_medico_api.graph.clinical_query_understanding import (
+    classify_clinical_intent,
+    normalize_text_for_match,
+)
 from assistente_medico_api.graph.rag_enhancement import (
     _as_list,
     build_audit_payload,
@@ -24,15 +29,55 @@ from assistente_medico_api.graph.rag_enhancement import (
     rerank_documents,
 )
 
-_RAG_HINT_RE = re.compile(
-    r"\b("
-    r"pcdt|protocolo|diretriz|criteri[oa]s?|inclus[aã]o|exclus[aã]o|"
-    r"diagn[oó]stic[oa]|tratamento|monitoramento|seguimento|cid|"
-    r"medicamento|f[aá]rmaco|conduta|reconhecer|suspeita|manejo"
-    r")\b",
-    re.IGNORECASE,
-)
-_DIRECT_HINT_RE = re.compile(r"\b(oi|ol[aá]|obrigad[oa]|bom dia|boa tarde|boa noite|quem [ée] voc[eê])\b", re.IGNORECASE)
+PIPELINE_VERSION = "separated_nodes_v2"
+CONTEXT_SUFFICIENT = "sufficient"
+CONTEXT_PARTIAL = "partial"
+CONTEXT_INSUFFICIENT = "insufficient"
+
+
+class ConversationMemoryStore(Protocol):
+    """Minimal persistence contract for conversation memory."""
+
+    def load(self, conversation_id: str) -> dict[str, Any] | None: ...
+
+    def save(self, conversation_id: str, memory_update: dict[str, Any]) -> None: ...
+
+
+class InMemoryConversationMemoryStore:
+    """Process-local memory store used until a database adapter is wired."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, dict[str, Any]] = {}
+
+    def load(self, conversation_id: str) -> dict[str, Any] | None:
+        value = self._data.get(conversation_id)
+        return deepcopy(value) if value else None
+
+    def save(self, conversation_id: str, memory_update: dict[str, Any]) -> None:
+        current = deepcopy(self._data.get(conversation_id) or {})
+        turns = list(current.get("turns") or [])
+        turns.extend(memory_update.get("turns") or [])
+        if len(turns) > 20:
+            turns = turns[-20:]
+        current.update({k: v for k, v in memory_update.items() if k != "turns"})
+        current["turns"] = turns
+        current["updated_at"] = _utc_now()
+        self._data[conversation_id] = current
+
+
+MEMORY_STORE = InMemoryConversationMemoryStore()
+
+
+class LLMRankedDocument(BaseModel):
+    doc_id: str
+    relevance_score: float = Field(ge=0.0, le=1.0)
+    reason: str = ""
+
+
+class LLMRerankResult(BaseModel):
+    ranked_documents: list[LLMRankedDocument] = Field(default_factory=list)
+    context_quality: str = CONTEXT_PARTIAL
+    insufficiency_reason: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -40,17 +85,65 @@ def cached_conitec_catalog() -> dict:
     return load_local_conitec_catalog()
 
 
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _settings_config(settings: Settings) -> dict[str, Any]:
+    try:
+        persist_dir = str(resolve_chroma_persist_dir(settings))
+    except Exception:
+        persist_dir = str(getattr(settings, "chroma_persist_dir", "") or "")
+    return {
+        "pipeline_version": getattr(settings, "rag_pipeline_version", PIPELINE_VERSION),
+        "chroma_persist_dir": persist_dir,
+        "chroma_collection": settings.chroma_collection,
+        "ollama_embed_model": settings.ollama_embed_model,
+        "ollama_chat_model": settings.ollama_chat_model,
+        "rag_use_llm_rerank": settings.rag_use_llm_rerank,
+        "rag_llm_rerank_top_n": settings.rag_llm_rerank_top_n,
+        "rag_max_retrieve_attempts": getattr(settings, "rag_max_retrieve_attempts", 2),
+    }
+
+
+def _audit_base(state: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
+    trace = deepcopy(state.get("audit_trace") or {})
+    trace.setdefault("pipeline_version", PIPELINE_VERSION)
+    trace.setdefault("steps", [])
+    if settings is not None:
+        trace.setdefault("config", _settings_config(settings))
+    return trace
+
+
+def append_audit_step(
+    state: dict[str, Any],
+    *,
+    node: str,
+    input_summary: dict[str, Any] | None = None,
+    output_summary: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    trace = _audit_base(state, settings)
+    trace["steps"].append(
+        {
+            "node": node,
+            "timestamp": _utc_now(),
+            "input_summary": input_summary or {},
+            "output_summary": output_summary or {},
+            "warnings": warnings or [],
+        }
+    )
+    return trace
+
+
 def format_source_label(doc: Document, index: int | None = None) -> str:
-    """Human-readable source label aligned with prompt document ranks."""
     meta = doc.metadata
     diretriz = meta.get("diretriz") or meta.get("disease") or meta.get("source_stem", "?")
     section = meta.get("section")
     p0 = meta.get("page_start", "?")
     p1 = meta.get("page_end", "?")
-    if section:
-        body = f"PCDT {diretriz} - {section} (pp. {p0}-{p1})"
-    else:
-        body = f"PCDT {diretriz} (pp. {p0}-{p1})"
+    body = f"PCDT {diretriz} - {section} (pp. {p0}-{p1})" if section else f"PCDT {diretriz} (pp. {p0}-{p1})"
     return f"[{index}] {body}" if index is not None else body
 
 
@@ -65,101 +158,177 @@ def _build_llm(settings: Settings, *, temperature: float = 0.0) -> ChatOllama:
     )
 
 
-def _audit_base(state: dict[str, Any]) -> dict[str, Any]:
-    return dict(state.get("rag_audit_payload") or {"query": state.get("query") or ""})
+def _history_transcript(turns: list[dict[str, Any]], *, limit: int = 8) -> str:
+    lines: list[str] = []
+    for turn in turns[-limit:]:
+        role = "Usuário" if turn.get("role") == "user" else "Assistente"
+        content = str(turn.get("content") or "").strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines)
 
 
-def merge_audit(state: dict[str, Any], **updates: Any) -> dict[str, Any]:
-    payload = _audit_base(state)
-    payload.update(updates)
-    return payload
-
-
-def run_load_memory(state: dict[str, Any]) -> dict[str, Any]:
-    history = list(state.get("chat_history") or [])
-    user_questions = [
-        str(turn.get("content") or "").strip()
-        for turn in history
-        if turn.get("role") == "user" and str(turn.get("content") or "").strip()
+def _last_structured_terms_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
+    candidates = [
+        state.get("structured_terms"),
+        (state.get("rewrite_result") or {}).get("structured_terms"),
+        (state.get("memory_result") or {}).get("last_structured_terms"),
     ]
-    last_disease = ""
-    for turn in reversed(history):
-        text = str(turn.get("content") or "")
-        match = re.search(r"(Síndrome de Guillain-Barré|Lúpus Eritematoso Sistêmico|Insuficiência Adrenal)", text, re.I)
-        if match:
-            last_disease = match.group(1)
-            break
-    memory_context = {
-        "last_user_questions": user_questions[-3:],
-        "last_detected_disease": last_disease,
-        "summary": "",
+    for item in candidates:
+        if isinstance(item, dict) and item:
+            return deepcopy(item)
+    return None
+
+
+def run_load_memory(
+    state: dict[str, Any],
+    *,
+    store: ConversationMemoryStore | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    memory_store = store or MEMORY_STORE
+    conversation_id = state.get("conversation_id")
+    history = list(state.get("chat_history") or state.get("messages") or [])
+    persisted = memory_store.load(str(conversation_id)) if conversation_id else None
+
+    persisted_turns = list((persisted or {}).get("turns") or [])
+    turns = persisted_turns + history
+    last_structured = _last_structured_terms_from_state(state) or deepcopy((persisted or {}).get("last_structured_terms") or {})
+    last_disease = str(last_structured.get("diretriz") or last_structured.get("disease") or "").strip() or None
+    last_intent = str(last_structured.get("intent") or "").strip() or None
+    source = "state" if history else "database" if persisted else "empty"
+    memory_result = {
+        "conversation_id": conversation_id,
+        "history_available": bool(turns),
+        "turns": turns[-20:],
+        "history_transcript": _history_transcript(turns),
+        "conversation_summary": (persisted or {}).get("summary") or "",
+        "summary": (persisted or {}).get("summary") or "",
+        "last_structured_terms": last_structured or None,
+        "last_disease": last_disease,
+        "last_intent": last_intent,
+        "last_sources": (persisted or {}).get("last_sources") or [],
+        "source": source,
     }
+    audit_trace = append_audit_step(
+        state,
+        node="load_memory",
+        output_summary={
+            "history_available": memory_result["history_available"],
+            "turn_count": len(memory_result["turns"]),
+            "last_disease": last_disease,
+            "source": source,
+        },
+        settings=settings,
+    )
     return {
-        "memory_context": memory_context,
-        "rag_audit_payload": merge_audit(state, memory_context=memory_context),
+        "memory_result": memory_result,
+        "memory_context": memory_result,
+        "audit_trace": audit_trace,
     }
 
 
-def run_search_router(query: str, memory_context: dict | str | None = None) -> dict[str, Any]:
+def _is_simple_direct(text: str) -> bool:
+    norm = normalize_text_for_match(text)
+    return norm in {
+        "oi",
+        "ola",
+        "olá",
+        "bom dia",
+        "boa tarde",
+        "boa noite",
+        "obrigado",
+        "obrigada",
+        "quem e voce",
+        "quem é voce",
+        "quem é você",
+    }
+
+
+def run_search_router(
+    query: str,
+    memory_result: dict | str | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    del settings
     text = (query or "").strip()
+    memory = memory_result if isinstance(memory_result, dict) else {}
     if not text:
         decision = {
             "search_needed": False,
             "question_type": "unsupported",
             "reason": "pergunta vazia",
             "confidence": 1.0,
+            "method": "semantic",
         }
-    elif _RAG_HINT_RE.search(text):
-        decision = {
-            "search_needed": True,
-            "question_type": "protocol_query",
-            "reason": "pergunta solicita informação clínica/protocolo baseada em PCDT",
-            "confidence": 0.9,
-        }
-    elif _DIRECT_HINT_RE.fullmatch(normalize_text_for_match(text)) or _DIRECT_HINT_RE.search(text):
+    elif _is_simple_direct(text):
         decision = {
             "search_needed": False,
             "question_type": "smalltalk",
             "reason": "interação simples que não solicita evidência PCDT",
-            "confidence": 0.86,
-        }
-    elif isinstance(memory_context, dict) and memory_context.get("last_detected_disease"):
-        decision = {
-            "search_needed": True,
-            "question_type": "follow_up_question",
-            "reason": "pergunta pode depender da condição clínica mencionada no histórico",
-            "confidence": 0.72,
+            "confidence": 0.9,
+            "method": "semantic",
         }
     else:
+        intent = classify_clinical_intent(text)
+        has_follow_up_memory = bool(memory.get("last_structured_terms") or memory.get("last_disease"))
+        follow_up_shape = normalize_text_for_match(text).startswith(("e ", "e os ", "e as ", "qual ", "quais "))
+        search_needed = True
+        question_type = "follow_up_question" if has_follow_up_memory and follow_up_shape else "clinical_question"
+        if intent.get("intent") and intent.get("intent") != "geral":
+            question_type = "protocol_query"
         decision = {
-            "search_needed": True,
-            "question_type": "clinical_question",
-            "reason": "pergunta potencialmente clínica; usar RAG por segurança",
-            "confidence": 0.68,
+            "search_needed": search_needed,
+            "question_type": question_type,
+            "reason": "pergunta potencialmente clínica; buscar PCDT por política conservadora",
+            "confidence": max(0.7, float(intent.get("confidence") or 0.0)),
+            "method": "semantic",
         }
-    return {"search_needed": bool(decision["search_needed"]), "router_decision": decision}
+    return {"search_needed": bool(decision["search_needed"]), "router_result": decision, "router_decision": decision}
 
 
-def run_rewrite_query(query: str, memory_context: dict | str | None, settings: Settings) -> dict[str, Any]:
+def run_rewrite_query(
+    query: str,
+    memory_result: dict | str | None,
+    settings: Settings,
+) -> dict[str, Any]:
     del settings
-    base_query = (query or "").strip()
-    if isinstance(memory_context, dict):
-        last_disease = str(memory_context.get("last_detected_disease") or "").strip()
-        if last_disease and normalize_text_for_match(last_disease) not in normalize_text_for_match(base_query):
-            base_query = f"{base_query} {last_disease}".strip()
-
+    original_query = (query or "").strip()
+    memory = memory_result if isinstance(memory_result, dict) else {}
     catalog = cached_conitec_catalog()
-    expansion = expand_query_with_conitec_catalog(base_query, catalog, max_terms=10)
+
+    first_expansion = expand_query_with_conitec_catalog(original_query, catalog, max_terms=10)
+    first_structured = first_expansion.get("structured_terms") or {}
+    resolved_query = original_query
+    last_structured = memory.get("last_structured_terms") or {}
+    last_disease = str(last_structured.get("diretriz") or last_structured.get("disease") or "").strip()
+    current_disease = str(first_structured.get("diretriz") or first_structured.get("disease") or "").strip()
+    if last_disease and not current_disease:
+        resolved_query = f"{original_query} para {last_disease}".strip()
+
+    expansion = first_expansion if resolved_query == original_query else expand_query_with_conitec_catalog(resolved_query, catalog, max_terms=10)
     structured = expansion.get("structured_terms") or {}
     understanding = expansion.get("clinical_understanding") or {}
-    expanded_query = str(expansion.get("expanded_query") or base_query).strip()
-    return {
+    expanded_query = str(expansion.get("expanded_query") or resolved_query).strip()
+    rewrite_result = {
+        "original_query": original_query,
+        "resolved_query": resolved_query,
         "retrieval_query": expanded_query,
         "expanded_query": expanded_query,
         "structured_terms": structured,
         "clinical_understanding": understanding,
         "linked_entities": structured.get("linked_entities") or understanding.get("linked_entities") or [],
         "catalog_candidates": structured.get("catalog_candidates") or understanding.get("catalog_candidates") or [],
+        "confidence": float(structured.get("confidence") or 0.0),
+    }
+    return {
+        "rewrite_result": rewrite_result,
+        "retrieval_query": rewrite_result["retrieval_query"],
+        "expanded_query": rewrite_result["expanded_query"],
+        "structured_terms": rewrite_result["structured_terms"],
+        "clinical_understanding": rewrite_result["clinical_understanding"],
+        "linked_entities": rewrite_result["linked_entities"],
+        "catalog_candidates": rewrite_result["catalog_candidates"],
         "query_expansion": expansion,
     }
 
@@ -172,7 +341,7 @@ def _metadata_filter(structured_terms: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _with_dense_metadata(pairs: list[Any]) -> list[Document]:
+def _with_dense_metadata(pairs: list[Any], *, attempt: int) -> list[Document]:
     docs: list[Document] = []
     total = max(1, len(pairs))
     for rank, item in enumerate(pairs, start=1):
@@ -184,6 +353,7 @@ def _with_dense_metadata(pairs: list[Any]) -> list[Document]:
                 "dense_score": float(score) if score is not None else None,
                 "dense_rank": rank,
                 "dense_rank_score": round(1.0 - ((rank - 1) / total), 6),
+                "retrieve_attempt": attempt,
             }
         )
         docs.append(Document(page_content=str(getattr(doc, "page_content", "") or ""), metadata=meta, id=getattr(doc, "id", None)))
@@ -202,20 +372,45 @@ def run_retrieve(
     query = (fallback_query or expanded_query or "").strip()
     k = max(1, int(getattr(settings, "rag_retrieve_candidates_k", 30)))
     metadata_filter = _metadata_filter(structured_terms)
+    filter_applied = metadata_filter is not None
+    fallback_to_unfiltered = False
+    fallback_reason = None
     try:
         pairs = store.similarity_search_with_score(query, k=k, filter=metadata_filter)
-    except Exception:
+    except Exception as exc:
+        fallback_to_unfiltered = bool(metadata_filter)
+        fallback_reason = str(exc)[:240]
         pairs = store.similarity_search_with_score(query, k=k)
         metadata_filter = None
-    candidate_docs = _with_dense_metadata(list(pairs))
+    candidate_docs = _with_dense_metadata(list(pairs), attempt=retrieve_attempt)
+    retrieve_result = {
+        "attempt": retrieve_attempt,
+        "query": query,
+        "metadata_filter": metadata_filter,
+        "candidate_docs": candidate_docs,
+        "candidate_count": len(candidate_docs),
+        "filter_applied": filter_applied,
+        "fallback_to_unfiltered": fallback_to_unfiltered,
+        "fallback_reason": fallback_reason,
+        "debug": {
+            "k": k,
+            "collection": settings.chroma_collection,
+            "persist_dir": str(resolve_chroma_persist_dir(settings)),
+            "embedding_model": settings.ollama_embed_model,
+        },
+    }
     return {
         "candidate_docs": candidate_docs,
         "retrieve_attempt": retrieve_attempt,
+        "retrieve_result": retrieve_result,
         "retrieve_debug": {
             "query_sent_to_chroma": query,
             "k": k,
             "metadata_filter": metadata_filter,
             "candidate_count": len(candidate_docs),
+            "filter_applied": filter_applied,
+            "fallback_to_unfiltered": fallback_to_unfiltered,
+            "fallback_reason": fallback_reason,
         },
     }
 
@@ -244,6 +439,48 @@ def _section_match(doc: Document, structured_terms: dict[str, Any]) -> bool:
     return any(item and item in section for item in preferred)
 
 
+def _doc_signature(doc: Document) -> tuple[Any, ...]:
+    meta = doc.metadata or {}
+    return (
+        getattr(doc, "id", None),
+        meta.get("source_stem"),
+        meta.get("page_start"),
+        meta.get("page_end"),
+        meta.get("section"),
+    )
+
+
+def _extract_first_json_object(raw: str) -> dict[str, Any]:
+    start = raw.find("{")
+    if start < 0:
+        raise ValueError("LLM rerank did not return JSON")
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start, len(raw)):
+        ch = raw[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                data = json.loads(raw[start : idx + 1])
+                if not isinstance(data, dict):
+                    raise ValueError("LLM rerank JSON root is not object")
+                return data
+    raise ValueError("LLM rerank JSON object is incomplete")
+
+
 async def _llm_rerank(
     *,
     query: str,
@@ -251,7 +488,7 @@ async def _llm_rerank(
     structured_terms: dict[str, Any],
     docs: list[Document],
     settings: Settings,
-) -> dict[str, Any]:
+) -> LLMRerankResult:
     doc_items = []
     for idx, doc in enumerate(docs[: int(settings.rag_llm_rerank_top_n)], start=1):
         meta = dict(doc.metadata or {})
@@ -267,7 +504,8 @@ async def _llm_rerank(
         )
     system = (
         "Você é um reranker RAG médico. Retorne somente JSON válido com "
-        "ranked_documents, context_sufficient e insufficiency_reason."
+        "ranked_documents, context_quality e insufficiency_reason. "
+        "Não selecione documentos de doença/diretriz diferente da detectada."
     )
     human = json.dumps(
         {
@@ -282,11 +520,29 @@ async def _llm_rerank(
     raw = getattr(result, "content", "") or ""
     if isinstance(raw, list):
         raw = "".join(str(part) for part in raw)
-    match = re.search(r"\{.*\}", str(raw), re.DOTALL)
-    if not match:
-        raise ValueError("LLM rerank did not return JSON")
-    data = json.loads(match.group())
-    return data if isinstance(data, dict) else {}
+    data = _extract_first_json_object(str(raw))
+    return LLMRerankResult.model_validate(data)
+
+
+def _rank_heuristically(
+    *,
+    query: str,
+    expanded_query: str,
+    structured_terms: dict[str, Any],
+    clinical_understanding: dict[str, Any],
+    docs: list[Document],
+    settings: Settings,
+) -> list[Document]:
+    return rerank_documents(
+        query,
+        {
+            "expanded_query": expanded_query,
+            "structured_terms": structured_terms,
+            "clinical_understanding": clinical_understanding,
+        },
+        [(doc, doc.metadata.get("dense_score")) for doc in docs],
+        final_k=int(settings.rag_retrieve_final_k),
+    )
 
 
 async def run_rerank_and_validate_context(
@@ -298,72 +554,99 @@ async def run_rerank_and_validate_context(
     candidate_docs: list[Document],
     settings: Settings,
 ) -> dict[str, Any]:
-    compatible_docs = [doc for doc in candidate_docs if _matches_structured_disease(doc, structured_terms)]
     disease_required = bool(structured_terms.get("disease") or structured_terms.get("diretriz"))
-    filtered_docs = compatible_docs if disease_required else list(candidate_docs)
-    llm_debug: dict[str, Any] = {"used": False}
-    selected_docs: list[Document]
+    preferred_sections = _as_list(structured_terms.get("preferred_sections"))
+    removed_docs = []
+    compatible_docs: list[Document] = []
+    for idx, doc in enumerate(candidate_docs, start=1):
+        if disease_required and not _matches_structured_disease(doc, structured_terms):
+            removed_docs.append({"rank": idx, "reason": "disease_mismatch", "document": document_audit_record(doc, idx)})
+        else:
+            compatible_docs.append(doc)
 
-    if settings.rag_use_llm_rerank and filtered_docs:
+    llm_debug: dict[str, Any] = {"used": False}
+    selected_docs: list[Document] = []
+    if compatible_docs and settings.rag_use_llm_rerank:
         try:
             llm_result = await _llm_rerank(
                 query=query,
                 expanded_query=expanded_query,
                 structured_terms=structured_terms,
-                docs=filtered_docs,
+                docs=compatible_docs,
                 settings=settings,
             )
-            llm_debug = {"used": True, "result": llm_result}
-            id_to_doc = {f"doc_{idx}": doc for idx, doc in enumerate(filtered_docs[: int(settings.rag_llm_rerank_top_n)], start=1)}
-            selected_docs = [
-                id_to_doc[item.get("doc_id")]
-                for item in llm_result.get("ranked_documents", [])
-                if isinstance(item, dict) and item.get("doc_id") in id_to_doc
-            ]
+            id_to_doc = {f"doc_{idx}": doc for idx, doc in enumerate(compatible_docs[: int(settings.rag_llm_rerank_top_n)], start=1)}
+            selected_docs = [id_to_doc[item.doc_id] for item in llm_result.ranked_documents if item.doc_id in id_to_doc]
             selected_docs = selected_docs[: max(1, int(settings.rag_retrieve_final_k))]
+            llm_debug = {"used": True, "result": llm_result.model_dump()}
             if not selected_docs:
-                raise ValueError("LLM rerank returned no selected docs")
-        except Exception as exc:
+                raise ValueError("LLM rerank returned no selectable documents")
+        except (ValidationError, Exception) as exc:
             llm_debug = {"used": True, "error": str(exc), "fallback": "heuristic"}
-            selected_docs = rerank_documents(
-                query,
-                {"expanded_query": expanded_query, "structured_terms": structured_terms, "clinical_understanding": clinical_understanding},
-                [(doc, doc.metadata.get("dense_score")) for doc in filtered_docs],
-                final_k=int(settings.rag_retrieve_final_k),
+            selected_docs = _rank_heuristically(
+                query=query,
+                expanded_query=expanded_query,
+                structured_terms=structured_terms,
+                clinical_understanding=clinical_understanding,
+                docs=compatible_docs,
+                settings=settings,
             )
-    else:
-        selected_docs = rerank_documents(
-            query,
-            {"expanded_query": expanded_query, "structured_terms": structured_terms, "clinical_understanding": clinical_understanding},
-            [(doc, doc.metadata.get("dense_score")) for doc in filtered_docs],
-            final_k=int(settings.rag_retrieve_final_k),
+    elif compatible_docs:
+        selected_docs = _rank_heuristically(
+            query=query,
+            expanded_query=expanded_query,
+            structured_terms=structured_terms,
+            clinical_understanding=clinical_understanding,
+            docs=compatible_docs,
+            settings=settings,
         )
 
-    has_disease_doc = (not disease_required) or any(_matches_structured_disease(doc, structured_terms) for doc in selected_docs)
-    preferred_sections = _as_list(structured_terms.get("preferred_sections"))
+    found_diseases = sorted({str((doc.metadata or {}).get("disease") or (doc.metadata or {}).get("diretriz") or "") for doc in compatible_docs if doc.metadata})
+    found_sections = sorted({str((doc.metadata or {}).get("section") or (doc.metadata or {}).get("header_1") or "") for doc in selected_docs if doc.metadata})
     has_preferred_section = (not preferred_sections) or any(_section_match(doc, structured_terms) for doc in selected_docs)
-    context_sufficient = bool(selected_docs and has_disease_doc)
+    context_quality = CONTEXT_SUFFICIENT
+    failure_type = None
     insufficiency_reason = None
+
     if not candidate_docs:
-        context_sufficient = False
+        context_quality = CONTEXT_INSUFFICIENT
+        failure_type = "no_documents"
         insufficiency_reason = "nenhum candidato recuperado"
     elif disease_required and not compatible_docs:
-        context_sufficient = False
+        context_quality = CONTEXT_INSUFFICIENT
+        failure_type = "wrong_disease"
         insufficiency_reason = "documentos recuperados não correspondem à doença/diretriz detectada"
     elif not selected_docs:
-        context_sufficient = False
+        context_quality = CONTEXT_INSUFFICIENT
+        failure_type = "no_selected_documents"
         insufficiency_reason = "rerank não selecionou documentos relevantes"
     elif preferred_sections and not has_preferred_section:
+        context_quality = CONTEXT_PARTIAL
+        failure_type = "missing_preferred_section"
         insufficiency_reason = "seção preferencial não encontrada; contexto parcialmente suficiente"
 
+    context_sufficient = context_quality == CONTEXT_SUFFICIENT
     sources = [format_source_label(doc, i) for i, doc in enumerate(selected_docs, start=1)]
-    rerank_debug = {
-        "candidate_count": len(candidate_docs),
-        "after_disease_filter": len(filtered_docs),
-        "selected_count": len(selected_docs),
-        "has_preferred_section": has_preferred_section,
-        "llm_rerank": llm_debug,
-        "selected_documents": [document_audit_record(doc, i) for i, doc in enumerate(selected_docs, start=1)],
+    selected_audit = [document_audit_record(doc, i) for i, doc in enumerate(selected_docs, start=1)]
+    rerank_result = {
+        "selected_docs": selected_docs,
+        "context_quality": context_quality,
+        "context_sufficient": context_sufficient,
+        "failure_type": failure_type,
+        "insufficiency_reason": insufficiency_reason,
+        "expected_disease": structured_terms.get("diretriz") or structured_terms.get("disease"),
+        "expected_sections": preferred_sections,
+        "found_diseases": found_diseases,
+        "found_sections": found_sections,
+        "llm_rerank_used": bool(llm_debug.get("used")),
+        "debug": {
+            "candidate_count": len(candidate_docs),
+            "after_disease_filter": len(compatible_docs),
+            "removed_documents": removed_docs,
+            "selected_documents": selected_audit,
+            "has_preferred_section": has_preferred_section,
+            "llm_rerank": llm_debug,
+        },
     }
     audit_payload = build_audit_payload(
         question=query,
@@ -382,13 +665,15 @@ async def run_rerank_and_validate_context(
         "sources": sources,
         "context_sufficient": context_sufficient,
         "insufficiency_reason": insufficiency_reason,
-        "rerank_debug": rerank_debug,
+        "rerank_result": rerank_result,
+        "rerank_debug": rerank_result["debug"],
         "rag_audit_payload": audit_payload,
     }
 
 
 def route_context_quality(state: dict[str, Any]) -> str:
-    if state.get("context_sufficient") is True:
+    quality = (state.get("rerank_result") or {}).get("context_quality")
+    if quality == CONTEXT_SUFFICIENT or state.get("context_sufficient") is True:
         return "generate_grounded"
     if int(state.get("retrieve_attempt") or 1) < int(state.get("max_retrieve_attempts") or 2):
         return "fallback_retrieve"
@@ -405,37 +690,46 @@ def build_fallback_query(query: str, structured_terms: dict[str, Any]) -> str:
     return " ".join(str(term).strip() for term in terms if str(term or "").strip())
 
 
-def build_pipeline_audit(state: dict[str, Any], *, generate_mode: str | None = None, guardrail: dict | None = None) -> dict[str, Any]:
-    payload = _audit_base(state)
+def merge_candidate_attempts(previous: list[Document], current: list[Document]) -> list[Document]:
+    seen = {_doc_signature(doc) for doc in previous}
+    merged = list(previous)
+    for doc in current:
+        sig = _doc_signature(doc)
+        if sig not in seen:
+            merged.append(doc)
+            seen.add(sig)
+    return merged
+
+
+def build_pipeline_audit(
+    state: dict[str, Any],
+    *,
+    generate_mode: str | None = None,
+    guardrail: dict | None = None,
+) -> dict[str, Any]:
+    payload = deepcopy(state.get("rag_audit_payload") or {"query": state.get("query") or ""})
     attempts = list(payload.get("retrieve_attempts") or [])
-    retrieve_debug = state.get("retrieve_debug") or {}
-    if retrieve_debug:
+    retrieve_result = state.get("retrieve_result") or {}
+    if retrieve_result and not any(item.get("attempt") == retrieve_result.get("attempt") for item in attempts):
         attempts.append(
             {
-                "attempt": state.get("retrieve_attempt"),
-                "query": retrieve_debug.get("query_sent_to_chroma"),
-                "candidate_count": retrieve_debug.get("candidate_count"),
-                "metadata_filter": retrieve_debug.get("metadata_filter"),
+                "attempt": retrieve_result.get("attempt"),
+                "query": retrieve_result.get("query"),
+                "candidate_count": retrieve_result.get("candidate_count"),
+                "metadata_filter": retrieve_result.get("metadata_filter"),
+                "fallback_to_unfiltered": retrieve_result.get("fallback_to_unfiltered"),
             }
         )
     payload.update(
         {
             "query": state.get("query") or payload.get("query") or "",
-            "memory_context": state.get("memory_context") or payload.get("memory_context") or {},
-            "router_decision": state.get("router_decision") or payload.get("router_decision") or {},
-            "rewrite": {
-                "retrieval_query": state.get("retrieval_query") or "",
-                "expanded_query": state.get("expanded_query") or "",
-                "structured_terms": state.get("structured_terms") or {},
-                "linked_entities": state.get("linked_entities") or [],
-                "catalog_candidates": state.get("catalog_candidates") or [],
-            },
+            "pipeline_version": PIPELINE_VERSION,
+            "memory_result": state.get("memory_result") or payload.get("memory_result") or {},
+            "router_result": state.get("router_result") or payload.get("router_result") or {},
+            "rewrite": state.get("rewrite_result") or payload.get("rewrite") or {},
             "retrieve_attempts": attempts,
-            "rerank": {
-                "context_sufficient": state.get("context_sufficient"),
-                "insufficiency_reason": state.get("insufficiency_reason"),
-                "selected_documents": (state.get("rerank_debug") or {}).get("selected_documents") or [],
-            },
+            "rerank": state.get("rerank_result") or payload.get("rerank") or {},
+            "audit_trace": state.get("audit_trace") or payload.get("audit_trace") or {},
         }
     )
     if generate_mode:
@@ -443,3 +737,138 @@ def build_pipeline_audit(state: dict[str, Any], *, generate_mode: str | None = N
     if guardrail:
         payload["guardrail"] = guardrail
     return payload
+
+
+def run_save_memory(
+    state: dict[str, Any],
+    *,
+    store: ConversationMemoryStore | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    memory_store = store or MEMORY_STORE
+    conversation_id = state.get("conversation_id") or (state.get("memory_result") or {}).get("conversation_id")
+    structured = state.get("structured_terms") or (state.get("rewrite_result") or {}).get("structured_terms") or {}
+    generation = state.get("generation_result") or {}
+    rerank = state.get("rerank_result") or {}
+    answer = state.get("answer") or generation.get("answer") or ""
+    if conversation_id:
+        memory_store.save(
+            str(conversation_id),
+            {
+                "turns": [
+                    {"role": "user", "content": state.get("query") or ""},
+                    {"role": "assistant", "content": answer},
+                ],
+                "last_structured_terms": structured,
+                "last_disease": structured.get("diretriz") or structured.get("disease"),
+                "last_intent": structured.get("intent"),
+                "last_sources": state.get("sources") or [],
+                "context_quality": rerank.get("context_quality"),
+                "audit_id": state.get("audit_id"),
+                "summary": (state.get("memory_result") or {}).get("summary") or "",
+            },
+        )
+    audit_trace = append_audit_step(
+        state,
+        node="save_memory",
+        input_summary={"conversation_id": conversation_id},
+        output_summary={"saved": bool(conversation_id), "disease": structured.get("disease") or structured.get("diretriz")},
+        settings=settings,
+    )
+    return {"memory_saved": bool(conversation_id), "audit_trace": audit_trace}
+
+
+async def run_full_graph_debug(
+    *,
+    query: str,
+    settings: Settings,
+    store: Chroma,
+    conversation_id: str | None = None,
+    chat_history: list | None = None,
+) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "query": query,
+        "conversation_id": conversation_id,
+        "chat_history": chat_history or [],
+        "retrieve_attempt": 1,
+        "max_retrieve_attempts": int(getattr(settings, "rag_max_retrieve_attempts", 2)),
+    }
+    state.update(run_load_memory(state, settings=settings))
+    state.update(run_search_router(query, state.get("memory_result"), settings))
+    if not state.get("search_needed"):
+        state["generation_result"] = {"mode": "direct", "answer": ""}
+        return {"state": state, "audit": build_pipeline_audit(state), "route": "direct"}
+
+    state.update(run_rewrite_query(query, state.get("memory_result"), settings))
+    retrieve = run_retrieve(
+        expanded_query=state.get("expanded_query") or query,
+        structured_terms=state.get("structured_terms") or {},
+        store=store,
+        settings=settings,
+        retrieve_attempt=1,
+    )
+    state.update(retrieve)
+    state["audit_trace"] = append_audit_step(
+        state,
+        node="retrieve_attempt_1",
+        output_summary=retrieve.get("retrieve_result") or {},
+        settings=settings,
+    )
+    rerank = await run_rerank_and_validate_context(
+        query=query,
+        expanded_query=state.get("expanded_query") or query,
+        structured_terms=state.get("structured_terms") or {},
+        clinical_understanding=state.get("clinical_understanding") or {},
+        candidate_docs=state.get("candidate_docs") or [],
+        settings=settings,
+    )
+    state.update(rerank)
+    state["audit_trace"] = append_audit_step(
+        state,
+        node="rerank_and_validate_context",
+        output_summary=state.get("rerank_result") or {},
+        settings=settings,
+    )
+    if route_context_quality(state) == "fallback_retrieve":
+        state["retrieve_attempt"] = 2
+        fallback = run_retrieve(
+            expanded_query=state.get("expanded_query") or query,
+            structured_terms=state.get("structured_terms") or {},
+            store=store,
+            settings=settings,
+            retrieve_attempt=2,
+            fallback_query=build_fallback_query(query, state.get("structured_terms") or {}),
+        )
+        previous = list(state.get("candidate_docs") or [])
+        current = list(fallback.get("candidate_docs") or [])
+        state["candidate_docs_attempt_1"] = previous
+        state["candidate_docs_attempt_2"] = current
+        fallback["candidate_docs"] = merge_candidate_attempts(previous, current)
+        state.update(fallback)
+        state["audit_trace"] = append_audit_step(
+            state,
+            node="fallback_retrieve_attempt_2",
+            output_summary=fallback.get("retrieve_result") or {},
+            settings=settings,
+        )
+        rerank = await run_rerank_and_validate_context(
+            query=query,
+            expanded_query=state.get("expanded_query") or query,
+            structured_terms=state.get("structured_terms") or {},
+            clinical_understanding=state.get("clinical_understanding") or {},
+            candidate_docs=state.get("candidate_docs") or [],
+            settings=settings,
+        )
+        state.update(rerank)
+        state["audit_trace"] = append_audit_step(
+            state,
+            node="rerank_and_validate_context",
+            output_summary=state.get("rerank_result") or {},
+            settings=settings,
+        )
+    route = route_context_quality(state)
+    state["generation_result"] = {
+        "mode": "grounded" if route == "generate_grounded" else "insufficient",
+        "answer": "",
+    }
+    return {"state": state, "audit": build_pipeline_audit(state), "route": route}

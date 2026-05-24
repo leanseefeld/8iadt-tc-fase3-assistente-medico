@@ -5,10 +5,9 @@ from __future__ import annotations
 import time
 
 from langchain_chroma import Chroma
-from langchain_core.documents import Document
 
 from assistente_medico_api.config import Settings
-from assistente_medico_api.graph.rag_enhancement import format_rich_context_block
+from assistente_medico_api.graph.context_formatting import format_context_block
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
 from assistente_medico_api.services.rag_pipeline_service import (
@@ -16,11 +15,6 @@ from assistente_medico_api.services.rag_pipeline_service import (
     format_source_label,
     run_retrieve,
 )
-
-
-def format_context_block(docs: list[Document]) -> str:
-    """Monta bloco de contexto para o prompt."""
-    return format_rich_context_block(docs)
 
 
 def retrieve_node(

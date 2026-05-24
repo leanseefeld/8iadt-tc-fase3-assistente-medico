@@ -95,6 +95,29 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MEDICO_RAG_LLM_RERANK_TOP_N", "RAG_LLM_RERANK_TOP_N"),
         description="Número máximo de candidatos enviados ao LLM reranker.",
     )
+    rag_pipeline_version: str = Field(
+        default="separated_nodes_v2",
+        validation_alias=AliasChoices("MEDICO_RAG_PIPELINE_VERSION", "RAG_PIPELINE_VERSION"),
+        description="Versão lógica do pipeline RAG auditada em cada interação.",
+    )
+    rag_max_retrieve_attempts: int = Field(
+        default=2,
+        validation_alias=AliasChoices("MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS", "RAG_MAX_RETRIEVE_ATTEMPTS"),
+        description="Máximo de buscas Chroma por pergunta (busca inicial + fallback).",
+    )
+    rag_require_source_for_clinical_answer: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER",
+            "RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER",
+        ),
+        description="Exige contexto/fonte validada para resposta clínica grounded.",
+    )
+    rag_debug: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MEDICO_RAG_DEBUG", "RAG_DEBUG"),
+        description="Expõe diagnóstico RAG adicional em rotas/inspector quando habilitado.",
+    )
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(
         default=Path("./uploads"),

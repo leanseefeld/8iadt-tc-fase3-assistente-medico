@@ -243,6 +243,19 @@ ollama pull llama3.2:3b
 streamlit run scripts/rag_inspector_app.py
 ```
 
+O modo principal do Inspector chama `run_full_graph_debug`, o mesmo serviço central usado pelo fluxo real do chat para memória, router, rewrite, retrieve, rerank e decisão de suficiência. Assim, a mesma query deve produzir o mesmo `expanded_query`, `structured_terms`, documentos selecionados e `context_quality` que o endpoint `POST /api/assistant/chat`.
+
+Campos exibidos:
+
+- `memory_result`: histórico/transcript e últimos `structured_terms` usados para follow-up.
+- `router_result`: decisão `search_needed` e tipo da pergunta.
+- `rewrite_result`: `resolved_query`, `expanded_query`, `structured_terms`, entidades e candidatos do catálogo.
+- `retrieve_result`: query enviada ao Chroma, filtro de metadata, tentativa, collection, persist dir e modelo de embedding.
+- `rerank_result`: `context_quality`, `failure_type`, documentos removidos/selecionados, seções esperadas/encontradas e saída do LLM rerank quando habilitado.
+- `audit_trace`: trilha append-only por etapa, exportável na aba **Exportar JSON**.
+
+Diferença importante: `expanded_query` é texto limpo para busca vetorial; `structured_terms` carrega doença, CID, intenção, seção preferencial e candidatos em formato estruturado para filtros, rerank, prompt e auditoria. Não coloque JSON na query vetorial.
+
 O Inspector usa `llama3.2:3b` como modelo de chat padrão para geração. O campo continua editável na sidebar, mas não há fallback automático para outro modelo; se a geração falhar, o erro do modelo selecionado é exibido diretamente.
 
 ### Dataset COVID Albert Einstein

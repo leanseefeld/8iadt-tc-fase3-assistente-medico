@@ -51,3 +51,29 @@ python run-local.py --backend-port 8001 --frontend-port 5174
 # não executar migrations
 python run-local.py --skip-migrations
 ```
+
+## Fluxo RAG do chat
+
+O chat médico usa um grafo LangGraph com nós separados e auditáveis:
+
+```text
+load_memory
+-> router_search_needed
+   -> generate_direct_answer -> guardrail -> save_memory
+   -> rewrite_query -> retrieve_attempt_1 -> rerank_and_validate_context
+      -> generate_grounded_answer -> guardrail -> save_memory
+      -> fallback_retrieve_attempt_2 -> rerank_and_validate_context
+         -> generate_grounded_answer | generate_insufficient_context
+         -> guardrail -> save_memory
+```
+
+O limite é `MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS=2`: uma busca normal e uma busca de fallback no máximo. O `retrieve` só busca candidatos no Chroma; o `rerank_and_validate_context` filtra doença/diretriz, ordena e classifica o contexto como `sufficient`, `partial` ou `insufficient`; a geração clínica grounded só roda quando o contexto é suficiente.
+
+Para depurar divergência entre frontend/backend e inspector, use:
+
+```bash
+cd llm
+streamlit run scripts/rag_inspector_app.py
+```
+
+O inspector chama o mesmo serviço central de debug do backend (`run_full_graph_debug`) e mostra `memory_result`, `router_result`, `rewrite_result`, `retrieve_result`, `rerank_result`, fontes e `audit_trace` exportável.

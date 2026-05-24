@@ -20,6 +20,7 @@ from assistente_medico_api.graph.nodes.pipeline import (
     retrieve_attempt_1_node,
     route_search_needed,
     router_search_needed_node,
+    save_memory_node,
 )
 from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
 from assistente_medico_api.graph.state import ChatRAGState
@@ -36,7 +37,7 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=No
         return load_memory_node(state)
 
     def _router(state: ChatRAGState) -> dict:
-        return router_search_needed_node(state)
+        return router_search_needed_node(state, settings=settings)
 
     async def _rewrite(state: ChatRAGState) -> dict:
         return await rewrite_query_node(state, settings)
@@ -62,6 +63,9 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=No
     async def _guardrail(state: ChatRAGState) -> dict:
         return await guardrail_node(state, settings)
 
+    def _save_memory(state: ChatRAGState) -> dict:
+        return save_memory_node(state, settings=settings)
+
     workflow = StateGraph(ChatRAGState)
     workflow.add_node("load_memory", _load_memory)
     workflow.add_node("router_search_needed", _router)
@@ -73,6 +77,7 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=No
     workflow.add_node("generate_insufficient_context", _generate_insufficient)
     workflow.add_node("generate_direct_answer", _generate_direct)
     workflow.add_node("guardrail", _guardrail)
+    workflow.add_node("save_memory", _save_memory)
 
     workflow.set_entry_point("load_memory")
     workflow.add_edge("load_memory", "router_search_needed")
@@ -99,7 +104,8 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=No
     workflow.add_edge("generate_grounded_answer", "guardrail")
     workflow.add_edge("generate_insufficient_context", "guardrail")
     workflow.add_edge("generate_direct_answer", "guardrail")
-    workflow.add_edge("guardrail", END)
+    workflow.add_edge("guardrail", "save_memory")
+    workflow.add_edge("save_memory", END)
 
     compiled = workflow.compile(checkpointer=checkpointer)
     print(compiled.get_graph().draw_ascii())

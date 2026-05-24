@@ -7,7 +7,7 @@ import time
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
-from assistente_medico_api.services.rag_pipeline_service import build_pipeline_audit, run_rewrite_query
+from assistente_medico_api.services.rag_pipeline_service import append_audit_step, build_pipeline_audit, run_rewrite_query
 
 
 async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
@@ -15,7 +15,7 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
     t0 = time.perf_counter()
     out = run_rewrite_query(
         state.get("query") or "",
-        state.get("memory_context"),
+        state.get("memory_result") or state.get("memory_context"),
         settings,
     )
     steps = list(state.get("reasoning_steps") or [])
@@ -23,6 +23,16 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
         "Busca: pergunta reescrita e expandida com entendimento clínico estruturado."
     )
     merged = {**dict(state), **out, "reasoning_steps": steps}
+    audit_trace = append_audit_step(
+        merged,
+        node="rewrite_query",
+        input_summary={
+            "query": state.get("query") or "",
+            "memory_last_disease": (state.get("memory_result") or {}).get("last_disease"),
+        },
+        output_summary=out.get("rewrite_result") or {},
+        settings=settings,
+    )
     audit(
         "rag_rewrite_done",
         kind="rag",
@@ -37,5 +47,6 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
     return {
         **out,
         "reasoning_steps": steps,
-        "rag_audit_payload": build_pipeline_audit(merged),
+        "audit_trace": audit_trace,
+        "rag_audit_payload": build_pipeline_audit({**merged, "audit_trace": audit_trace}),
     }

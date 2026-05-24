@@ -14,12 +14,15 @@ from langchain_core.messages import (
 from langchain_ollama import ChatOllama
 
 from assistente_medico_api.config import Settings
-from assistente_medico_api.graph.rag_enhancement import format_context_document
-from assistente_medico_api.graph.nodes.retrieve import format_context_block
+from assistente_medico_api.graph.context_formatting import format_context_block, format_context_preview
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.graph.clinical_query_understanding import normalize_text_for_match
 from assistente_medico_api.observability.audit import audit, truncate
-from assistente_medico_api.services.rag_pipeline_service import build_pipeline_audit
+from assistente_medico_api.services.rag_pipeline_service import (
+    CONTEXT_SUFFICIENT,
+    append_audit_step,
+    build_pipeline_audit,
+)
 
 # Persona e limites de segurança para o assistente (pt-BR).
 _SYSTEM_PROMPT = """\
@@ -41,11 +44,13 @@ def _build_messages(state: ChatRAGState) -> list:
     docs = state.get("retrieved_docs") or []
     context = format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
     user_text = state.get("query") or ""
+    rewrite_result = state.get("rewrite_result") or {}
     query_expansion = state.get("query_expansion") or {}
+    structured_terms = state.get("structured_terms") or rewrite_result.get("structured_terms") or query_expansion.get("structured_terms") or {}
     understanding = _format_clinical_understanding(
-        state.get("clinical_understanding") or {},
-        query_expansion.get("structured_terms") or {},
-        query_expansion.get("_complementary_retrieve_info") or {},
+        state.get("clinical_understanding") or rewrite_result.get("clinical_understanding") or {},
+        structured_terms,
+        (state.get("rerank_result") or {}).get("debug") or {},
     )
     # Bloco PCDT só na pergunta corrente (turno final do utilizador).
     final_human = (
@@ -119,8 +124,12 @@ def _build_llm(settings: Settings) -> ChatOllama:
 
 
 def _structured_disease_name(state: ChatRAGState) -> str:
-    expansion = state.get("query_expansion") or {}
-    structured = expansion.get("structured_terms") or {}
+    structured = (
+        state.get("structured_terms")
+        or (state.get("rewrite_result") or {}).get("structured_terms")
+        or (state.get("query_expansion") or {}).get("structured_terms")
+        or {}
+    )
     understanding = state.get("clinical_understanding") or {}
     disease = understanding.get("detected_disease") or {}
     return str(
@@ -132,8 +141,12 @@ def _structured_disease_name(state: ChatRAGState) -> str:
 
 
 def _structured_disease_norm(state: ChatRAGState) -> str:
-    expansion = state.get("query_expansion") or {}
-    structured = expansion.get("structured_terms") or {}
+    structured = (
+        state.get("structured_terms")
+        or (state.get("rewrite_result") or {}).get("structured_terms")
+        or (state.get("query_expansion") or {}).get("structured_terms")
+        or {}
+    )
     understanding = state.get("clinical_understanding") or {}
     disease = understanding.get("detected_disease") or {}
     return normalize_text_for_match(
@@ -178,11 +191,7 @@ def _context_mismatch_answer(state: ChatRAGState) -> str | None:
 
 def _prompt_context_preview(state: ChatRAGState, max_chars: int = 1200) -> str:
     docs = state.get("retrieved_docs") or []
-    preview = "\n\n---\n\n".join(
-        format_context_document(doc, i)
-        for i, doc in enumerate(docs[:2], start=1)
-    )
-    return preview[:max_chars]
+    return format_context_preview(docs, max_chars=max_chars)
 
 
 async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
@@ -193,8 +202,9 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
     pid = state.get("patient_id") or None
     t0 = time.perf_counter()
     docs = state.get("retrieved_docs") or []
-    expansion = state.get("query_expansion") or {}
-    structured = expansion.get("structured_terms") or {}
+    rewrite_result = state.get("rewrite_result") or {}
+    query_expansion = state.get("query_expansion") or {}
+    structured = state.get("structured_terms") or rewrite_result.get("structured_terms") or query_expansion.get("structured_terms") or {}
     top_stems = [d.metadata.get("source_stem") for d in docs[:5]]
     top_sections = [d.metadata.get("section") or d.metadata.get("header_1") for d in docs[:5]]
     context_preview = _prompt_context_preview(state)
@@ -209,7 +219,7 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
         patient_id=pid,
         retrieved_docs_count=len(docs),
         disease=structured.get("diretriz") or structured.get("disease"),
-        expanded_query=expansion.get("expanded_query"),
+        expanded_query=state.get("expanded_query") or rewrite_result.get("expanded_query"),
         top_source_stems=top_stems,
         top_sections=top_sections,
         prompt_context_preview=truncate(context_preview, n=1000),
@@ -233,7 +243,19 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
         out = {
             "answer": controlled_answer,
         }
-        return {**out, "rag_audit_payload": build_pipeline_audit({**dict(state), **out}, generate_mode="grounded")}
+        generation_result = {"mode": "grounded", "answer": controlled_answer}
+        audit_trace = append_audit_step(
+            {**dict(state), **out, "generation_result": generation_result},
+            node="generate_grounded_answer",
+            output_summary={"mode": "grounded", "controlled": True},
+            settings=settings,
+        )
+        return {
+            **out,
+            "generation_result": generation_result,
+            "audit_trace": audit_trace,
+            "rag_audit_payload": build_pipeline_audit({**dict(state), **out, "generation_result": generation_result, "audit_trace": audit_trace}, generate_mode="grounded"),
+        }
 
     llm = _build_llm(settings)
     messages = _build_messages(state)
@@ -267,25 +289,56 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
     # Histórico atualizado no guardrail_node, que conhece a resposta final
     # (pode ter sido substituída ou modificada pelo guardrail).
     out = {"answer": ans}
-    return {**out, "rag_audit_payload": build_pipeline_audit({**dict(state), **out}, generate_mode="grounded")}
+    generation_result = {"mode": "grounded", "answer": ans}
+    audit_trace = append_audit_step(
+        {**dict(state), **out, "generation_result": generation_result},
+        node="generate_grounded_answer",
+        output_summary={"mode": "grounded", "answer_chars": len(ans), "sources": len(stems)},
+        settings=settings,
+    )
+    return {
+        **out,
+        "generation_result": generation_result,
+        "audit_trace": audit_trace,
+        "rag_audit_payload": build_pipeline_audit({**dict(state), **out, "generation_result": generation_result, "audit_trace": audit_trace}, generate_mode="grounded"),
+    }
 
 
 async def generate_grounded_answer_node(state: ChatRAGState, settings: Settings) -> dict:
     """Generate grounded answer using validated retrieved_docs."""
+    quality = (state.get("rerank_result") or {}).get("context_quality")
+    if getattr(settings, "rag_require_source_for_clinical_answer", True) and quality != CONTEXT_SUFFICIENT:
+        return await generate_insufficient_context_node(
+            {
+                **dict(state),
+                "insufficiency_reason": state.get("insufficiency_reason") or "contexto não validado como suficiente",
+            },
+            settings,
+        )
     return await generate_node(state, settings)
 
 
 async def generate_insufficient_context_node(state: ChatRAGState, settings: Settings) -> dict:
     """Return controlled insufficiency answer without asking the LLM for clinical content."""
-    del settings
-    structured = state.get("structured_terms") or {}
+    structured = (
+        state.get("structured_terms")
+        or (state.get("rewrite_result") or {}).get("structured_terms")
+        or (state.get("query_expansion") or {}).get("structured_terms")
+        or {}
+    )
+    rerank_result = state.get("rerank_result") or {}
     disease = structured.get("diretriz") or structured.get("disease") or "a condição solicitada"
     intent = structured.get("intent") or "a pergunta"
-    reason = state.get("insufficiency_reason") or "contexto recuperado insuficiente"
+    reason = rerank_result.get("insufficiency_reason") or state.get("insufficiency_reason") or "contexto recuperado insuficiente"
+    found_sections = rerank_result.get("found_sections") or []
     answer = (
-        "Não encontrei trechos suficientes nos PCDTs recuperados para responder com segurança "
-        f"sobre {disease} e {intent}. Motivo: {reason}."
+        f"Não encontrei trechos suficientes nos PCDTs recuperados para responder com segurança. "
+        f"Identifiquei a pergunta como relacionada a {disease} e {intent}, "
+        f"mas os trechos recuperados não foram suficientes para responder com segurança. "
+        f"Motivo: {reason}."
     )
+    if found_sections:
+        answer += f" Seções encontradas: {', '.join(str(v) for v in found_sections[:5] if v)}."
     out = {"answer": answer}
     audit(
         "rag_generate_insufficient_context",
@@ -294,12 +347,23 @@ async def generate_insufficient_context_node(state: ChatRAGState, settings: Sett
         disease=disease,
         insufficiency_reason=reason,
     )
-    return {**out, "rag_audit_payload": build_pipeline_audit({**dict(state), **out}, generate_mode="insufficient")}
+    generation_result = {"mode": "insufficient", "answer": answer}
+    audit_trace = append_audit_step(
+        {**dict(state), **out, "generation_result": generation_result},
+        node="generate_insufficient_context",
+        output_summary={"mode": "insufficient", "reason": reason},
+        settings=settings,
+    )
+    return {
+        **out,
+        "generation_result": generation_result,
+        "audit_trace": audit_trace,
+        "rag_audit_payload": build_pipeline_audit({**dict(state), **out, "generation_result": generation_result, "audit_trace": audit_trace}, generate_mode="insufficient"),
+    }
 
 
 async def generate_direct_answer_node(state: ChatRAGState, settings: Settings) -> dict:
     """Answer non-RAG interactions without inventing clinical guidance."""
-    del settings
     query = normalize_text_for_match(state.get("query") or "")
     if any(term in query for term in ("ola", "oi", "bom dia", "boa tarde", "boa noite")):
         answer = "Olá. Como posso ajudar com uma pergunta clínica ou consulta a PCDTs?"
@@ -315,4 +379,16 @@ async def generate_direct_answer_node(state: ChatRAGState, settings: Settings) -
         patient_id=state.get("patient_id") or None,
         router_decision=state.get("router_decision") or {},
     )
-    return {**out, "rag_audit_payload": build_pipeline_audit({**dict(state), **out}, generate_mode="direct")}
+    generation_result = {"mode": "direct", "answer": answer}
+    audit_trace = append_audit_step(
+        {**dict(state), **out, "generation_result": generation_result},
+        node="generate_direct_answer",
+        output_summary={"mode": "direct"},
+        settings=settings,
+    )
+    return {
+        **out,
+        "generation_result": generation_result,
+        "audit_trace": audit_trace,
+        "rag_audit_payload": build_pipeline_audit({**dict(state), **out, "generation_result": generation_result, "audit_trace": audit_trace}, generate_mode="direct"),
+    }

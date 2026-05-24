@@ -61,6 +61,12 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `RAG_USE_CROSS_ENCODER_RERANK` ou `MEDICO_RAG_USE_CROSS_ENCODER_RERANK` | `false` | Liga reranking opcional por CrossEncoder após o rerank heurístico |
 | `RAG_CROSS_ENCODER_MODEL` ou `MEDICO_RAG_CROSS_ENCODER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Modelo `sentence-transformers` usado quando CrossEncoder está ativo |
 | `RAG_CROSS_ENCODER_TOP_N` ou `MEDICO_RAG_CROSS_ENCODER_TOP_N` | `15` | Quantos documentos heurísticos são enviados ao CrossEncoder |
+| `MEDICO_RAG_PIPELINE_VERSION` | `separated_nodes_v2` | Versão lógica gravada na auditoria do pipeline |
+| `MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS` | `2` | Máximo de buscas por pergunta: tentativa inicial + um fallback |
+| `MEDICO_RAG_USE_LLM_RERANK` | `false` | Liga rerank/validação por LLM com fallback heurístico validado |
+| `MEDICO_RAG_LLM_RERANK_TOP_N` | `12` | Número de candidatos enviados ao LLM reranker quando habilitado |
+| `MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER` | `true` | Impede geração clínica grounded sem contexto validado suficiente |
+| `MEDICO_RAG_DEBUG` | `false` | Habilita diagnóstico adicional em rotas/ferramentas de debug |
 | `MEDICO_DATABASE_URL`       | `sqlite+aiosqlite:///./assistente_medico.db` | URL do banco (SQLite assíncrono por padrão)                              |
 | `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para `assistente_medico.jsonl` |
 | `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível efetivo dos loggers `assistente_medico.*` (ex.: `DEBUG`, `INFO`)                    |
@@ -90,6 +96,34 @@ Consulta rápida (exemplos):
 grep '"event":"guardrail_blocked"' logs/assistente_medico.jsonl
 grep '"event":"chat_response_done"' logs/assistente_medico.jsonl | head
 ```
+
+## Grafo RAG do chat
+
+O chat real (`POST /api/assistant/chat`, tanto JSON quanto SSE) passa pelo mesmo grafo:
+
+```text
+load_memory
+-> router_search_needed
+   -> generate_direct_answer -> guardrail -> save_memory
+   -> rewrite_query -> retrieve_attempt_1 -> rerank_and_validate_context
+      -> context_quality_router
+         -> generate_grounded_answer -> guardrail -> save_memory
+         -> fallback_retrieve_attempt_2 -> rerank_and_validate_context
+            -> generate_grounded_answer | generate_insufficient_context
+            -> guardrail -> save_memory
+```
+
+Contratos principais no estado:
+
+- `memory_result`: histórico enviado no request, memória persistida em `ConversationMemoryStore` e últimos `structured_terms`. Não usa regex nem lista fixa de doenças.
+- `router_result`: decisão conservadora sobre necessidade de RAG. Perguntas clínicas e follow-ups clínicos seguem para busca.
+- `rewrite_result`: `resolved_query`, `expanded_query`, `structured_terms`, candidatos de catálogo e entendimento clínico.
+- `retrieve_result`: tentativa, query enviada ao Chroma, filtro de metadata, candidatos e configuração efetiva.
+- `rerank_result`: documentos finais, `context_quality` (`sufficient`, `partial`, `insufficient`), `failure_type`, seções esperadas/encontradas e debug do LLM rerank.
+- `generation_result` e `guardrail_result`: modo de geração e avaliação final de segurança.
+- `audit_trace`: append-only por nó, com timestamps, entradas/saídas resumidas, versão do pipeline e configuração.
+
+`retrieve_attempt_1` e `fallback_retrieve_attempt_2` são as únicas buscas possíveis. Se uma pergunta pede seção específica, por exemplo `CRITÉRIOS DE INCLUSÃO`, e só há chunk de `CID-10`, o contexto fica `partial`, `context_sufficient=false` e o fallback é acionado. Depois da segunda tentativa, contexto ainda parcial/insuficiente gera resposta controlada, sem LLM inventar conteúdo clínico.
 
 ## Recuperação RAG
 
@@ -143,7 +177,14 @@ O prompt enviado ao LLM inclui metadados ricos por documento:
 
 A resposta continua citando documentos pelo identificador `[n]`. A política de segurança de doses/posologia permanece sob o guardrail existente.
 
-Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `original_query`, `expanded_query`, `structured_terms`, `added_terms`, documentos finais, scores, `ranking_reasons`, uso de CrossEncoder e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta. Para depurar expansão e auditoria, confira `query_expansion`, `clinical_understanding` e `rag_audit_payload` no retorno/stream do chat ou use o RAG Inspector em `llm/scripts/rag_inspector_app.py`.
+Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `original_query`, `expanded_query`, `structured_terms`, tentativas de retrieve, documentos removidos, documentos finais, scores, `ranking_reasons`, resultado do rerank, modo de geração e resposta final pós-guardrail. O `audit_trace` no estado é append-only por etapa. Falha de auditoria é registrada em log e não derruba a resposta. Para depurar expansão e auditoria, confira `rewrite_result`, `rerank_result`, `rag_audit_payload` e `audit_trace` no retorno/stream do chat ou use o RAG Inspector em `llm/scripts/rag_inspector_app.py`.
+
+### Troubleshooting RAG
+
+- Inspector diferente do chat: confirme `MEDICO_CHROMA_PERSIST_DIR`, `MEDICO_CHROMA_COLLECTION`, `MEDICO_OLLAMA_EMBED_MODEL` e se o inspector está mostrando `uses_shared_debug_pipeline=true`.
+- Catálogo achou doença, mas Chroma não achou chunks: confira se `build-conitec-catalog`, `chunk-pcdt --force` e `build-vectorstore --force` foram executados na mesma base.
+- LLM rerank desligado: por padrão `MEDICO_RAG_USE_LLM_RERANK=false` por desempenho; o rerank heurístico continua determinístico. Habilite para auditoria adicional quando houver Ollama disponível.
+- Pergunta clínica sem fonte: com `MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER=true`, o backend retorna resposta de contexto insuficiente em vez de gerar resposta clínica sem documentos validados.
 
 Exemplos rápidos para testar:
 
