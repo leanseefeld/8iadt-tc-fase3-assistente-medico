@@ -79,11 +79,7 @@ export function ChatPage() {
     if (!trimmed) {
       return;
     }
-    // Turnos anteriores concluídos (sem a pergunta atual, enviada em `message`).
-    const messageHistory = messages
-      .filter((m) => !m.streaming && m.text.trim())
-      .map((m) => ({ role: m.role, content: m.text }));
-
+    // Histórico multi-turno: servidor (threadId + checkpointer); não enviar messageHistory.
     setMessages((m) => [
       ...m,
       { id: `u-${Date.now()}`, role: 'user', text: trimmed },
@@ -98,7 +94,6 @@ export function ChatPage() {
     try {
       const res = await postAssistantChatMock(activePatientId!, trimmed, {
         threadId: assistantThreadId ?? undefined,
-        messageHistory,
         onToken: (delta) => {
           setMessages((m) =>
             patchAssistantMessage(m, assistantId, {

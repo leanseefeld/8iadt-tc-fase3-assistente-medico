@@ -21,7 +21,7 @@ from assistente_medico_api.graph.clinical_query_understanding import normalize_t
 from assistente_medico_api.observability.audit import audit, truncate
 
 # Persona e limites de segurança para o assistente (pt-BR).
-_SYSTEM_PROMPT = """\
+GENERATE_SYSTEM_PROMPT = """\
 Você é um assistente clínico de apoio a médicos no Brasil.
 Responda sempre em português do Brasil, de forma objetiva e profissional.
 Seja direto: vá ao ponto sem introduções desnecessárias, e use listas apenas quando genuinamente útil.
@@ -48,6 +48,25 @@ Responda diretamente à "Mensagem do médico:", usando o restante do contexto ap
 """
 
 
+def _serialize_messages(messages: list[BaseMessage]) -> list[dict]:
+    """Serializa mensagens LangChain para persistência JSON (SFT/auditoria)."""
+    out: list[dict] = []
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            role = "system"
+        elif isinstance(msg, HumanMessage):
+            role = "user"
+        elif isinstance(msg, AIMessage):
+            role = "assistant"
+        else:
+            role = getattr(msg, "type", "unknown")
+        content = msg.content
+        if isinstance(content, list):
+            content = "".join(str(p) for p in content)
+        out.append({"role": role, "content": str(content or "")})
+    return out
+
+
 def _build_messages(state: ChatRAGState) -> list:
     """Monta as mensagens para o LLM a partir do estado atual do grafo."""
     docs = state.get("retrieved_docs") or []
@@ -72,7 +91,7 @@ def _build_messages(state: ChatRAGState) -> list:
         f"Mensagem do médico:\n{user_text}\n\n"
 
     )
-    out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
+    out: list = [SystemMessage(content=GENERATE_SYSTEM_PROMPT)]
     for turn in state.get("chat_history") or []:
         text = (turn.get("content") or "").strip()
         if not text:
@@ -248,11 +267,12 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
         return {
             "answer": controlled_answer,
             "rag_audit_payload": audit_payload,
+            "generate_llm_output": controlled_answer,
         }
 
     llm = _build_llm(settings)
     messages = _build_messages(state)
-    print(f"Messages: {messages}".replace("\\n", "\n"))
+    serialized_input = _serialize_messages(messages)
 
     # Acumula tokens; os eventos on_chat_model_stream são emitidos
     # automaticamente pelo sistema de callbacks do LangChain/LangGraph.
@@ -282,4 +302,9 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
     )
     # Histórico atualizado no guardrail_node, que conhece a resposta final
     # (pode ter sido substituída ou modificada pelo guardrail).
-    return {"answer": ans, "rag_audit_payload": audit_payload}
+    return {
+        "answer": ans,
+        "rag_audit_payload": audit_payload,
+        "generate_llm_input": serialized_input,
+        "generate_llm_output": ans,
+    }

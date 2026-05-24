@@ -10,14 +10,7 @@ import {
 
 export type { ChatStreamHandlers };
 
-/** Turnos anteriores à `message` atual (contrato alinhado ao backend). */
-export type AssistantMessageHistoryItem = {
-  role: 'user' | 'assistant';
-  content: string;
-};
-
 export type AssistantChatRequestOptions = ChatStreamHandlers & {
-  messageHistory?: AssistantMessageHistoryItem[];
   /** Memória de conversa no servidor; omitir na primeira mensagem da sessão. */
   threadId?: string;
 };
@@ -28,14 +21,10 @@ export async function postAssistantChatMock(
   options?: AssistantChatRequestOptions,
 ): Promise<ChatResponse> {
   const url = `${API_BASE_URL}/assistant/chat`;
-  const messageHistory = options?.messageHistory;
   const body = JSON.stringify({
     patientId,
     message,
     ...(options?.threadId ? { threadId: options.threadId } : {}),
-    ...(messageHistory?.length
-      ? { messageHistory: messageHistory }
-      : {}),
   });
   const useSse = Boolean(
     options && (options.onToken != null || options.onMeta != null),

@@ -341,10 +341,13 @@ Corpo: `{ "resolved": boolean }`
 
 Campos opcionais:
 
-- `threadId` — id da conversa no servidor (LangGraph **MemorySaver**). Na primeira mensagem omitir; nas seguintes reenviar o valor devolvido em `ChatResponse.threadId` (ou no evento SSE `done`) para memória entre turnos **sem** depender só do cliente.
-- `messageHistory` — array de `{ "role": "user" | "assistant", "content": "string" }` com turnos **anteriores** à `message` atual (máx. 20 entradas). Continua válido para clientes sem `threadId` ou como **fallback** quando o checkpointer ainda não tem histórico (ex.: novo thread ou processo reiniciado).
+- `threadId` — id da conversa no servidor (mesmo id em SQLite + LangGraph **MemorySaver**). Na primeira mensagem omitir; nas seguintes reenviar o valor devolvido em `ChatResponse.threadId` (ou no evento SSE `done`).
 
-Quando já existe histórico persistido no thread, o servidor **ignora** `messageHistory` para montar o estado (fonte de verdade: checkpointer).
+**Cabeçalho obrigatório:** `X-User-Id` — identificação do médico (fake auth no protótipo); sem ele o backend responde **400**.
+
+O cliente oficial (`ChatPage`) envia apenas `patientId`, `message` e `threadId` após o primeiro turno — **não** envia `messageHistory`.
+
+**Legado (backend):** `messageHistory` — array opcional de turnos anteriores (máx. 20); ignorado quando o checkpointer já tem histórico no thread. Reservado para clientes legados ou testes.
 
 O servidor FastAPI aceita `patientId` (alias); internamente pode mapear para `patient_id`.
 
@@ -374,7 +377,7 @@ O cliente (`src/api/sseChat.ts`) agrega os `token` em `ChatResponse.text` e usa 
 **Premissas alteradas em relação ao protótipo só-mock:**
 
 - Perguntas «não mapeadas» deixam de ser só fallback na UI: com backend ativo, o modelo responde com RAG sobre PCDTs indexados em `vectorstore/chroma`.
-- Memória de conversa: `threadId` + checkpointer no backend; grafo inclui nó de **reescrita de pergunta** para o retrieve quando há histórico.
+- Memória de conversa: `threadId` + checkpointer no backend; turnos persistidos em SQLite (`conversations` / `conversation_messages`); grafo inclui nó de **reescrita de pergunta** para o retrieve quando há histórico.
 
 ---
 

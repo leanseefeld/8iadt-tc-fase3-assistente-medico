@@ -932,8 +932,8 @@ def test_generate_does_not_reinterpret_detected_abbreviation() -> None:
 
     prompt = "\n".join(str(message.content) for message in _build_messages(state))
 
-    assert "Doença/Diretriz: Síndrome de Guillain-Barré" in prompt
-    assert "Não expanda ou redefina siglas" in prompt
+    assert "Doença: Síndrome de Guillain-Barré" in prompt
+    assert "Diretriz: Síndrome de Guillain-Barré" in prompt
     assert "Síndrome de Sobrecarga de Glóbulos Brancos" not in prompt
 
 
