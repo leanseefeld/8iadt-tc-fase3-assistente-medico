@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,10 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from assistente_medico_api.models.alert import Alert
 from assistente_medico_api.models.exam import Exam
 from assistente_medico_api.models.patient import Patient
-from assistente_medico_api.repositories import alert_repo
+from assistente_medico_api.repositories import alert_repo, patient_repo
 from assistente_medico_api.schemas.alerts import Alert as AlertSchema, AlertCreateRequest
-from assistente_medico_api.observability.audit import audit, truncate
-
+from assistente_medico_api.observability.audit import truncate
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 
 def _new_alert_id() -> str:
     return f"alert-{uuid4()}"
@@ -39,20 +38,24 @@ async def create_alert(
         resolved=False,
     )
     created = await alert_repo.create_alert(session, alert)
-    lvl = logging.WARNING if str(severity).lower() == "critical" else logging.INFO
-    audit(
-        "clinical_alert_created",
-        kind="clinical",
-        level=lvl,
+    pname = None
+    row = await patient_repo.get_patient_by_id(session, patient_id)
+    if row is not None:
+        pname = row.name
+
+    clinical_audit(
+        ClinicalAuditAction.ALERTA_EMITIDO,
         patient_id=patient_id,
-        alert_id=created.id,
-        severity=severity,
-        category=category,
-        team=team,
-        message_snippet=truncate(message),
+        patient_name=pname,
+        descricao=f"Alerta {created.id} ({severity}/{category}): {truncate(message)}",
+        detalhes={
+            "alert_id": created.id,
+            "severidade": severity,
+            "categoria": category,
+            "equipe": team,
+        },
     )
     return created
-
 
 async def generate_alerts_for_patient(
     session: AsyncSession,

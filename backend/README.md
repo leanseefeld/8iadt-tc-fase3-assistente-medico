@@ -74,7 +74,7 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `RAG_RETRIEVE_CANDIDATES_K` ou `MEDICO_RAG_RETRIEVE_CANDIDATES_K` | `30` | Quantidade inicial de candidatos Chroma antes do reranking |
 | `RAG_RETRIEVE_FINAL_K` ou `MEDICO_RAG_RETRIEVE_FINAL_K` | `6` | Quantidade final de documentos enviados ao prompt |
 | `RAG_AUDIT_JSONL` ou `MEDICO_RAG_AUDIT_JSONL` | `../llm/data/audit/rag_interactions.jsonl` | Arquivo JSONL de auditoria RAG |
-| `RAG_AUDIT_ENABLED` ou `MEDICO_RAG_AUDIT_ENABLED` | `true` | Liga/desliga escrita da auditoria RAG |
+| `RAG_AUDIT_ENABLED` ou `MEDICO_RAG_AUDIT_ENABLED` | `false` | Liga escrita técnica JSONL de cada turno RAG (ficheiro `RAG_AUDIT_JSONL`; desligado por defeito) |
 | `RAG_MIN_FINAL_SCORE` ou `MEDICO_RAG_MIN_FINAL_SCORE` | `-5.0` | Score mínimo para um documento entrar no prompt final |
 | `RAG_REQUIRE_CATALOG_MATCH_WHEN_CONFIDENT` ou `MEDICO_RAG_REQUIRE_CATALOG_MATCH_WHEN_CONFIDENT` | `true` | Quando há candidato de catálogo confiável, só retorna documentos compatíveis |
 | `RAG_MIN_FINAL_SCORE_WITH_CATALOG` ou `MEDICO_RAG_MIN_FINAL_SCORE_WITH_CATALOG` | `0.0` | Score mínimo quando o filtro de catálogo confiante está ativo |
@@ -93,33 +93,27 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `MEDICO_USE_SPACY` | `true` | Ativa spaCy NER leve quando modelo local existir |
 | `MEDICO_SPACY_MODEL` | `pt_core_news_sm` | Modelo spaCy local usado no fallback leve |
 | `MEDICO_DATABASE_URL`       | `sqlite+aiosqlite:///./assistente_medico.db` | URL do banco (SQLite assíncrono por padrão)                              |
-| `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para `assistente_medico.jsonl` |
-| `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível efetivo dos loggers `assistente_medico.*` (ex.: `DEBUG`, `INFO`)                    |
+| `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para ficheiros JSONL de **auditoria clínica** diários (`audit_clinical_YYYY-MM-DD.jsonl`) |
+| `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível dos loggers `assistente_medico.*` na consola |
+| `CLINICAL_AUDIT_ENABLED` ou `MEDICO_CLINICAL_AUDIT_ENABLED` | `true` | Liga a escrita de `audit_clinical_YYYY-MM-DD.jsonl` sob `MEDICO_LOG_DIR`. Durante `pytest`, fica automaticamente em `false` no `conftest` |
 
 ## Logging e auditoria
 
-O backend registra eventos estruturados em **JSON**, linha a linha:
-
-- **Stdout** (via handler do logger `assistente_medico`): útil com `uvicorn` e gravação pelo orquestrador.
-- **Arquivo rotativo** `assistente_medico.jsonl` em `MEDICO_LOG_DIR` (padrão `./logs` na raiz do repo; diretório criado na subida do processo).
+- **Consola:** o pacote `assistente_medico` emite linhas legíveis (`Nível [logger] mensagem`) configuráveis com `MEDICO_LOG_LEVEL`.
+- **Auditoria clínica (JSONL):** ações relevantes (admissão, alta, exames, alertas, prescrições, fluxo de decisão, etc.) e **marcadores compactos do assistente/RAG** (ex.: recuperação/generação/reescrita, guardrail, início do backend e turnos do chat) são **anexadas** a ficheiros diários na pasta `logs/` (ou `MEDICO_LOG_DIR`): `audit_clinical_YYYY-MM-DD.jsonl`. O **dia** está no nome do ficheiro; cada linha é um JSON compacto com campos como `acao`, `medico_id` (cabeçalho `X-User-Id`), `patient_id`, `patient_name`, `descricao`, `detalhes` opcional e `request_id` opcional. Para desativar também em desenvolvimento, use `CLINICAL_AUDIT_ENABLED=false` / `MEDICO_CLINICAL_AUDIT_ENABLED=false`. Durante `pytest`, a escrita está **automaticamente desligada** pelo `backend/tests/conftest.py`. O marcador **`backend_assistente_iniciado`** no JSONL é gravado **no máximo uma vez por processo** (evita repetições se a lifespan do FastAPI iniciar várias vezes no mesmo PID); cada worker/reload novo continua com a sua própria linha.
+- **Simulações do protótipo:** o frontend pode enviar `X-Audit-Context: demo` em `PATCH .../vitals` e `PATCH .../exams/...` para gravar ações `simulacao_sinal_vital` e `simulacao_resultado_exame` em vez das variantes “reais”.
+- **Auditoria estruturada (consola/rotação):** eventos detalhados do pipeline RAG, chat (`kind=chat`|`rag`), guardrail etc. continuam a ser registados pela função `audit()` (loggers JSON/legíveis configurados por `logging_setup`), em paralelo com o JSONL clínico onde aplicável.
+- **Auditoria técnica RAG (opcional):** com `RAG_AUDIT_ENABLED=true`, o guardrail pode ainda gravar o payload completo da interação em `RAG_AUDIT_JSONL` (ficheiro separado, pensado para depuração — ver secção de recuperação abaixo).
 
 Middleware `RequestContextMiddleware`:
 
-- Lê ou gera `X-Request-Id` e devolve o mesmo id no header de resposta para correlação cliente/servidor.
-- Emite `event: http_request` com `latency_ms`, método, path HTTP e status.
+- Define `X-Request-Id` (ou reutiliza o enviado pelo cliente) e devolve o mesmo id na resposta.
+- Propaga `X-User-Id` e `X-Audit-Context` para o contexto da requisição (usados na auditoria clínica).
 
-Eventos principais (campo `event` no JSON):
-
-- **Chat:** `chat_request_received`, `chat_response_done` (JSON ou SSE, com contagem aproximada de chunks em `tokens_streamed` no modo stream).
-- **Decision flow:** `decision_flow_run`, `decision_flow_done`.
-- **RAG (LangGraph):** `rag_rewrite_done`, `rag_retrieve_done`, `rag_generate_done`, `guardrail_*` (classificação e bloqueios).
-- **Clínico:** `prescription_created`, `prescription_archived`, `clinical_alert_created`, `vitals_recorded`, `vitals_critical_detected`, `exam_status_changed`, `exam_attachment_uploaded`, etc.
-
-Consulta rápida (exemplos):
+Exemplo de leitura rápida da auditoria clínica:
 
 ```bash
-grep '"event":"guardrail_blocked"' logs/assistente_medico.jsonl
-grep '"event":"chat_response_done"' logs/assistente_medico.jsonl | head
+tail -n 5 logs/audit_clinical_$(date +%Y-%m-%d).jsonl | jq .
 ```
 
 ## Grafo RAG do chat
@@ -230,7 +224,7 @@ O entendimento clínico da pergunta (intenção, doença/CID explícitos, entida
 
 A resposta continua citando documentos pelo identificador `[n]`. A política de segurança de doses/posologia permanece sob o guardrail existente.
 
-Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `original_query`, `expanded_query`, `structured_terms`, `added_terms`, documentos finais, scores, `ranking_reasons`, uso de CrossEncoder e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta. Para depurar expansão e auditoria (incluindo entendimento clínico fora do prompt), confira `query_expansion`, `clinical_understanding` e `rag_audit_payload` no retorno/stream do chat ou use o RAG Inspector em `llm/scripts/rag_inspector_app.py`.
+Auditoria técnica RAG (opcional): com `RAG_AUDIT_ENABLED=true`, cada interação pode gravar uma linha JSON em `RAG_AUDIT_JSONL` (payload expandido para depuração — ver RAG Inspector).
 
 Exemplos rápidos para testar:
 

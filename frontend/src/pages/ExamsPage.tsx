@@ -73,16 +73,20 @@ export function ExamsPage() {
         ? `Valor crítico registrado (${resultStr}). Avaliação urgente recomendada (mock).`
         : `Resultado ${resultStr} dentro do fluxo de demonstração.`;
 
-    await patchPatientMock(patient.id, {
-      exams: [
-        {
-          id: modalExam.id,
-          status,
-          result: resultStr,
-          interpretation,
-        },
-      ],
-    });
+    await patchPatientMock(
+      patient.id,
+      {
+        exams: [
+          {
+            id: modalExam.id,
+            status,
+            result: resultStr,
+            interpretation,
+          },
+        ],
+      },
+      { examResultAuditDemo: true },
+    );
     await refetch();
     await refreshAlertBadge();
     showToast(

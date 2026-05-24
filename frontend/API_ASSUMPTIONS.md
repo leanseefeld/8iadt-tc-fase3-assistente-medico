@@ -155,6 +155,7 @@ O histórico completo é consumido separadamente pela dashboard via `GET /patien
 | `sources`    | string[]   |
 | `reasoning`  | string[]   |
 | `threadId`   | string     |
+| `messageId`  | string (opcional) — id persistido da mensagem do assistente no turno |
 
 ### `DecisionFlowResponse`
 
@@ -341,10 +342,13 @@ Corpo: `{ "resolved": boolean }`
 
 Campos opcionais:
 
-- `threadId` — id da conversa no servidor (LangGraph **MemorySaver**). Na primeira mensagem omitir; nas seguintes reenviar o valor devolvido em `ChatResponse.threadId` (ou no evento SSE `done`) para memória entre turnos **sem** depender só do cliente.
-- `messageHistory` — array de `{ "role": "user" | "assistant", "content": "string" }` com turnos **anteriores** à `message` atual (máx. 20 entradas). Continua válido para clientes sem `threadId` ou como **fallback** quando o checkpointer ainda não tem histórico (ex.: novo thread ou processo reiniciado).
+- `threadId` — id da conversa no servidor (mesmo id em SQLite + LangGraph **MemorySaver**). Na primeira mensagem omitir; nas seguintes reenviar o valor devolvido em `ChatResponse.threadId` (ou no evento SSE `done`).
 
-Quando já existe histórico persistido no thread, o servidor **ignora** `messageHistory` para montar o estado (fonte de verdade: checkpointer).
+**Cabeçalho obrigatório:** `X-User-Id` — identificação do médico (fake auth no protótipo); sem ele o backend responde **400**.
+
+O cliente oficial (`ChatPage`) envia apenas `patientId`, `message` e `threadId` após o primeiro turno — **não** envia `messageHistory`.
+
+**Legado (backend):** `messageHistory` — array opcional de turnos anteriores (máx. 20); ignorado quando o checkpointer já tem histórico no thread. Reservado para clientes legados ou testes.
 
 O servidor FastAPI aceita `patientId` (alias); internamente pode mapear para `patient_id`.
 
@@ -359,7 +363,7 @@ O servidor FastAPI aceita `patientId` (alias); internamente pode mapear para `pa
 | `sources` | `{ "sources": string[] }` | Rótulos das fontes PCDT recuperadas |
 | `reasoning` | `{ "steps": string[] }` | Traço curto da etapa de recuperação (no cliente mapeado para o painel «raciocínio») |
 | `token` | `{ "content": string }` | Fragmento incremental da resposta do modelo |
-| `done` | `{ "threadId": string }` | Fim do fluxo com sucesso (id do thread para as próximas mensagens) |
+| `done` | `{ "threadId": string, "messageId": string }` | Fim do fluxo com sucesso (thread + id da mensagem do assistente persistida) |
 | `error` | `{ "detail": string }` | Erro durante recuperação ou geração |
 
 O cliente (`src/api/sseChat.ts`) agrega os `token` em `ChatResponse.text` e usa `sources` + `steps` como `sources` e `reasoning`.
@@ -367,14 +371,38 @@ O cliente (`src/api/sseChat.ts`) agrega os `token` em `ChatResponse.text` e usa 
 **Modo alternativo — JSON (bloqueante):**
 
 - Sem `Accept: text/event-stream` (ex.: `Accept: application/json` ou omisso, conforme implementação do cliente)
-- **Resposta 200:** corpo JSON alinhado a `ChatResponse` (`text`, `sources`, `reasoning`, `threadId`)
+- **Resposta 200:** corpo JSON alinhado a `ChatResponse` (`text`, `sources`, `reasoning`, `threadId`, `messageId`)
 
 **Erros HTTP:** ex. **503** se Chroma/Ollama indisponíveis na inicialização ou falha grave na invocação do grafo (detalhe em `detail` quando aplicável).
+
+---
+
+### 7.1 `PATCH /assistant/conversations/:conversationId/messages/:messageId`
+
+Avalia ou remove avaliação de uma mensagem do assistente (👍/👎 na UI).
+
+**Cabeçalho obrigatório:** `X-User-Id` (mesmo médico da conversa).
+
+**Corpo:**
+
+```json
+{ "feedbackRating": "positive" | "negative" | null }
+```
+
+`null` remove a avaliação (`feedback_rating` volta a `NULL` no SQLite).
+
+**Resposta 200:**
+
+```json
+{ "messageId": "msg-...", "feedbackRating": "positive" | "negative" | null }
+```
+
+**Erros:** **400** se a mensagem não for do assistente; **403** se a conversa for de outro médico; **404** conversa/mensagem inexistente.
 
 **Premissas alteradas em relação ao protótipo só-mock:**
 
 - Perguntas «não mapeadas» deixam de ser só fallback na UI: com backend ativo, o modelo responde com RAG sobre PCDTs indexados em `vectorstore/chroma`.
-- Memória de conversa: `threadId` + checkpointer no backend; grafo inclui nó de **reescrita de pergunta** para o retrieve quando há histórico.
+- Memória de conversa: `threadId` + checkpointer no backend; turnos persistidos em SQLite (`conversations` / `conversation_messages`); grafo inclui nó de **reescrita de pergunta** para o retrieve quando há histórico.
 
 ---
 

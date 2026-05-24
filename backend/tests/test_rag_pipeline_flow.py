@@ -2,12 +2,47 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
+from assistente_medico_api.deps import get_session
 from assistente_medico_api.main import create_app
+
+
+def _make_app_with_graph(graph):
+    """Creates app with graph set and DB/persistence layer mocked out."""
+    app: FastAPI = create_app()
+    app.state.chat_graph = graph
+
+    mock_session = AsyncMock()
+    mock_session.commit = AsyncMock()
+
+    async def _mock_get_session():
+        yield mock_session
+
+    app.dependency_overrides[get_session] = _mock_get_session
+    return app
+
+
+def _persistence_patches():
+    """Context manager that stubs resolve_conversation and append_turn."""
+    fake_conv = MagicMock()
+    fake_conv.id = "conv-test"
+
+    resolve = patch(
+        "assistente_medico_api.api.chat.chat_persistence.resolve_conversation",
+        new_callable=AsyncMock,
+        return_value=(fake_conv, "thread-test"),
+    )
+    append = patch(
+        "assistente_medico_api.api.chat.chat_persistence.append_turn",
+        new_callable=AsyncMock,
+        return_value="msg-test",
+    )
+    return resolve, append
 
 
 class _SseGraph:
@@ -104,17 +139,18 @@ class _InsufficientGraph(_SseGraph):
 
 @pytest.mark.asyncio
 async def test_post_chat_json_uses_ainvoke_not_invoke():
-    app: FastAPI = create_app()
     dummy = _SseGraph(final_text="ok-json", sources=["[1] PCDT SGB"], guardrail_status="safe")
-    app.state.chat_graph = dummy
+    app = _make_app_with_graph(dummy)
+    resolve_patch, append_patch = _persistence_patches()
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/assistant/chat",
-            headers={"Accept": "application/json"},
-            json={"patientId": "p1", "message": "hi"},
-        )
+    with resolve_patch, append_patch:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            res = await ac.post(
+                "/api/assistant/chat",
+                headers={"Accept": "application/json", "X-User-Id": "test-doctor"},
+                json={"patientId": "p1", "message": "hi"},
+            )
 
     assert res.status_code == 200
     payload = res.json()
@@ -128,20 +164,21 @@ async def test_post_chat_json_uses_ainvoke_not_invoke():
 
 @pytest.mark.asyncio
 async def test_post_chat_sse_emits_final_event_and_sources():
-    app: FastAPI = create_app()
     dummy = _SseGraph(
         final_text="Resposta baseada em SGB e critérios de inclusão.",
         sources=["[1] PCDT Síndrome de Guillain-Barré - CRITÉRIOS DE INCLUSÃO"],
     )
-    app.state.chat_graph = dummy
+    app = _make_app_with_graph(dummy)
+    resolve_patch, append_patch = _persistence_patches()
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/assistant/chat",
-            headers={"Accept": "text/event-stream"},
-            json={"patientId": "p1", "message": "Quais são os critérios de inclusão para sgb?"},
-        )
+    with resolve_patch, append_patch:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            res = await ac.post(
+                "/api/assistant/chat",
+                headers={"Accept": "text/event-stream", "X-User-Id": "test-doctor"},
+                json={"patientId": "p1", "message": "Quais são os critérios de inclusão para sgb?"},
+            )
 
     assert res.status_code == 200
     text = res.text
@@ -164,20 +201,21 @@ async def test_post_chat_sse_emits_final_event_and_sources():
 
 @pytest.mark.asyncio
 async def test_post_chat_sse_emits_final_for_insufficient_context():
-    app: FastAPI = create_app()
     dummy = _InsufficientGraph(
         final_text="Não encontrei contexto suficiente para responder com segurança.",
         sources=[],
     )
-    app.state.chat_graph = dummy
+    app = _make_app_with_graph(dummy)
+    resolve_patch, append_patch = _persistence_patches()
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/assistant/chat",
-            headers={"Accept": "text/event-stream"},
-            json={"patientId": "p1", "message": "Quais são os critérios de inclusão para sgb?"},
-        )
+    with resolve_patch, append_patch:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            res = await ac.post(
+                "/api/assistant/chat",
+                headers={"Accept": "text/event-stream", "X-User-Id": "test-doctor"},
+                json={"patientId": "p1", "message": "Quais são os critérios de inclusão para sgb?"},
+            )
 
     assert res.status_code == 200
     text = res.text

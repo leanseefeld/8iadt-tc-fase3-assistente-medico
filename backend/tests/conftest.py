@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -14,12 +15,42 @@ from assistente_medico_api.main import create_app
 from assistente_medico_api.models import (
     AgentLogEntry,
     Alert,
+    Conversation,
+    ConversationMessage,
     Exam,
     Patient,
     Prescription,
     SuggestedItem,
     VitalSigns,
 )  # noqa: F401
+
+
+_CLINICAL_AUDIT_ENV_KEY = "MEDICO_CLINICAL_AUDIT_ENABLED"
+_clinical_audit_env_backup: tuple[bool, str] | None = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Não criar/atualizar `logs/audit_clinical_*.jsonl` durante a suíte de testes."""
+    global _clinical_audit_env_backup  # noqa: PLW0603
+    key = _CLINICAL_AUDIT_ENV_KEY
+    had = key in os.environ
+    prev = os.environ[key] if had else ""
+    _clinical_audit_env_backup = (had, prev)
+    os.environ[key] = "false"
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Restaura o valor anterior de MEDICO_CLINICAL_AUDIT_ENABLED."""
+    global _clinical_audit_env_backup  # noqa: PLW0603
+    if _clinical_audit_env_backup is None:
+        return
+    key = _CLINICAL_AUDIT_ENV_KEY
+    had, prev = _clinical_audit_env_backup
+    if had:
+        os.environ[key] = prev
+    else:
+        os.environ.pop(key, None)
+    _clinical_audit_env_backup = None
 
 
 @pytest_asyncio.fixture
@@ -55,3 +86,21 @@ async def async_client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+@pytest_asyncio.fixture
+async def chat_patient(test_session_factory: async_sessionmaker[AsyncSession]):
+    """Paciente mínimo para testes do endpoint de chat."""
+    async with test_session_factory() as session:
+        session.add(
+            Patient(
+                id="p1",
+                name="Paciente Teste",
+                age=40,
+                sex="M",
+                cid_code="A41.9",
+                cid_label="Sepse",
+                observations="",
+            )
+        )
+        await session.commit()

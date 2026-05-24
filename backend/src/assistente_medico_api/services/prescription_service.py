@@ -15,7 +15,8 @@ from assistente_medico_api.schemas.prescriptions import (
     PrescriptionItemSchema,
     PrescriptionResponse,
 )
-from assistente_medico_api.observability.audit import audit, mask_cpf, truncate
+from assistente_medico_api.observability.audit import mask_cpf, truncate
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 
 
 def _items_to_db(payload: list[PrescriptionItemSchema]) -> list[dict]:
@@ -101,17 +102,23 @@ async def create_prescription(
         issued_at=datetime.now(UTC),
     )
     created = await prescription_repo.create_prescription(session, row)
-    audit(
-        "prescription_created",
-        kind="clinical",
+    clinical_audit(
+        ClinicalAuditAction.PRESCRICAO_EMITIDA,
         patient_id=patient_id,
-        prescription_id=created.id,
-        prescriber_kind=created.prescriber_kind,
-        prescriber_crm=created.prescriber_crm or "",
-        items_count=len(request.items),
-        patient_cpf=mask_cpf(created.patient_cpf or request.patient_cpf),
-        chat_thread_id=(created.chat_thread_id or ""),
-        decision_flow_run_id=(created.decision_flow_run_id or ""),
+        patient_name=patient.name,
+        descricao=(
+            f"Prescrição emitida para {patient.name} ({created.prescriber_kind}), "
+            f"{len(request.items)} medicamento(s)."
+        ),
+        detalhes={
+            "prescription_id": created.id,
+            "prescriber_kind": created.prescriber_kind,
+            "prescriber_crm": created.prescriber_crm or "",
+            "itens": len(request.items),
+            "patient_cpf": mask_cpf(created.patient_cpf or request.patient_cpf),
+            "chat_thread_id": created.chat_thread_id or "",
+            "decision_flow_run_id": created.decision_flow_run_id or "",
+        },
     )
     return prescription_to_response(created)
 
@@ -133,13 +140,20 @@ async def archive_prescription(
     row.archived_by = body.archived_by.strip()
     await prescription_repo.update_prescription(session, row)
 
-    audit(
-        "prescription_archived",
-        kind="clinical",
+    pname = None
+    patient = await patient_repo.get_patient_by_id(session, row.patient_id)
+    if patient is not None:
+        pname = patient.name
+
+    clinical_audit(
+        ClinicalAuditAction.PRESCRICAO_ARQUIVADA,
         patient_id=row.patient_id,
-        prescription_id=row.id,
-        reason=truncate(str(row.archived_reason or "")),
-        archived_by=str(row.archived_by or ""),
-        prescriber_kind=row.prescriber_kind,
+        patient_name=pname,
+        descricao=f"Prescrição {row.id} arquivada: {truncate(str(row.archived_reason or ''))}",
+        detalhes={
+            "prescription_id": row.id,
+            "arquivado_por": str(row.archived_by or ""),
+            "prescriber_kind": row.prescriber_kind,
+        },
     )
     return prescription_to_response(row)

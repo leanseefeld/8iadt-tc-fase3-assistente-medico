@@ -1,4 +1,4 @@
-"""Nós finais de geração da resposta do chat médico."""
+"""Nó de geração: prompt + ChatOllama."""
 
 from __future__ import annotations
 
@@ -13,32 +13,53 @@ from assistente_medico_api.graph.context_formatting import format_context_block,
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.graph.clinical_query_understanding import normalize_text_for_match
 from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 
 # Persona e limites de segurança para o assistente (pt-BR).
-_SYSTEM_PROMPT = """\
-Você gera respostas para um assistente clínico de apoio a médicos no Brasil.
-Responda em português do Brasil, de forma objetiva, profissional e fluída para manter o tom da conversa.
+GENERATE_SYSTEM_PROMPT = """\
+Você é um assistente clínico de apoio a médicos no Brasil.
+Responda sempre em português do Brasil, de forma objetiva e profissional.
+Seja direto: vá ao ponto sem introduções desnecessárias, e use listas apenas quando genuinamente útil.
+Nunca invente dados clínicos; quando recorrer ao conhecimento geral sem respaldo de protocolo, sinalize isso claramente.
+Só cumprimente se o médico cumprimentar primeiro.
 
-Uma busca por Protocolos Clínicos e Diretrizes Terapêuticas (PCDT) pode ter sido realizada para responder a pergunta.
+## Contexto por turno
+A cada turno você pode receber contexto estruturado pelo sistema: dados clínicos do paciente e/ou resultados de busca em PCDTs (Protocolos Clínicos e Diretrizes Terapêuticas).
+O médico não vê esse contexto diretamente — ele só vê suas próprias mensagens e suas respostas.
+Use o contexto clínico para personalizar a resposta quando aplicável; não extrapole além do que foi fornecido.
+Use pronomes adequados ao gênero do paciente.
 
-Quando resultados de busca nos PCDTs forem fornecidos:
-- Use-os quando forem relevantes para a pergunta; cite pelo identificador [n] correspondente.
-- Ignore trechos que não sejam construtivos para a pergunta.
-- Se nenhum resultado for suficiente, diga que documentos relevantes não foram encontrados.
-- Mencione apenas os trechos que sejam relevantes para a pergunta, evitando descrever trechos irrelevantes.
+## Resultados de busca em PCDTs
+Quando resultados forem fornecidos:
+- Utilize apenas os trechos relevantes para a pergunta; cite cada um pelo identificador [n].
+- Ignore trechos que não contribuam para a resposta.
+- Se nenhum resultado for pertinente, informe brevemente que documentos relevantes não foram encontrados — sem listar ou descrever os documentos irrelevantes.
 
-Quando não houver resultados de busca (pergunta conversacional ou de acompanhamento):
+Quando não houver resultados (pergunta conversacional ou de acompanhamento):
 - Responda com base no histórico da conversa e no seu conhecimento geral.
-- Evite inventar dados clínicos; se necessário, sinalize que é conhecimento geral sem respaldo de protocolo.
 
-Você recebe contexto relevante em cada turno da conversa, mas deve responder diretamente ao conteúdo de "Mensagem do médico:".
-O médico não tem acesso direto ao contexto, apenas as mensagens que ele mesmo enviou e o que você respondeu.
-Assuma que quem estruturou o contexto foi você mesmo, não o médico.
-
-Use o contexto clínico do paciente para personalizar a resposta quando aplicável. Não invente dados além do fornecido.
-Use pronomes adequados para o gênero do paciente.
-Só cumprimente se for cumprimentado.\
+## Foco da resposta
+Responda diretamente à "Mensagem do médico:", usando o restante do contexto apenas como subsídio.\
 """
+
+
+def _serialize_messages(messages: list[BaseMessage]) -> list[dict]:
+    """Serializa mensagens LangChain para persistência JSON (SFT/auditoria)."""
+    out: list[dict] = []
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            role = "system"
+        elif isinstance(msg, HumanMessage):
+            role = "user"
+        elif isinstance(msg, AIMessage):
+            role = "assistant"
+        else:
+            role = getattr(msg, "type", "unknown")
+        content = msg.content
+        if isinstance(content, list):
+            content = "".join(str(p) for p in content)
+        out.append({"role": role, "content": str(content or "")})
+    return out
 
 
 def _build_llm(settings: Settings) -> ChatOllama:
@@ -111,36 +132,7 @@ def _build_messages(state: ChatRAGState, *, mode: str = "grounded") -> list:
         f"Mensagem do médico:\n{user_text}\n\n"
 
     )
-    out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
-
-    if mode == "direct":
-        human = (
-            f"Pergunta do médico:\n{user_text}\n\n"
-            "Responda sem usar contexto documental. "
-            "Se for saudação, responda de forma breve e profissional."
-        )
-        system = _DIRECT_SYSTEM_PROMPT
-    elif mode == "insufficient":
-        human = (
-            f"Pergunta do médico:\n{user_text}\n\n"
-            f"Motivo da insuficiência:\n{state.get('insufficiency_reason') or 'contexto recuperado insuficiente'}\n\n"
-            f"Contexto recuperado:\n{context}\n\n"
-            "Explique que a base recuperada foi insuficiente e oriente a refinar a pergunta."
-        )
-        system = _INSUFFICIENT_SYSTEM_PROMPT
-    else:
-        human = (
-            f"Pergunta do médico:\n{user_text}\n\n"
-            f"Entendimento da pergunta:\n{understanding}\n\n"
-            f"Contexto (trechos PCDT):\n{context}\n\n"
-            "Instruções de resposta:\n"
-            "- Use apenas o contexto PCDT acima.\n"
-            "- Não expanda ou redefina siglas se a Doença/Diretriz já foi detectada no entendimento estruturado.\n"
-            "- Se o contexto não responder à pergunta sobre a Doença/Diretriz detectada, diga que os documentos recuperados não foram suficientes.\n"
-        )
-        system = _SYSTEM_PROMPT
-
-    out: list = [SystemMessage(content=system)]
+    out: list = [SystemMessage(content=GENERATE_SYSTEM_PROMPT)]
     for turn in state.get("chat_history") or []:
         text = (turn.get("content") or "").strip()
         if not text:
@@ -150,7 +142,7 @@ def _build_messages(state: ChatRAGState, *, mode: str = "grounded") -> list:
             out.append(HumanMessage(content=text))
         elif role == "assistant":
             out.append(AIMessage(content=text))
-    out.append(HumanMessage(content=human))
+    out.append(HumanMessage(content=final_human))
     return out
 
 
@@ -233,6 +225,10 @@ async def _generate_grounded_answer(state: ChatRAGState, settings: Settings) -> 
     top_sections = [d.metadata.get("section") or d.metadata.get("header_1") for d in docs[:5]]
     context_preview = _prompt_context_preview(state)
 
+    audit_payload = dict(state.get("rag_audit_payload") or {})
+    if audit_payload is not None:
+        audit_payload["prompt_context_preview"] = context_preview
+
     audit(
         "rag_generate_context_received",
         kind="rag",
@@ -247,10 +243,11 @@ async def _generate_grounded_answer(state: ChatRAGState, settings: Settings) -> 
 
     controlled_answer = _context_mismatch_answer(state)
     if controlled_answer is not None:
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         audit(
             "rag_generate_done",
             kind="rag",
-            latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+            latency_ms=latency_ms,
             patient_id=pid,
             query_snippet=truncate(state.get("query") or ""),
             answer_chars=len(controlled_answer),
@@ -259,14 +256,36 @@ async def _generate_grounded_answer(state: ChatRAGState, settings: Settings) -> 
             controlled_response=True,
             reason="detected_disease_without_compatible_context",
         )
-        return {"answer": controlled_answer, "generation_mode": "grounded_answer"}
+        clinical_audit(
+            ClinicalAuditAction.GERACAO_RESPOSTA_RAG,
+            patient_id=pid,
+            descricao="Resposta do assistente: caminho controlado (contexto PCDT incompatível com doença detectada).",
+            detalhes={
+                "latency_ms": latency_ms,
+                "tipo": "resposta_controlada",
+                "motivo": "detected_disease_without_compatible_context",
+                "caracteres_resposta": len(controlled_answer),
+                "documentos_recuperados": len(docs),
+            },
+            settings=settings,
+        )
+        return {
+            "answer": controlled_answer,
+            "rag_audit_payload": audit_payload,
+            "generate_llm_output": controlled_answer,
+        }
+
+    llm = _build_llm(settings)
+    messages = _build_messages(state)
+    serialized_input = _serialize_messages(messages)
 
     answer = await _stream_answer(state, settings, mode="grounded")
     stems = sorted({d.metadata.get("source_stem", "?") for d in docs}) if docs else []
+    latency_ms = round((time.perf_counter() - t0) * 1000, 2)
     audit(
         "rag_generate_done",
         kind="rag",
-        latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+        latency_ms=latency_ms,
         patient_id=pid,
         query_snippet=truncate(state.get("query") or ""),
         answer_chars=len(answer),
@@ -274,7 +293,27 @@ async def _generate_grounded_answer(state: ChatRAGState, settings: Settings) -> 
         source_stems=stems,
         controlled_response=False,
     )
-    return {"answer": answer, "generation_mode": "grounded_answer"}
+    clinical_audit(
+        ClinicalAuditAction.GERACAO_RESPOSTA_RAG,
+        patient_id=pid,
+        descricao="Geração da resposta do assistente (LLM) concluída.",
+        detalhes={
+            "latency_ms": latency_ms,
+            "tipo": "geracao_llm",
+            "caracteres_resposta": len(answer),
+            "documentos_recuperados": len(docs),
+            "stems_fonte_resumo": stems[:15],
+        },
+        settings=settings,
+    )
+    # Histórico atualizado no guardrail_node, que conhece a resposta final
+    # (pode ter sido substituída ou modificada pelo guardrail).
+    return {
+        "answer": answer,
+        "rag_audit_payload": audit_payload,
+        "generate_llm_input": serialized_input,
+        "generate_llm_output": answer,
+    }
 
 
 async def _generate_direct_answer(state: ChatRAGState, settings: Settings) -> dict:
@@ -325,7 +364,8 @@ async def _generate_insufficient_context(state: ChatRAGState, settings: Settings
     structured = state.get("structured_terms") or {}
     rerank_result = state.get("rerank_result") or {}
     disease = structured.get("diretriz") or structured.get("disease") or "a condição solicitada"
-    reason = rerank_result.get("insufficiency_reason") or state.get("insufficiency_reason") or "contexto recuperado insuficiente"
+    reason = rerank_result.get("insufficiency_reason") or state.get(
+        "insufficiency_reason") or "contexto recuperado insuficiente"
     audit(
         "rag_generate_insufficient_context",
         kind="rag",

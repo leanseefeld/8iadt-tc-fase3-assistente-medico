@@ -63,6 +63,33 @@ class ChatResponseJson(BaseModel):
         serialization_alias="guardrailReason",
         description="Motivo da classificação do guardrail.",
     )
+    message_id: str | None = Field(
+        default=None,
+        serialization_alias="messageId",
+        description="Id persistido da mensagem do assistente neste turno.",
+    )
+
+
+class MessageFeedbackPatchRequest(BaseModel):
+    """Corpo do PATCH de avaliação de mensagem do assistente."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    feedback_rating: Literal["positive", "negative"] | None = Field(
+        alias="feedbackRating",
+        description="positive/negative para avaliar; null remove a avaliação.",
+    )
+
+
+class MessageFeedbackPatchResponse(BaseModel):
+    """Resposta após atualizar feedback de uma mensagem."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    message_id: str = Field(serialization_alias="messageId")
+    feedback_rating: Literal["positive", "negative"] | None = Field(
+        serialization_alias="feedbackRating",
+    )
 
 
 class DecisionFlowRequest(BaseModel):

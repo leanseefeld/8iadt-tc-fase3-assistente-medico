@@ -53,3 +53,5 @@ class ChatRAGState(TypedDict, total=False):
     guardrail_status: str  # "safe" | "warned" | "blocked" | "regenerated"
     guardrail_reason: str
     patient_context: str
+    generate_llm_input: list[dict]
+    generate_llm_output: str

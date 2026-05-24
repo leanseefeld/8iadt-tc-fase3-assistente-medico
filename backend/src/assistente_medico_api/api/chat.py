@@ -5,16 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import json
 import time
-import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
 from assistente_medico_api.deps import get_session
-from assistente_medico_api.repositories import patient_repo
+from assistente_medico_api.services import chat_persistence
+from assistente_medico_api.repositories import conversation_repo, patient_repo
 from assistente_medico_api.schemas.chat import (
     ChatHistoryTurnModel,
     ChatRequest,
@@ -22,11 +22,18 @@ from assistente_medico_api.schemas.chat import (
     DecisionFlowMeta,
     DecisionFlowRequest,
     DecisionFlowResponse,
+    MessageFeedbackPatchRequest,
+    MessageFeedbackPatchResponse,
 )
 from assistente_medico_api.graph.state import ChatHistoryTurnState
 from assistente_medico_api.services.protocol_map import get_protocol_for_cid
 from assistente_medico_api.observability.audit import audit, truncate
-from assistente_medico_api.observability.context import set_patient_id, set_thread_id
+from assistente_medico_api.observability.context import (
+    get_user_id,
+    set_patient_id,
+    set_thread_id,
+)
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -57,6 +64,7 @@ async def _invoke_payload_and_config(
     request: Request,
     body: ChatRequest,
     graph,
+    thread_id: str,
 ) -> tuple[dict, dict, str]:
     """
     Monta o update de estado e o RunnableConfig (thread_id) para o grafo com checkpointer.
@@ -64,7 +72,7 @@ async def _invoke_payload_and_config(
     Se já existe chat_history no checkpoint, não reenvia `chat_history` no update (merge).
     Caso contrário, semeia a partir de `messageHistory` no corpo (clientes sem threadId).
     """
-    tid = (body.thread_id or "").strip() or str(uuid.uuid4())
+    tid = thread_id
     config: dict = {"configurable": {"thread_id": tid}}
     snap = await graph.aget_state(config)
     vals = snap.values or {}
@@ -78,7 +86,6 @@ async def _invoke_payload_and_config(
         "reasoning_steps": [],
         "answer": "",
         "retrieval_query": "",
-        "patient_context": "",
     }
     if not has_persisted_history:
         payload["chat_history"] = _normalize_message_history(body)
@@ -105,15 +112,36 @@ def _flow_ts(base: datetime, offset_seconds: int) -> str:
     return (base + timedelta(seconds=offset_seconds)).strftime("%H:%M:%S")
 
 
+def _require_doctor_id() -> str:
+    """Exige identificação do médico (header X-User-Id) para persistir conversas."""
+    doctor_id = (get_user_id() or "").strip()
+    if not doctor_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Header X-User-Id obrigatorio para o chat.",
+        )
+    return doctor_id
+
+
 @router.post("/chat")
 async def post_chat(
     request: Request,
     body: ChatRequest,
+    session: AsyncSession = Depends(get_session),
     accept: Annotated[str | None, Header(alias="Accept")] = None,
 ):
     """Chat RAG: SSE com graph.astream_events(); JSON de fallback com graph.invoke()."""
     graph = _get_graph(request)
-    initial, config, thread_id = await _invoke_payload_and_config(request, body, graph)
+    doctor_id = _require_doctor_id()
+    conversation, thread_id = await chat_persistence.resolve_conversation(
+        session,
+        thread_id=body.thread_id,
+        doctor_id=doctor_id,
+        patient_id=body.patient_id,
+    )
+    initial, config, thread_id = await _invoke_payload_and_config(
+        request, body, graph, thread_id
+    )
     wants_stream = bool(accept and "text/event-stream" in accept.lower())
 
     set_thread_id(thread_id)
@@ -129,6 +157,17 @@ async def post_chat(
         accept=(accept or ""),
         stream=wants_stream,
     )
+    clinical_audit(
+        ClinicalAuditAction.CONVERSA_ASSISTENTE_SOLICITADA,
+        patient_id=body.patient_id,
+        descricao="Pedido de conversa com o assistente (chat RAG).",
+        detalhes={
+            "thread_id": thread_id,
+            "stream": wants_stream,
+            "accept": truncate(accept or "", n=120),
+            "pergunta_truncada": truncate(body.message, n=400),
+        },
+    )
 
     # --- Caminho JSON: usa API async (grafo contém nós async) ---
     if not wants_stream:
@@ -139,87 +178,137 @@ async def post_chat(
                 status_code=503,
                 detail=f"Falha ao executar o assistente: {exc!s}",
             ) from exc
+        assistant_message_id = await chat_persistence.append_turn(
+            session,
+            conversation=conversation,
+            doctor_message=body.message,
+            final_state=final,
+        )
+        await session.commit()
+
+        lat = round((time.perf_counter() - t_started) * 1000, 2)
         audit(
             "chat_response_done",
             kind="chat",
-            latency_ms=round((time.perf_counter() - t_started) * 1000, 2),
+            latency_ms=lat,
             thread_id=thread_id,
             patient_id=(body.patient_id or None),
             mode="json",
             guardrail_status=final.get("guardrail_status"),
             tokens_streamed=0,
         )
+        clinical_audit(
+            ClinicalAuditAction.CONVERSA_ASSISTENTE_FINALIZADA,
+            patient_id=body.patient_id,
+            descricao="Resposta do assistente entregue (modo JSON).",
+            detalhes={
+                "thread_id": thread_id,
+                "modo": "json",
+                "latency_ms": lat,
+                "tokens_streamed": 0,
+                "guardrail_status": final.get("guardrail_status"),
+            },
+        )
         return ChatResponseJson(
             text=final.get("answer") or "",
             sources=list(final.get("sources") or []),
             reasoning=list(final.get("reasoning_steps") or []),
             thread_id=thread_id,
+            message_id=assistant_message_id,
             audit_id=final.get("audit_id") or None,
             guardrail_status=final.get("guardrail_status") or None,
             guardrail_reason=final.get("guardrail_reason") or None,
         )
 
-    # --- Caminho SSE: combina eventos de fim de nó com tokens do gerador final ---
+    # --- Caminho SSE: astream_events emite on_chat_model_stream por token ---
     async def event_gen():
         tokens_streamed = 0
-        guard_status = None
-        final_state: dict = {"audit_id": initial.get("audit_id")}
+        guard_status: str | None = None
+        final_state: dict = {}
+
+        def finalize_audit() -> None:
+            lat = round((time.perf_counter() - t_started) * 1000, 2)
+            audit(
+                "chat_response_done",
+                kind="chat",
+                latency_ms=lat,
+                thread_id=thread_id,
+                patient_id=(body.patient_id or None),
+                mode="sse",
+                guardrail_status=guard_status,
+                tokens_streamed=tokens_streamed,
+            )
+            clinical_audit(
+                ClinicalAuditAction.CONVERSA_ASSISTENTE_FINALIZADA,
+                patient_id=body.patient_id,
+                descricao="Resposta do assistente entregue (modo SSE).",
+                detalhes={
+                    "thread_id": thread_id,
+                    "modo": "sse",
+                    "latency_ms": lat,
+                    "tokens_streamed": tokens_streamed,
+                    "guardrail_status": guard_status,
+                },
+            )
 
         try:
             async for event in graph.astream_events(initial, config, version="v2"):
-                kind = event.get("event")
-                name = event.get("name")
-                data = event.get("data") or {}
+                kind = event["event"]
 
+                # Accumulate outputs from every chain-end so final_state has the full picture.
                 if kind == "on_chain_end":
-                    output = data.get("output") or {}
+                    output = event["data"].get("output") or {}
                     if isinstance(output, dict):
                         final_state.update(output)
 
-                    if name == "rerank":
-                        yield {
-                            "event": "sources",
-                            "data": json.dumps(
-                                {"sources": list(final_state.get("sources") or output.get("sources") or [])}
-                            ),
-                        }
-                        yield {
-                            "event": "reasoning",
-                            "data": json.dumps(
-                                {"steps": list(final_state.get("reasoning_steps") or output.get("reasoning_steps") or [])}
-                            ),
-                        }
+                # Rerank terminou → envia metadados antes dos tokens.
+                if kind == "on_chain_end" and event.get("name") == "rerank":
+                    output = event["data"].get("output") or {}
+                    yield {
+                        "event": "sources",
+                        "data": json.dumps(
+                            {"sources": list(final_state.get("sources") or output.get("sources") or [])}
+                        ),
+                    }
+                    yield {
+                        "event": "reasoning",
+                        "data": json.dumps(
+                            {"steps": list(final_state.get("reasoning_steps") or output.get("reasoning_steps") or [])}
+                        ),
+                    }
 
-                    elif name == "guardrail":
-                        guard_status = final_state.get("guardrail_status") or output.get("guardrail_status")
-                        yield {
-                            "event": "guardrail",
-                            "data": json.dumps(
-                                {
-                                    "status": final_state.get("guardrail_status"),
-                                    "reason": final_state.get("guardrail_reason"),
-                                    "answer": final_state.get("answer"),
-                                    "auditId": final_state.get("audit_id"),
-                                }
-                            ),
-                        }
+                # Guardrail terminou → envia status e resposta final.
+                # Se o status não for "safe", o frontend substitui o texto
+                # acumulado pelos tokens já exibidos (AVISO appenda disclaimer;
+                # BLOQUEAR/regenerated substitui por mensagem segura).
+                elif kind == "on_chain_end" and event.get("name") == "guardrail":
+                    output = event["data"].get("output") or {}
+                    guard_status = final_state.get("guardrail_status") or output.get("guardrail_status")
+                    yield {
+                        "event": "guardrail",
+                        "data": json.dumps(
+                            {
+                                "status": final_state.get("guardrail_status"),
+                                "reason": final_state.get("guardrail_reason"),
+                                "answer": final_state.get("answer"),
+                                "auditId": final_state.get("audit_id"),
+                            }
+                        ),
+                    }
 
+                # Token do LLM dentro do nó generate — filtra por nó para não vazar
+                # tokens internos do guardrail (classificador, regeneração).
                 elif kind == "on_chat_model_stream" and event.get("metadata", {}).get("langgraph_node") == "generate":
-                    chunk = data.get("chunk")
+                    chunk = event["data"].get("chunk")
                     piece = getattr(chunk, "content", None) if chunk else None
                     if isinstance(piece, list):
                         piece = "".join(str(p) for p in piece)
                     if piece:
                         tokens_streamed += 1
-                        audit("sse_token_streamed", kind="chat", thread_id=thread_id)
                         yield {
                             "event": "token",
                             "data": json.dumps({"content": str(piece)}),
                         }
-
-            if not final_state:
-                snap = await graph.aget_state(config)
-                final_state = dict(snap.values or {})
 
             final_payload = {
                 "text": final_state.get("answer") or "",
@@ -231,14 +320,13 @@ async def post_chat(
                 "guardrailReason": final_state.get("guardrail_reason"),
             }
 
-            audit(
-                "sse_final_event_sent",
-                kind="chat",
-                thread_id=thread_id,
-                final_answer_length=len(final_payload["text"]),
-                final_sources_count=len(final_payload["sources"]),
-                tokens_streamed=tokens_streamed,
+            assistant_message_id = await chat_persistence.append_turn(
+                session,
+                conversation=conversation,
+                doctor_message=body.message,
+                final_state=final_state,
             )
+            await session.commit()
 
             yield {
                 "event": "final",
@@ -246,7 +334,7 @@ async def post_chat(
             }
             yield {
                 "event": "done",
-                "data": json.dumps({"threadId": thread_id}),
+                "data": json.dumps({"threadId": thread_id, "messageId": assistant_message_id}),
             }
 
         except Exception as exc:
@@ -254,20 +342,54 @@ async def post_chat(
                 "event": "error",
                 "data": json.dumps({"detail": str(exc)}),
             }
+            finalize_audit()
             return
-        finally:
-            audit(
-                "chat_response_done",
-                kind="chat",
-                latency_ms=round((time.perf_counter() - t_started) * 1000, 2),
-                thread_id=thread_id,
-                patient_id=(body.patient_id or None),
-                mode="sse",
-                guardrail_status=guard_status,
-                tokens_streamed=tokens_streamed,
-            )
+
+        finalize_audit()
 
     return EventSourceResponse(event_gen())
+
+
+@router.patch(
+    "/conversations/{conversation_id}/messages/{message_id}",
+    response_model=MessageFeedbackPatchResponse,
+)
+async def patch_message_feedback(
+    conversation_id: str,
+    message_id: str,
+    body: MessageFeedbackPatchRequest,
+    session: AsyncSession = Depends(get_session),
+) -> MessageFeedbackPatchResponse:
+    """Avalia ou remove avaliação de uma mensagem do assistente."""
+    doctor_id = _require_doctor_id()
+    conversation = await conversation_repo.get_conversation_by_id(session, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    if conversation.doctor_id != doctor_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Conversa pertence a outro medico",
+        )
+
+    message = await conversation_repo.get_message_by_id(session, message_id)
+    if message is None or message.conversation_id != conversation_id:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    if message.author != "assistant":
+        raise HTTPException(
+            status_code=400,
+            detail="Apenas mensagens do assistente podem ser avaliadas",
+        )
+
+    updated = await conversation_repo.set_message_feedback(
+        session,
+        message,
+        body.feedback_rating,
+    )
+    await session.commit()
+    return MessageFeedbackPatchResponse(
+        message_id=updated.id,
+        feedback_rating=updated.feedback_rating,  # type: ignore[arg-type]
+    )
 
 
 @router.post("/decision-flow", response_model=DecisionFlowResponse)
@@ -322,11 +444,28 @@ async def post_decision_flow(
     lines.append(f"[{_flow_ts(now, 4)}] Alerta enviado: equipes notificadas conforme regras")
     lines.append(f"[{_flow_ts(now, 5)}] Fluxo concluido")
 
+    flow_latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+
     audit(
         "decision_flow_done",
         kind="chat",
-        latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+        latency_ms=flow_latency_ms,
         patient_id=body.patient_id,
+    )
+
+    clinical_audit(
+        ClinicalAuditAction.EXECUCAO_FLUXO_DECISAO,
+        patient_id=body.patient_id,
+        patient_name=patient.name,
+        descricao=f"Fluxo de decisão executado para {patient.name} (protótipo).",
+        detalhes={
+            "latency_ms": flow_latency_ms,
+            "protocolo": proto.protocol_ref,
+            "exames_carregados": len(exams),
+            "acoes_sugeridas": len(items),
+            "alerta_sepse_meta": meta.sepsis_critical,
+            "alerta_farmacia_meta": meta.pharmacy_interaction,
+        },
     )
 
     return DecisionFlowResponse(lines=lines, meta=meta)

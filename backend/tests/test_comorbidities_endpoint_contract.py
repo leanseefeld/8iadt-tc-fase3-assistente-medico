@@ -89,7 +89,7 @@ class TestComorbidititiesEndpointContract:
 
         # New codes added for expanded list
         assert "Gravidez" in codes
-        assert "Puerperio" in codes
+        assert "Puerperio (resguardo)" in codes
 
     def test_response_is_json(self, client):
         """Test that response is valid JSON."""

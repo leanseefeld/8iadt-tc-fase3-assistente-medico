@@ -60,6 +60,7 @@ export async function consumeAssistantChatSse(
   let sources: string[] = [];
   let reasoning: string[] = [];
   let threadId = '';
+  let messageId = '';
   let guardrailStatus: GuardrailStatus | undefined;
 
   // --- Loop: acumula bytes, fatia em blocos SSE terminados em linha em branco ---
@@ -122,6 +123,10 @@ export async function consumeAssistantChatSse(
         if (typeof tid === 'string' && tid) {
           threadId = tid;
         }
+        const mid = payload.messageId;
+        if (typeof mid === 'string' && mid) {
+          messageId = mid;
+        }
       }
     }
   }
@@ -131,6 +136,7 @@ export async function consumeAssistantChatSse(
     sources,
     reasoning,
     ...(threadId ? { threadId } : {}),
+    ...(messageId ? { messageId } : {}),
     ...(guardrailStatus ? { guardrailStatus } : {}),
   };
 }

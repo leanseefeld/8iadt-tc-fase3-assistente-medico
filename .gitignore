@@ -82,10 +82,11 @@ vectorstore/
 
 # Banco de dados local (SQLite na raiz do repo; não versionar artefactos pesados).
 assistente_medico.db
+*.db-shm
+*.db-wal
 
-# Logs e artefatos temporários
+# Logs e artefatos temporários (JSONL de auditoria clínica em `logs/` é versionado)
 uploads/
-logs/
 
 # Configurações de ambiente local (exemplo: streamlit, VSCode, etc.)
 .streamlit
