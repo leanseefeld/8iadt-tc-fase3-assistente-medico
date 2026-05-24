@@ -1,18 +1,24 @@
-import { Archive, MessageSquarePlus } from 'lucide-react';
-import { useState } from 'react';
+import { Archive, Loader2, MessageSquarePlus } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { archiveAssistantConversation } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
+import { useChatSession } from '@/context/ChatSessionContext';
 import { useConversationRefresh } from '@/context/ConversationRefreshContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientConversations } from '@/hooks/usePatientConversations';
 import type { ConversationSummary } from '@/types/domain';
+import type { OptimisticConversationEntry } from '@/types/chatSession';
 import { formatLocalDateTime } from '@/utils/formatDateTime';
 
-function conversationLabel(conv: ConversationSummary): string {
-  if (conv.preview?.trim()) {
-    return conv.preview.trim();
+type SidebarConversation =
+  | (ConversationSummary & { isOptimistic: false })
+  | (OptimisticConversationEntry & { isOptimistic: true });
+
+function conversationLabel(preview: string | null | undefined): string {
+  if (preview?.trim()) {
+    return preview.trim();
   }
   return 'Conversa sem título';
 }
@@ -21,6 +27,9 @@ export function ConversationSidebarSection() {
   const { activePatientId } = useAppSession();
   const { conversations, loading, error } = usePatientConversations(activePatientId);
   const { refreshConversations } = useConversationRefresh();
+  const { isThreadGenerating, getOptimisticSidebarEntries, version } =
+    useChatSession();
+  void version;
   const { showToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -31,6 +40,26 @@ export function ConversationSidebarSection() {
     null,
   );
   const [archiveBusy, setArchiveBusy] = useState(false);
+
+  const sidebarItems = useMemo((): SidebarConversation[] => {
+    if (!activePatientId) {
+      return [];
+    }
+    const apiIds = new Set(conversations.map((c) => c.id));
+    const optimistic = getOptimisticSidebarEntries(activePatientId, apiIds).map(
+      (entry) => ({ ...entry, isOptimistic: true as const }),
+    );
+    const persisted = conversations.map((entry) => ({
+      ...entry,
+      isOptimistic: false as const,
+    }));
+    return [...optimistic, ...persisted];
+  }, [
+    activePatientId,
+    conversations,
+    getOptimisticSidebarEntries,
+    version,
+  ]);
 
   function startNewConversation() {
     navigate('/chat');
@@ -82,53 +111,79 @@ export function ConversationSidebarSection() {
         <p className="mt-2 px-3 text-xs text-slate-500">Carregando…</p>
       ) : error ? (
         <p className="mt-2 px-3 text-xs text-red-700">{error}</p>
-      ) : conversations.length === 0 ? (
+      ) : sidebarItems.length === 0 ? (
         <p className="mt-2 px-3 text-xs text-slate-500">Nenhuma conversa.</p>
       ) : (
         <ul className="mt-1 flex flex-col gap-0.5" aria-label="Conversas salvas">
-          {conversations.map((conv) => {
-            const isActive = onChatRoute && activeThreadId === conv.id;
+          {sidebarItems.map((conv) => {
+            const isActive = conv.isOptimistic
+              ? conv.isPendingDraft
+                ? onChatRoute && !activeThreadId
+                : onChatRoute && activeThreadId === conv.id
+              : onChatRoute && activeThreadId === conv.id;
+            const generating = conv.isOptimistic
+              ? conv.generating
+              : isThreadGenerating(conv.id);
+            const label = conversationLabel(conv.preview);
+            const linkTo = conv.isOptimistic
+              ? conv.isPendingDraft
+                ? '/chat'
+                : `/chat?thread=${encodeURIComponent(conv.id)}`
+              : `/chat?thread=${encodeURIComponent(conv.id)}`;
+
             return (
               <li key={conv.id} className="group relative">
                 <NavLink
-                  to={`/chat?thread=${encodeURIComponent(conv.id)}`}
-                  title={conversationLabel(conv)}
+                  to={linkTo}
+                  title={label}
                   className={() =>
                     [
                       'block rounded-lg px-3 py-2 pr-9 text-left text-sm transition-colors',
                       isActive
                         ? 'bg-teal-600 text-white'
                         : 'text-slate-700 hover:bg-slate-100',
+                      generating && !isActive ? 'ring-1 ring-amber-300' : '',
                     ].join(' ')
                   }
                 >
                   <span className="line-clamp-2 font-medium leading-snug">
-                    {conversationLabel(conv)}
+                    {label}
                   </span>
                   <span
-                    className={`mt-0.5 block text-[10px] ${
+                    className={`mt-0.5 flex min-h-[14px] items-center text-[10px] ${
                       isActive ? 'text-teal-100' : 'text-slate-500'
                     }`}
                   >
-                    {formatLocalDateTime(conv.updatedAt)}
+                    {generating ? (
+                      <Loader2
+                        className={`h-3 w-3 animate-spin shrink-0 ${
+                          isActive ? 'text-teal-100' : 'text-amber-600'
+                        }`}
+                        aria-label="Gerando resposta"
+                      />
+                    ) : conv.isOptimistic ? null : (
+                      formatLocalDateTime(conv.updatedAt)
+                    )}
                   </span>
                 </NavLink>
-                <button
-                  type="button"
-                  aria-label="Arquivar conversa"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setArchiveTarget(conv);
-                  }}
-                  className={`absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 ${
-                    isActive
-                      ? 'text-teal-100 hover:bg-teal-700'
-                      : 'text-slate-500 hover:bg-slate-200'
-                  }`}
-                >
-                  <Archive className="h-3.5 w-3.5" aria-hidden />
-                </button>
+                {!conv.isOptimistic ? (
+                  <button
+                    type="button"
+                    aria-label="Arquivar conversa"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setArchiveTarget(conv);
+                    }}
+                    className={`absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 ${
+                      isActive
+                        ? 'text-teal-100 hover:bg-teal-700'
+                        : 'text-slate-500 hover:bg-slate-200'
+                    }`}
+                  >
+                    <Archive className="h-3.5 w-3.5" aria-hidden />
+                  </button>
+                ) : null}
               </li>
             );
           })}
@@ -155,7 +210,7 @@ export function ConversationSidebarSection() {
                   auditoria.
                 </p>
                 <p className="mt-2 line-clamp-2 text-xs text-slate-500">
-                  {conversationLabel(archiveTarget)}
+                  {conversationLabel(archiveTarget.preview)}
                 </p>
                 <div className="mt-4 flex justify-end gap-2">
                   <button
