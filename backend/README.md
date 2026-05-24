@@ -61,7 +61,6 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `RAG_USE_CROSS_ENCODER_RERANK` ou `MEDICO_RAG_USE_CROSS_ENCODER_RERANK` | `false` | Liga reranking opcional por CrossEncoder após o rerank heurístico |
 | `RAG_CROSS_ENCODER_MODEL` ou `MEDICO_RAG_CROSS_ENCODER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Modelo `sentence-transformers` usado quando CrossEncoder está ativo |
 | `RAG_CROSS_ENCODER_TOP_N` ou `MEDICO_RAG_CROSS_ENCODER_TOP_N` | `15` | Quantos documentos heurísticos são enviados ao CrossEncoder |
-| `MEDICO_RAG_PIPELINE_VERSION` | `separated_nodes_v2` | Versão lógica gravada na auditoria do pipeline |
 | `MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS` | `2` | Máximo de buscas por pergunta: tentativa inicial + um fallback |
 | `MEDICO_RAG_USE_LLM_RERANK` | `false` | Liga rerank/validação por LLM com fallback heurístico validado |
 | `MEDICO_RAG_LLM_RERANK_TOP_N` | `12` | Número de candidatos enviados ao LLM reranker quando habilitado |
@@ -108,40 +107,31 @@ grep '"event":"chat_response_done"' logs/assistente_medico.jsonl | head
 O chat real (`POST /api/assistant/chat`, tanto JSON quanto SSE) passa pelo mesmo grafo:
 
 ```text
-load_memory
--> router_search_needed
-   -> generate_direct_answer -> guardrail -> save_memory
-   -> rewrite_query -> retrieve_attempt_1 -> rerank_and_validate_context
-      -> context_quality_router
-         -> generate_grounded_answer -> guardrail -> save_memory
-         -> fallback_retrieve_attempt_2 -> rerank_and_validate_context
-            -> generate_grounded_answer | generate_insufficient_context
-            -> guardrail -> save_memory
+router
+-> generate (direct_answer) -> guardrail
+-> rewrite -> retrieve -> rerank
+   -> generate (grounded_answer | insufficient_context) -> guardrail
 ```
 
 Contratos principais no estado:
 
-- `memory_result`: histórico enviado no request, memória persistida em `ConversationMemoryStore` e últimos `structured_terms`. Não usa regex nem lista fixa de doenças.
 - `router_result`: decisão conservadora sobre necessidade de RAG. Perguntas clínicas e follow-ups clínicos seguem para busca.
-- `rewrite_result`: `resolved_query`, `expanded_query`, `structured_terms`, candidatos de catálogo e entendimento clínico.
+- `rewrite_result`: `retrieval_query`, `expanded_query`, `structured_terms`, candidatos de catálogo e entendimento clínico.
 - `retrieve_result`: tentativa, query enviada ao Chroma, filtro de metadata, candidatos e configuração efetiva.
-- `rerank_result`: documentos finais, `context_quality` (`sufficient`, `partial`, `insufficient`), `failure_type`, seções esperadas/encontradas e debug do LLM rerank.
-- `generation_result` e `guardrail_result`: modo de geração e avaliação final de segurança.
-- `audit_trace`: append-only por nó, com timestamps, entradas/saídas resumidas, versão do pipeline e configuração.
+- `rerank_result`: documentos finais, `context_quality` (`sufficient`, `partial`, `insufficient`), `failure_type`, seções esperadas/encontradas e debug do rerank.
+- `generation_mode`, `guardrail_status` e `guardrail_reason`: estratégia de geração e avaliação final de segurança.
+- `reasoning_steps`, `router_decision`, `query_expansion`, `retrieve_result`, `rerank_result`, `generation_mode`, `guardrail_status` e `guardrail_reason`: trilha funcional do fluxo RAG.
 
-`retrieve_attempt_1` e `fallback_retrieve_attempt_2` são as únicas buscas possíveis. Se uma pergunta pede seção específica, por exemplo `CRITÉRIOS DE INCLUSÃO`, e só há chunk de `CID-10`, o contexto fica `partial`, `context_sufficient=false` e o fallback é acionado. Depois da segunda tentativa, contexto ainda parcial/insuficiente gera resposta controlada, sem LLM inventar conteúdo clínico.
+`retrieve` é executado inicialmente e pode ser repetido como retry interno até `MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS`. Se uma pergunta pede seção específica, por exemplo `CRITÉRIOS DE INCLUSÃO`, e só há chunk de `CID-10`, o contexto fica `partial`, `context_sufficient=false` e o retry é acionado. Depois da última tentativa, contexto ainda parcial/insuficiente gera resposta controlada, sem LLM inventar conteúdo clínico.
 
 Localização dos nós:
 
-- `graph/nodes/load_memory.py`: carrega histórico, transcript e últimos termos estruturados.
 - `graph/nodes/router.py`: decide `search_needed` de forma conservadora.
-- `graph/nodes/rewrite.py`: restaura o LLM rewrite da `main`; usa `memory_result.history_transcript` e `last_structured_terms` para produzir `resolved_query`, depois aplica catálogo/entity resolver.
+- `graph/nodes/rewrite.py`: restaura o LLM rewrite da `main`; usa `chat_history` para produzir `retrieval_query` e depois aplica expansão estruturada.
 - `graph/nodes/retrieve.py`: busca apenas candidatos no Chroma.
 - `graph/nodes/rerank.py`: filtra, reranqueia e valida suficiência.
-- `graph/nodes/fallback_retrieve.py`: executa só a segunda busca direcionada.
-- `graph/nodes/generate.py`: gera `grounded`, `direct` ou `insufficient`.
+- `graph/nodes/generate.py`: único nó público de geração; escolhe `grounded_answer`, `direct_answer` ou `insufficient_context` por `generation_mode`.
 - `graph/nodes/guardrail.py`: avalia segurança da resposta final.
-- `graph/nodes/save_memory.py`: salva o turno final pós-guardrail.
 
 O rewrite combina três fontes:
 
@@ -220,7 +210,7 @@ O prompt enviado ao LLM inclui metadados ricos por documento:
 
 A resposta continua citando documentos pelo identificador `[n]`. A política de segurança de doses/posologia permanece sob o guardrail existente.
 
-Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `original_query`, `expanded_query`, `structured_terms`, tentativas de retrieve, documentos removidos, documentos finais, scores, `ranking_reasons`, resultado do rerank, modo de geração e resposta final pós-guardrail. O `audit_trace` no estado é append-only por etapa. Falha de auditoria é registrada em log e não derruba a resposta. Para depurar expansão e auditoria, confira `rewrite_result`, `rerank_result`, `rag_audit_payload` e `audit_trace` no retorno/stream do chat ou use o RAG Inspector em `llm/scripts/rag_inspector_app.py`.
+Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `original_query`, `retrieval_query`, `expanded_query`, `structured_terms`, documentos candidatos, documentos finais, `rerank_result`, modo de geração e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta. Para depurar o fluxo, confira `router_decision`, `query_expansion`, `retrieve_result`, `rerank_result`, `generation_mode`, `sources`, `guardrail_status` e `guardrail_reason` no retorno/stream do chat ou use o RAG Inspector em `llm/scripts/rag_inspector_app.py`.
 
 ### Troubleshooting RAG
 

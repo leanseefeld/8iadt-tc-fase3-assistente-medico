@@ -1,439 +1,211 @@
 from __future__ import annotations
 
-import asyncio
-import inspect
 import json
+from pathlib import Path
 
-from langchain_core.documents import Document
+import httpx
+import pytest
+from fastapi import FastAPI
 
-from assistente_medico_api.config import Settings
-from assistente_medico_api.graph import clinical_entity_resolver
-from assistente_medico_api.graph.nodes.generate import (
-    generate_direct_answer_node,
-    generate_grounded_answer_node,
-    generate_insufficient_context_node,
-)
-from assistente_medico_api.graph.nodes.fallback_retrieve import fallback_retrieve_node
-from assistente_medico_api.graph.nodes.load_memory import load_memory_node
-from assistente_medico_api.graph.nodes.rerank import context_quality_router
-from assistente_medico_api.graph.nodes.retrieve import retrieve_node
-from assistente_medico_api.graph.nodes.router import route_search_needed, router_search_needed_node
-from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
-from assistente_medico_api.graph.nodes.save_memory import save_memory_node
-from assistente_medico_api.services import rag_pipeline_service as svc
-from assistente_medico_api.services.rag_pipeline_service import (
-    MEMORY_STORE,
-    append_audit_step,
-    build_pipeline_audit,
-    run_full_graph_debug,
-    run_load_memory,
-    run_rerank_and_validate_context,
-    run_rewrite_query,
-)
+from assistente_medico_api.main import create_app
 
 
-def _doc(text: str, **metadata) -> Document:
-    return Document(page_content=text, metadata=metadata)
+class _SseGraph:
+    def __init__(self, *, final_text: str, sources: list[str], guardrail_status: str = "safe"):
+        self.final_text = final_text
+        self.sources = sources
+        self.guardrail_status = guardrail_status
+        self.ainvoke_calls = 0
+        self.astream_events_calls = 0
 
+    async def aget_state(self, _config):
+        return type("Snap", (), {"values": {}})()
 
-class _FakeStore:
-    def __init__(self, *responses):
-        self.responses = list(responses)
-        self.calls = []
-
-    def similarity_search_with_score(self, query: str, k: int = 6, **kwargs):
-        self.calls.append({"query": query, "k": k, "kwargs": kwargs})
-        if self.responses:
-            return self.responses.pop(0)
-        return []
-
-
-def _catalog() -> dict[str, dict]:
-    return {
-        "sgb": {
-            "disease": "Síndrome de Guillain-Barré",
-            "diretriz": "Síndrome de Guillain-Barré",
-            "disease_normalized": "sindrome de guillain barre",
-            "cid10_codes": ["G61.0"],
-            "cid10_descriptions": ["Síndrome de Guillain-Barré"],
-            "descricao_siglas": ["SGB"],
-            "source_stem": "20201022_portaria_conjunta_pcdt_sgb-1",
+    async def ainvoke(self, *_args, **_kwargs):
+        self.ainvoke_calls += 1
+        return {
+            "answer": self.final_text,
+            "sources": self.sources,
+            "reasoning_steps": ["R1"],
+            "guardrail_status": self.guardrail_status,
+            "guardrail_reason": "ok",
         }
-    }
 
-
-def test_router_protocol_query_and_smalltalk() -> None:
-    clinical = router_search_needed_node({"query": "Quais são os critérios de inclusão para sgb?"})
-    greeting = router_search_needed_node({"query": "Olá"})
-
-    assert clinical["search_needed"] is True
-    assert route_search_needed(clinical) == "rag"
-    assert greeting["search_needed"] is False
-    assert route_search_needed(greeting) == "direct"
-
-
-def test_required_nodes_are_importable_from_nodes_package() -> None:
-    import assistente_medico_api.graph.nodes.fallback_retrieve as fallback_retrieve
-    import assistente_medico_api.graph.nodes.generate as generate
-    import assistente_medico_api.graph.nodes.guardrail as guardrail
-    import assistente_medico_api.graph.nodes.load_memory as load_memory
-    import assistente_medico_api.graph.nodes.rerank as rerank
-    import assistente_medico_api.graph.nodes.retrieve as retrieve
-    import assistente_medico_api.graph.nodes.router as router
-    import assistente_medico_api.graph.nodes.save_memory as save_memory
-    import assistente_medico_api.graph.nodes.rewrite as rewrite
-
-    assert load_memory.load_memory_node
-    assert router.router_search_needed_node
-    assert rewrite.rewrite_query_node
-    assert retrieve.retrieve_attempt_1_node
-    assert rerank.rerank_and_validate_context_node
-    assert fallback_retrieve.fallback_retrieve_node
-    assert generate.generate_grounded_answer_node
-    assert guardrail.guardrail_node
-    assert save_memory.save_memory_node
-
-
-def test_memory_uses_structured_terms_without_clinical_hardcode() -> None:
-    source = inspect.getsource(run_load_memory)
-
-    assert "Guillain-Barré|Lúpus" not in source
-    assert "Insuficiência Adrenal" not in source
-
-    out = load_memory_node(
-        {
-            "conversation_id": "mem-test",
-            "structured_terms": {
-                "disease": "Doença Exemplo",
-                "disease_normalized": "doenca exemplo",
-                "intent": "diagnostico",
+    async def astream_events(self, *_args, **_kwargs):
+        self.astream_events_calls += 1
+        yield {
+            "event": "on_chain_end",
+            "name": "rerank",
+            "data": {
+                "output": {
+                    "sources": self.sources,
+                    "reasoning_steps": ["Busca concluída"],
+                    "retrieved_docs": [],
+                }
             },
         }
-    )
-
-    assert out["memory_result"]["last_disease"] == "Doença Exemplo"
-    assert out["memory_result"]["last_intent"] == "diagnostico"
-
-
-def test_follow_up_rewrite_uses_memory_structured_terms(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-    memory = {
-        "last_structured_terms": {
-            "disease": "Síndrome de Guillain-Barré",
-            "diretriz": "Síndrome de Guillain-Barré",
-            "disease_normalized": "sindrome de guillain barre",
-            "cid10_codes": ["G61.0"],
-            "intent": "criterios_inclusao",
+        yield {
+            "event": "on_chat_model_stream",
+            "name": "ChatOllama",
+            "metadata": {"langgraph_node": "generate"},
+            "data": {"chunk": type("Chunk", (), {"content": self.final_text[:8]})()},
         }
-    }
-
-    out = run_rewrite_query("E os critérios de exclusão?", memory, Settings())
-
-    assert out["rewrite_result"]["resolved_query"] == "E os critérios de exclusão? para Síndrome de Guillain-Barré"
-    assert "Síndrome de Guillain-Barré" in out["expanded_query"]
-    assert "CRITÉRIOS DE EXCLUSÃO" in out["expanded_query"]
-
-
-def test_rewrite_node_preserves_main_llm_history_rewrite(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-    calls = []
-
-    class _FakeLLM:
-        async def ainvoke(self, messages):
-            calls.append(messages)
-
-            class _Result:
-                content = "Quais são os critérios de exclusão para Síndrome de Guillain-Barré?"
-
-            return _Result()
-
-    monkeypatch.setattr(svc, "_build_llm", lambda settings: _FakeLLM())
-    state = {
-        "query": "E os critérios de exclusão?",
-        "memory_result": {
-            "history_transcript": "Usuário: Quais são os critérios de inclusão para SGB?\nAssistente: Síndrome de Guillain-Barré...",
-            "last_structured_terms": {
-                "disease": "Síndrome de Guillain-Barré",
-                "diretriz": "Síndrome de Guillain-Barré",
-                "disease_normalized": "sindrome de guillain barre",
-                "cid10_codes": ["G61.0"],
+        yield {
+            "event": "on_chain_end",
+            "name": "generate",
+            "data": {"output": {"answer": self.final_text, "generation_mode": "grounded_answer"}},
+        }
+        yield {
+            "event": "on_chain_end",
+            "name": "guardrail",
+            "data": {
+                "output": {
+                    "answer": self.final_text,
+                    "guardrail_status": self.guardrail_status,
+                    "guardrail_reason": "ok",
+                    "audit_id": "audit-1",
+                }
             },
-        },
-    }
-
-    out = asyncio.run(rewrite_query_node(state, Settings()))
-
-    assert calls
-    assert out["rewrite_result"]["llm_rewrite_used"] is True
-    assert out["rewrite_result"]["resolved_query"] == "Quais são os critérios de exclusão para Síndrome de Guillain-Barré?"
-    assert "CRITÉRIOS DE EXCLUSÃO" in out["expanded_query"]
+        }
 
 
-def test_clinical_entity_resolver_uses_medspacy_when_available(monkeypatch) -> None:
-    class _Ent:
-        text = "diabetes"
-        label_ = "PROBLEM"
+class _InsufficientGraph(_SseGraph):
+    async def astream_events(self, *_args, **_kwargs):
+        self.astream_events_calls += 1
+        yield {
+            "event": "on_chain_end",
+            "name": "rerank",
+            "data": {
+                "output": {
+                    "sources": [],
+                    "reasoning_steps": ["Contexto insuficiente"],
+                    "retrieved_docs": [],
+                }
+            },
+        }
+        yield {
+            "event": "on_chain_end",
+            "name": "generate",
+            "data": {"output": {"answer": self.final_text, "generation_mode": "insufficient_context"}},
+        }
+        yield {
+            "event": "on_chain_end",
+            "name": "guardrail",
+            "data": {
+                "output": {
+                    "answer": self.final_text,
+                    "guardrail_status": "safe",
+                    "guardrail_reason": "ok",
+                    "audit_id": "audit-2",
+                }
+            },
+        }
 
-    class _Doc:
-        ents = [_Ent()]
 
-    class _NLP:
-        def __call__(self, text):
-            return _Doc()
+@pytest.mark.asyncio
+async def test_post_chat_json_uses_ainvoke_not_invoke():
+    app: FastAPI = create_app()
+    dummy = _SseGraph(final_text="ok-json", sources=["[1] PCDT SGB"], guardrail_status="safe")
+    app.state.chat_graph = dummy
 
-    captured = {}
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.post(
+            "/api/assistant/chat",
+            headers={"Accept": "application/json"},
+            json={"patientId": "p1", "message": "hi"},
+        )
 
-    def _fake_load_spacy_pipeline(**kwargs):
-        captured.update(kwargs)
-        return _NLP(), "medspacy"
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["text"] == "ok-json"
+    assert payload["sources"] == ["[1] PCDT SGB"]
+    assert payload["reasoning"] == ["R1"]
+    assert "threadId" in payload and payload["threadId"]
+    assert dummy.ainvoke_calls == 1
+    assert dummy.astream_events_calls == 0
 
-    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", _fake_load_spacy_pipeline)
 
-    out = clinical_entity_resolver.resolve_clinical_entities(
-        "diabetes",
-        catalog={},
-        enable_medical_nlp=True,
-        use_medspacy=True,
-        use_spacy=False,
-        medspacy_model="pt_core_news_sm",
-        medspacy_language_code="pt",
+@pytest.mark.asyncio
+async def test_post_chat_sse_emits_final_event_and_sources():
+    app: FastAPI = create_app()
+    dummy = _SseGraph(
+        final_text="Resposta baseada em SGB e critérios de inclusão.",
+        sources=["[1] PCDT Síndrome de Guillain-Barré - CRITÉRIOS DE INCLUSÃO"],
     )
+    app.state.chat_graph = dummy
 
-    assert out["medspacy_used"] is True
-    assert out["medspacy_model"] == "pt_core_news_sm"
-    assert captured["medspacy_language_code"] == "pt"
-    assert out["spacy_used"] is True
-    assert out["linked_entities"][0]["source"] == "medspacy"
-
-
-def test_clinical_entity_resolver_fallback_does_not_break(monkeypatch) -> None:
-    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", lambda **kwargs: (None, "none"))
-
-    out = clinical_entity_resolver.resolve_clinical_entities("pergunta sem backend", catalog={})
-
-    assert out["medspacy_used"] is False
-    assert out["linked_entities"] == []
-
-
-def test_clinical_entity_resolver_can_disable_medical_nlp(monkeypatch) -> None:
-    called = False
-
-    def _raise_if_called(**kwargs):
-        nonlocal called
-        called = True
-        raise AssertionError("NLP backend should not be loaded")
-
-    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", _raise_if_called)
-
-    out = clinical_entity_resolver.resolve_clinical_entities("sgb", catalog={}, enable_medical_nlp=False)
-
-    assert called is False
-    assert out["entity_backend"] == "disabled"
-
-
-def test_rewrite_sgb_structured_expansion(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-
-    out = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, Settings())
-
-    assert "Síndrome de Guillain-Barré" in out["expanded_query"]
-    assert "G61.0" in out["expanded_query"]
-    assert "CRITÉRIOS DE INCLUSÃO" in out["expanded_query"]
-    assert out["structured_terms"]["disease"] == "Síndrome de Guillain-Barré"
-    assert out["structured_terms"]["intent"] == "criterios_inclusao"
-
-
-def test_retrieve_returns_candidates_not_final_docs(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-    rewrite = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, Settings())
-    store = _FakeStore([(_doc("cid", disease_normalized="sindrome de guillain barre"), 0.1)])
-
-    out = retrieve_node({**rewrite, "query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=Settings())
-
-    assert len(out["candidate_docs"]) == 1
-    assert "retrieved_docs" not in out
-    assert out["retrieve_result"]["candidate_count"] == 1
-    assert out["retrieve_result"]["fallback_to_unfiltered"] is False
-
-
-def test_rerank_validates_context_and_filters_wrong_disease(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-    rewrite = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, Settings())
-    candidates = [
-        _doc("wilson", disease="Doença de Wilson", disease_normalized="doenca de wilson"),
-        _doc("inclui", disease="Síndrome de Guillain-Barré", disease_normalized="sindrome de guillain barre", section="CRITÉRIOS DE INCLUSÃO"),
-    ]
-
-    out = asyncio.run(
-        run_rerank_and_validate_context(
-            query="Quais são os critérios de inclusão para sgb?",
-            expanded_query=rewrite["expanded_query"],
-            structured_terms=rewrite["structured_terms"],
-            clinical_understanding=rewrite["clinical_understanding"],
-            candidate_docs=candidates,
-            settings=Settings(),
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.post(
+            "/api/assistant/chat",
+            headers={"Accept": "text/event-stream"},
+            json={"patientId": "p1", "message": "Quais são os critérios de inclusão para sgb?"},
         )
+
+    assert res.status_code == 200
+    text = res.text
+    assert "event: token" in text
+    assert "event: final" in text
+    assert "event: done" in text
+
+    lines = text.splitlines()
+    final_index = lines.index("event: final")
+    final_line = lines[final_index + 1]
+    final_payload = json.loads(final_line.removeprefix("data: "))
+    assert final_payload["text"]
+    assert final_payload["sources"]
+    assert final_payload["threadId"]
+    assert final_payload["auditId"]
+    assert final_payload["guardrailStatus"] == "safe"
+    assert final_payload["guardrailReason"] == "ok"
+    assert any("SGB" in source.upper() or "CRITÉRIOS DE INCLUSÃO" in source.upper() for source in final_payload["sources"])
+
+
+@pytest.mark.asyncio
+async def test_post_chat_sse_emits_final_for_insufficient_context():
+    app: FastAPI = create_app()
+    dummy = _InsufficientGraph(
+        final_text="Não encontrei contexto suficiente para responder com segurança.",
+        sources=[],
     )
+    app.state.chat_graph = dummy
 
-    assert out["context_sufficient"] is True
-    assert out["rerank_result"]["context_quality"] == "sufficient"
-    assert [doc.metadata["disease"] for doc in out["retrieved_docs"]] == ["Síndrome de Guillain-Barré"]
-
-
-def test_rerank_missing_preferred_section_is_partial_and_triggers_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-    rewrite = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, Settings())
-    candidates = [
-        _doc(
-            "cid",
-            disease="Síndrome de Guillain-Barré",
-            disease_normalized="sindrome de guillain barre",
-            section="CID-10",
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.post(
+            "/api/assistant/chat",
+            headers={"Accept": "text/event-stream"},
+            json={"patientId": "p1", "message": "Quais são os critérios de inclusão para sgb?"},
         )
-    ]
 
-    out = asyncio.run(
-        run_rerank_and_validate_context(
-            query="Quais são os critérios de inclusão para sgb?",
-            expanded_query=rewrite["expanded_query"],
-            structured_terms=rewrite["structured_terms"],
-            clinical_understanding=rewrite["clinical_understanding"],
-            candidate_docs=candidates,
-            settings=Settings(),
-        )
-    )
-    state = {**rewrite, **out, "retrieve_attempt": 1, "max_retrieve_attempts": 2}
-
-    assert out["context_sufficient"] is False
-    assert out["rerank_result"]["context_quality"] == "partial"
-    assert out["rerank_result"]["failure_type"] == "missing_preferred_section"
-    assert context_quality_router(state) == "fallback_retrieve"
+    assert res.status_code == 200
+    text = res.text
+    assert "event: final" in text
+    lines = text.splitlines()
+    final_index = lines.index("event: final")
+    final_line = lines[final_index + 1]
+    final_payload = json.loads(final_line.removeprefix("data: "))
+    assert final_payload["text"]
+    assert final_payload["threadId"]
+    assert final_payload["auditId"]
+    assert final_payload["guardrailStatus"] == "safe"
+    assert final_payload["guardrailReason"] == "ok"
 
 
-def test_context_quality_router_paths() -> None:
-    assert context_quality_router({"rerank_result": {"context_quality": "sufficient"}, "retrieve_attempt": 1, "max_retrieve_attempts": 2}) == "generate_grounded"
-    assert context_quality_router({"rerank_result": {"context_quality": "partial"}, "retrieve_attempt": 1, "max_retrieve_attempts": 2}) == "fallback_retrieve"
-    assert context_quality_router({"rerank_result": {"context_quality": "insufficient"}, "retrieve_attempt": 2, "max_retrieve_attempts": 2}) == "generate_insufficient"
+def test_chat_payload_does_not_hardcode_retry_or_pipeline_version():
+    chat_source = Path("backend/src/assistente_medico_api/api/chat.py").read_text(encoding="utf-8")
+    assert '"max_retrieve_attempts": 2' not in chat_source
+    legacy_pipeline_version = "separated" + "_nodes_v2"
+    assert legacy_pipeline_version not in chat_source
+    assert '"generate_grounded_answer"' not in chat_source
+    assert '"generate_direct_answer"' not in chat_source
+    assert '"generate_insufficient_context"' not in chat_source
 
 
-def test_fallback_retrieve_increments_attempt_and_builds_targeted_query(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-    state = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, Settings())
-    state.update({"query": "Quais são os critérios de inclusão para sgb?", "retrieve_attempt": 1})
-    store = _FakeStore([(_doc("inclui", disease_normalized="sindrome de guillain barre"), 0.1)])
-
-    out = fallback_retrieve_node(state, store=store, settings=Settings())
-
-    assert out["retrieve_attempt"] == 2
-    assert "Síndrome de Guillain-Barré" in store.calls[0]["query"]
-    assert "CRITÉRIOS DE INCLUSÃO" in store.calls[0]["query"]
-    assert "candidate_docs_attempt_2" in out
-
-
-def test_generate_modes(monkeypatch) -> None:
-    async def fake_generate(state, settings):
-        return {"answer": "Resposta baseada no documento [1].", "rag_audit_payload": {}}
-
-    monkeypatch.setattr("assistente_medico_api.graph.nodes.generate.generate_node", fake_generate)
-    grounded = asyncio.run(
-        generate_grounded_answer_node(
-            {"retrieved_docs": [_doc("x")], "rerank_result": {"context_quality": "sufficient"}},
-            Settings(),
-        )
-    )
-    insufficient = asyncio.run(
-        generate_insufficient_context_node(
-            {"structured_terms": {"disease": "Síndrome de Guillain-Barré"}, "insufficiency_reason": "sem seção"},
-            Settings(),
-        )
-    )
-    direct = asyncio.run(generate_direct_answer_node({"query": "Olá", "router_decision": {"search_needed": False}}, Settings()))
-
-    assert "documento" in grounded["answer"]
-    assert "Não encontrei trechos suficientes" in insufficient["answer"]
-    assert "Olá" in direct["answer"]
-
-
-def test_after_two_bad_retrieves_generates_insufficient(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-    rewrite = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, Settings())
-    bad_candidates = [_doc("wilson", disease="Doença de Wilson", disease_normalized="doenca de wilson")]
-
-    rerank = asyncio.run(
-        run_rerank_and_validate_context(
-            query="Quais são os critérios de inclusão para sgb?",
-            expanded_query=rewrite["expanded_query"],
-            structured_terms=rewrite["structured_terms"],
-            clinical_understanding=rewrite["clinical_understanding"],
-            candidate_docs=bad_candidates,
-            settings=Settings(),
-        )
-    )
-    state = {**rewrite, **rerank, "retrieve_attempt": 2, "max_retrieve_attempts": 2}
-    answer = asyncio.run(generate_insufficient_context_node(state, Settings()))
-
-    assert context_quality_router(state) == "generate_insufficient"
-    assert "Não encontrei trechos suficientes" in answer["answer"]
-
-
-def test_save_memory_persists_structured_update(monkeypatch) -> None:
-    MEMORY_STORE._data.clear()
-    state = {
-        "conversation_id": "conv-save",
-        "query": "Quais são os critérios de inclusão para sgb?",
-        "answer": "Resposta final segura.",
-        "structured_terms": {"disease": "Síndrome de Guillain-Barré", "intent": "criterios_inclusao"},
-        "sources": ["[1] PCDT Síndrome de Guillain-Barré"],
-        "rerank_result": {"context_quality": "sufficient"},
-        "audit_id": "audit-1",
-    }
-
-    out = save_memory_node(state, settings=Settings())
-    loaded = MEMORY_STORE.load("conv-save")
-
-    assert out["memory_saved"] is True
-    assert loaded["last_structured_terms"]["disease"] == "Síndrome de Guillain-Barré"
-    assert loaded["last_sources"] == ["[1] PCDT Síndrome de Guillain-Barré"]
-
-
-def test_inspector_debug_pipeline_matches_backend_rewrite(monkeypatch) -> None:
-    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
-    settings = Settings()
-    first = [
-        (
-            _doc(
-                "serão incluídos pacientes",
-                disease="Síndrome de Guillain-Barré",
-                diretriz="Síndrome de Guillain-Barré",
-                disease_normalized="sindrome de guillain barre",
-                section="CRITÉRIOS DE INCLUSÃO",
-                cid10_codes=["G61.0"],
-            ),
-            0.1,
-        )
-    ]
-    store = _FakeStore(first)
-    query = "Quais são os critérios de inclusão para sgb?"
-
-    graph_debug = asyncio.run(run_full_graph_debug(query=query, settings=settings, store=store, conversation_id="debug-test"))
-    rewrite = run_rewrite_query(query, {}, settings)
-
-    state = graph_debug["state"]
-    assert state["expanded_query"] == rewrite["expanded_query"]
-    assert state["structured_terms"] == rewrite["structured_terms"]
-    assert state["rerank_result"]["context_quality"] == "sufficient"
-
-
-def test_pipeline_audit_payload_is_json_serializable_with_documents() -> None:
-    doc = _doc("chunk", source_stem="pcdt", section="DIAGNÓSTICO", page_start=1, page_end=2)
-    state = {
-        "query": "q",
-        "retrieve_result": {"attempt": 1, "query": "q", "candidate_docs": [doc], "candidate_count": 1},
-        "rerank_result": {"selected_docs": [doc], "context_quality": "sufficient"},
-    }
-    state["audit_trace"] = append_audit_step(state, node="retrieve_attempt_1", output_summary=state["retrieve_result"])
-
-    payload = build_pipeline_audit(state)
-
-    json.dumps(payload, ensure_ascii=False)
-    assert payload["audit_trace"]["steps"][0]["output_summary"]["candidate_docs"][0]["source_stem"] == "pcdt"
+def test_prohibited_node_files_are_absent():
+    base = Path("backend/src/assistente_medico_api/graph/nodes")
+    assert not (base / "load_memory.py").exists()
+    assert not (base / "save_memory.py").exists()
+    assert not (base / "fallback_retrieve.py").exists()
+    assert not (base / "pipeline.py").exists()

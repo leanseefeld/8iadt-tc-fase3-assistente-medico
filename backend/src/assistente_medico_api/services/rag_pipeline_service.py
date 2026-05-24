@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import UTC, datetime
 from functools import lru_cache
 import json
 import logging
-from typing import Any, Protocol
+from typing import Any
 
 import httpx
 from langchain_chroma import Chroma
@@ -24,14 +23,12 @@ from assistente_medico_api.graph.clinical_query_understanding import (
 )
 from assistente_medico_api.graph.rag_enhancement import (
     _as_list,
-    build_audit_payload,
     document_audit_record,
     expand_query_with_conitec_catalog,
     load_local_conitec_catalog,
     rerank_documents,
 )
 
-PIPELINE_VERSION = "separated_nodes_v2"
 CONTEXT_SUFFICIENT = "sufficient"
 CONTEXT_PARTIAL = "partial"
 CONTEXT_INSUFFICIENT = "insufficient"
@@ -43,39 +40,6 @@ Preserve termos clínicos, siglas resolvidas, CID/procedimentos e intenção da 
 Responda apenas com a consulta reformulada, sem prefixos nem explicações.\
 """
 _logger = logging.getLogger("assistente_medico.rag")
-
-
-class ConversationMemoryStore(Protocol):
-    """Minimal persistence contract for conversation memory."""
-
-    def load(self, conversation_id: str) -> dict[str, Any] | None: ...
-
-    def save(self, conversation_id: str, memory_update: dict[str, Any]) -> None: ...
-
-
-class InMemoryConversationMemoryStore:
-    """Process-local memory store used until a database adapter is wired."""
-
-    def __init__(self) -> None:
-        self._data: dict[str, dict[str, Any]] = {}
-
-    def load(self, conversation_id: str) -> dict[str, Any] | None:
-        value = self._data.get(conversation_id)
-        return deepcopy(value) if value else None
-
-    def save(self, conversation_id: str, memory_update: dict[str, Any]) -> None:
-        current = deepcopy(self._data.get(conversation_id) or {})
-        turns = list(current.get("turns") or [])
-        turns.extend(memory_update.get("turns") or [])
-        if len(turns) > 20:
-            turns = turns[-20:]
-        current.update({k: v for k, v in memory_update.items() if k != "turns"})
-        current["turns"] = turns
-        current["updated_at"] = _utc_now()
-        self._data[conversation_id] = current
-
-
-MEMORY_STORE = InMemoryConversationMemoryStore()
 
 
 class LLMRankedDocument(BaseModel):
@@ -93,76 +57,6 @@ class LLMRerankResult(BaseModel):
 @lru_cache(maxsize=1)
 def cached_conitec_catalog() -> dict:
     return load_local_conitec_catalog()
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _settings_config(settings: Settings) -> dict[str, Any]:
-    try:
-        persist_dir = str(resolve_chroma_persist_dir(settings))
-    except Exception:
-        persist_dir = str(getattr(settings, "chroma_persist_dir", "") or "")
-    return {
-        "pipeline_version": getattr(settings, "rag_pipeline_version", PIPELINE_VERSION),
-        "chroma_persist_dir": persist_dir,
-        "chroma_collection": settings.chroma_collection,
-        "ollama_embed_model": settings.ollama_embed_model,
-        "ollama_chat_model": settings.ollama_chat_model,
-        "rag_use_llm_rerank": settings.rag_use_llm_rerank,
-        "rag_llm_rerank_top_n": settings.rag_llm_rerank_top_n,
-        "rag_max_retrieve_attempts": getattr(settings, "rag_max_retrieve_attempts", 2),
-    }
-
-
-def _audit_safe(value: Any) -> Any:
-    """Convert runtime objects to JSON-safe audit data."""
-    if isinstance(value, Document):
-        rank = int((value.metadata or {}).get("dense_rank") or 0) or 1
-        return document_audit_record(value, rank)
-    if isinstance(value, dict):
-        return {str(key): _audit_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_audit_safe(item) for item in value]
-    if isinstance(value, tuple):
-        return [_audit_safe(item) for item in value]
-    if isinstance(value, set):
-        return [_audit_safe(item) for item in sorted(value, key=str)]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
-
-
-def _audit_base(state: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
-    trace = deepcopy(state.get("audit_trace") or {})
-    trace.setdefault("pipeline_version", PIPELINE_VERSION)
-    trace.setdefault("steps", [])
-    if settings is not None:
-        trace.setdefault("config", _settings_config(settings))
-    return trace
-
-
-def append_audit_step(
-    state: dict[str, Any],
-    *,
-    node: str,
-    input_summary: dict[str, Any] | None = None,
-    output_summary: dict[str, Any] | None = None,
-    warnings: list[str] | None = None,
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    trace = _audit_base(state, settings)
-    trace["steps"].append(
-        {
-            "node": node,
-            "timestamp": _utc_now(),
-            "input_summary": _audit_safe(input_summary or {}),
-            "output_summary": _audit_safe(output_summary or {}),
-            "warnings": _audit_safe(warnings or []),
-        }
-    )
-    return trace
 
 
 def format_source_label(doc: Document, index: int | None = None) -> str:
@@ -206,54 +100,6 @@ def _last_structured_terms_from_state(state: dict[str, Any]) -> dict[str, Any] |
         if isinstance(item, dict) and item:
             return deepcopy(item)
     return None
-
-
-def run_load_memory(
-    state: dict[str, Any],
-    *,
-    store: ConversationMemoryStore | None = None,
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    memory_store = store or MEMORY_STORE
-    conversation_id = state.get("conversation_id")
-    history = list(state.get("chat_history") or state.get("messages") or [])
-    persisted = memory_store.load(str(conversation_id)) if conversation_id else None
-
-    persisted_turns = list((persisted or {}).get("turns") or [])
-    turns = persisted_turns + history
-    last_structured = _last_structured_terms_from_state(state) or deepcopy((persisted or {}).get("last_structured_terms") or {})
-    last_disease = str(last_structured.get("diretriz") or last_structured.get("disease") or "").strip() or None
-    last_intent = str(last_structured.get("intent") or "").strip() or None
-    source = "state" if history else "database" if persisted else "empty"
-    memory_result = {
-        "conversation_id": conversation_id,
-        "history_available": bool(turns),
-        "turns": turns[-20:],
-        "history_transcript": _history_transcript(turns),
-        "conversation_summary": (persisted or {}).get("summary") or "",
-        "summary": (persisted or {}).get("summary") or "",
-        "last_structured_terms": last_structured or None,
-        "last_disease": last_disease,
-        "last_intent": last_intent,
-        "last_sources": (persisted or {}).get("last_sources") or [],
-        "source": source,
-    }
-    audit_trace = append_audit_step(
-        state,
-        node="load_memory",
-        output_summary={
-            "history_available": memory_result["history_available"],
-            "turn_count": len(memory_result["turns"]),
-            "last_disease": last_disease,
-            "source": source,
-        },
-        settings=settings,
-    )
-    return {
-        "memory_result": memory_result,
-        "memory_context": memory_result,
-        "audit_trace": audit_trace,
-    }
 
 
 def _is_simple_direct(text: str) -> bool:
@@ -796,18 +642,6 @@ async def run_rerank_and_validate_context(
             "llm_rerank": llm_debug,
         },
     }
-    audit_payload = build_audit_payload(
-        question=query,
-        expansion={
-            "original_query": query,
-            "expanded_query": expanded_query,
-            "structured_terms": structured_terms,
-            "clinical_understanding": clinical_understanding,
-        },
-        documents=selected_docs,
-        retrieval_candidates_k=len(candidate_docs),
-        retrieval_final_k=int(settings.rag_retrieve_final_k),
-    )
     return {
         "retrieved_docs": selected_docs,
         "sources": sources,
@@ -815,115 +649,19 @@ async def run_rerank_and_validate_context(
         "insufficiency_reason": insufficiency_reason,
         "rerank_result": rerank_result,
         "rerank_debug": rerank_result["debug"],
-        "rag_audit_payload": audit_payload,
     }
 
 
 def route_context_quality(state: dict[str, Any]) -> str:
+    """Compatibilidade com testes e chamadas diretas de debug."""
     quality = (state.get("rerank_result") or {}).get("context_quality")
     if quality == CONTEXT_SUFFICIENT or state.get("context_sufficient") is True:
-        return "generate_grounded"
-    if int(state.get("retrieve_attempt") or 1) < int(state.get("max_retrieve_attempts") or 2):
-        return "fallback_retrieve"
-    return "generate_insufficient"
-
-
-def build_fallback_query(query: str, structured_terms: dict[str, Any]) -> str:
-    terms = [
-        structured_terms.get("diretriz") or structured_terms.get("disease"),
-        *_as_list(structured_terms.get("preferred_sections")),
-        *_as_list(structured_terms.get("cid10_codes")),
-        query,
-    ]
-    return " ".join(str(term).strip() for term in terms if str(term or "").strip())
-
-
-def merge_candidate_attempts(previous: list[Document], current: list[Document]) -> list[Document]:
-    seen = {_doc_signature(doc) for doc in previous}
-    merged = list(previous)
-    for doc in current:
-        sig = _doc_signature(doc)
-        if sig not in seen:
-            merged.append(doc)
-            seen.add(sig)
-    return merged
-
-
-def build_pipeline_audit(
-    state: dict[str, Any],
-    *,
-    generate_mode: str | None = None,
-    guardrail: dict | None = None,
-) -> dict[str, Any]:
-    payload = deepcopy(state.get("rag_audit_payload") or {"query": state.get("query") or ""})
-    attempts = list(payload.get("retrieve_attempts") or [])
-    retrieve_result = state.get("retrieve_result") or {}
-    if retrieve_result and not any(item.get("attempt") == retrieve_result.get("attempt") for item in attempts):
-        attempts.append(
-            {
-                "attempt": retrieve_result.get("attempt"),
-                "query": retrieve_result.get("query"),
-                "candidate_count": retrieve_result.get("candidate_count"),
-                "metadata_filter": retrieve_result.get("metadata_filter"),
-                "fallback_to_unfiltered": retrieve_result.get("fallback_to_unfiltered"),
-            }
-        )
-    payload.update(
-        {
-            "query": state.get("query") or payload.get("query") or "",
-            "pipeline_version": PIPELINE_VERSION,
-            "memory_result": state.get("memory_result") or payload.get("memory_result") or {},
-            "router_result": state.get("router_result") or payload.get("router_result") or {},
-            "rewrite": state.get("rewrite_result") or payload.get("rewrite") or {},
-            "retrieve_attempts": attempts,
-            "rerank": state.get("rerank_result") or payload.get("rerank") or {},
-            "audit_trace": state.get("audit_trace") or payload.get("audit_trace") or {},
-        }
-    )
-    if generate_mode:
-        payload["generate_mode"] = generate_mode
-    if guardrail:
-        payload["guardrail"] = guardrail
-    return _audit_safe(payload)
-
-
-def run_save_memory(
-    state: dict[str, Any],
-    *,
-    store: ConversationMemoryStore | None = None,
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    memory_store = store or MEMORY_STORE
-    conversation_id = state.get("conversation_id") or (state.get("memory_result") or {}).get("conversation_id")
-    structured = state.get("structured_terms") or (state.get("rewrite_result") or {}).get("structured_terms") or {}
-    generation = state.get("generation_result") or {}
-    rerank = state.get("rerank_result") or {}
-    answer = state.get("answer") or generation.get("answer") or ""
-    if conversation_id:
-        memory_store.save(
-            str(conversation_id),
-            {
-                "turns": [
-                    {"role": "user", "content": state.get("query") or ""},
-                    {"role": "assistant", "content": answer},
-                ],
-                "last_structured_terms": structured,
-                "last_disease": structured.get("diretriz") or structured.get("disease"),
-                "last_intent": structured.get("intent"),
-                "last_sources": state.get("sources") or [],
-                "context_quality": rerank.get("context_quality"),
-                "audit_id": state.get("audit_id"),
-                "summary": (state.get("memory_result") or {}).get("summary") or "",
-            },
-        )
-    audit_trace = append_audit_step(
-        state,
-        node="save_memory",
-        input_summary={"conversation_id": conversation_id},
-        output_summary={"saved": bool(conversation_id), "disease": structured.get("disease") or structured.get("diretriz")},
-        settings=settings,
-    )
-    return {"memory_saved": bool(conversation_id), "audit_trace": audit_trace}
+        return "generate"
+    attempts = int(state.get("retrieve_attempt") or 1)
+    max_attempts = int(state.get("max_retrieve_attempts") or 1)
+    if attempts < max_attempts:
+        return "retry_retrieve"
+    return "generate"
 
 
 async def run_full_graph_debug(
@@ -934,96 +672,57 @@ async def run_full_graph_debug(
     conversation_id: str | None = None,
     chat_history: list | None = None,
 ) -> dict[str, Any]:
+    from assistente_medico_api.graph.nodes.generate import generate_node
+    from assistente_medico_api.graph.nodes.guardrail import guardrail_node
+    from assistente_medico_api.graph.nodes.rerank import context_quality_router, rerank_and_validate_context_node
+    from assistente_medico_api.graph.nodes.retrieve import retrieve_node
+    from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
+    from assistente_medico_api.graph.nodes.router import router_search_needed_node
+
     state: dict[str, Any] = {
         "query": query,
         "conversation_id": conversation_id,
         "chat_history": chat_history or [],
+        "audit_id": str(uuid.uuid4()),
         "retrieve_attempt": 1,
         "max_retrieve_attempts": int(getattr(settings, "rag_max_retrieve_attempts", 2)),
-    }
-    state.update(run_load_memory(state, settings=settings))
-    state.update(run_search_router(query, state.get("memory_result"), settings))
-    if not state.get("search_needed"):
-        state["generation_result"] = {"mode": "direct", "answer": ""}
-        return {"state": state, "audit": build_pipeline_audit(state), "route": "direct"}
-
-    resolved_query, rewrite_debug = await run_llm_rewrite(query, state.get("memory_result") or {}, settings)
-    state.update(run_rewrite_query(query, state.get("memory_result"), settings, resolved_query=resolved_query, rewrite_debug=rewrite_debug))
-    state["audit_trace"] = append_audit_step(
-        state,
-        node="rewrite_query",
-        output_summary=state.get("rewrite_result") or {},
-        settings=settings,
-    )
-    retrieve = run_retrieve(
-        expanded_query=state.get("expanded_query") or query,
-        structured_terms=state.get("structured_terms") or {},
-        store=store,
-        settings=settings,
-        retrieve_attempt=1,
-    )
-    state.update(retrieve)
-    state["audit_trace"] = append_audit_step(
-        state,
-        node="retrieve_attempt_1",
-        output_summary=retrieve.get("retrieve_result") or {},
-        settings=settings,
-    )
-    rerank = await run_rerank_and_validate_context(
-        query=query,
-        expanded_query=state.get("expanded_query") or query,
-        structured_terms=state.get("structured_terms") or {},
-        clinical_understanding=state.get("clinical_understanding") or {},
-        candidate_docs=state.get("candidate_docs") or [],
-        settings=settings,
-    )
-    state.update(rerank)
-    state["audit_trace"] = append_audit_step(
-        state,
-        node="rerank_and_validate_context",
-        output_summary=state.get("rerank_result") or {},
-        settings=settings,
-    )
-    if route_context_quality(state) == "fallback_retrieve":
-        state["retrieve_attempt"] = 2
-        fallback = run_retrieve(
-            expanded_query=state.get("expanded_query") or query,
-            structured_terms=state.get("structured_terms") or {},
-            store=store,
-            settings=settings,
-            retrieve_attempt=2,
-            fallback_query=build_fallback_query(query, state.get("structured_terms") or {}),
-        )
-        previous = list(state.get("candidate_docs") or [])
-        current = list(fallback.get("candidate_docs") or [])
-        state["candidate_docs_attempt_1"] = previous
-        state["candidate_docs_attempt_2"] = current
-        fallback["candidate_docs"] = merge_candidate_attempts(previous, current)
-        state.update(fallback)
-        state["audit_trace"] = append_audit_step(
-            state,
-            node="fallback_retrieve_attempt_2",
-            output_summary=fallback.get("retrieve_result") or {},
-            settings=settings,
-        )
-        rerank = await run_rerank_and_validate_context(
-            query=query,
-            expanded_query=state.get("expanded_query") or query,
-            structured_terms=state.get("structured_terms") or {},
-            clinical_understanding=state.get("clinical_understanding") or {},
-            candidate_docs=state.get("candidate_docs") or [],
-            settings=settings,
-        )
-        state.update(rerank)
-        state["audit_trace"] = append_audit_step(
-            state,
-            node="rerank_and_validate_context",
-            output_summary=state.get("rerank_result") or {},
-            settings=settings,
-        )
-    route = route_context_quality(state)
-    state["generation_result"] = {
-        "mode": "grounded" if route == "generate_grounded" else "insufficient",
+        "retrieved_docs": [],
+        "sources": [],
+        "reasoning_steps": [],
         "answer": "",
+        "generation_mode": "grounded_answer",
     }
-    return {"state": state, "audit": build_pipeline_audit(state), "route": route}
+
+    state.update(await router_search_needed_node(state, settings=settings))
+    if not state.get("search_needed"):
+        state["generation_mode"] = "direct_answer"
+        state.update(await generate_node(state, settings))
+        state.update(await guardrail_node(state, settings))
+        return {"state": state, "audit": {}, "route": "direct"}
+
+    state.update(await rewrite_query_node(state, settings))
+
+    while True:
+        state.update(
+            retrieve_node(
+                state,
+                store=store,
+                settings=settings,
+            )
+        )
+        state.update(
+            await rerank_and_validate_context_node(
+                state,
+                settings=settings,
+            )
+        )
+        route = context_quality_router(state)
+        if route == "retry_retrieve":
+            continue
+        break
+
+    if state.get("generation_mode") not in {"grounded_answer", "insufficient_context"}:
+        state["generation_mode"] = "grounded_answer" if state.get("context_sufficient") else "insufficient_context"
+    state.update(await generate_node(state, settings))
+    state.update(await guardrail_node(state, settings))
+    return {"state": state, "audit": {}, "route": "rag"}

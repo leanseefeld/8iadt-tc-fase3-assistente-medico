@@ -73,17 +73,16 @@ async def _invoke_payload_and_config(
         "query": body.message.strip(),
         "patient_id": body.patient_id,
         "conversation_id": tid,
+        "audit_id": str(uuid.uuid4()),
+        "retrieve_attempt": 1,
         "retrieved_docs": [],
         "sources": [],
         "reasoning_steps": [],
         "answer": "",
         "retrieval_query": "",
-        "retrieve_attempt": 1,
-        "max_retrieve_attempts": 2,
         "candidate_docs": [],
         "context_sufficient": False,
         "insufficiency_reason": None,
-        "audit_trace": {"pipeline_version": "separated_nodes_v2", "steps": []},
     }
     if not has_persisted_history:
         payload["chat_history"] = _normalize_message_history(body)
@@ -159,75 +158,91 @@ async def post_chat(
             guardrail_reason=final.get("guardrail_reason") or None,
         )
 
-    # --- Caminho SSE: astream_events emite on_chat_model_stream por token ---
+    # --- Caminho SSE: combina eventos de fim de nó com tokens do gerador final ---
     async def event_gen():
         tokens_streamed = 0
         guard_status = None
-
-        def finalize_audit() -> None:
-            audit(
-                "chat_response_done",
-                kind="chat",
-                latency_ms=round((time.perf_counter() - t_started) * 1000, 2),
-                thread_id=thread_id,
-                patient_id=(body.patient_id or None),
-                mode="sse",
-                guardrail_status=guard_status,
-                tokens_streamed=tokens_streamed,
-            )
+        final_state: dict = {"audit_id": initial.get("audit_id")}
 
         try:
             async for event in graph.astream_events(initial, config, version="v2"):
-                kind = event["event"]
+                kind = event.get("event")
+                name = event.get("name")
+                data = event.get("data") or {}
 
-                # Rerank terminou → envia metadados finais antes dos tokens.
-                if kind == "on_chain_end" and event.get("name") == "rerank_and_validate_context":
-                    output = event["data"].get("output") or {}
-                    yield {
-                        "event": "sources",
-                        "data": json.dumps({"sources": output.get("sources") or []}),
-                    }
-                    yield {
-                        "event": "reasoning",
-                        "data": json.dumps({"steps": output.get("reasoning_steps") or []}),
-                    }
+                if kind == "on_chain_end":
+                    output = data.get("output") or {}
+                    if isinstance(output, dict):
+                        final_state.update(output)
 
-                # Guardrail terminou → envia status e resposta final.
-                # Se o status não for "safe", o frontend substitui o texto
-                # acumulado pelos tokens já exibidos (AVISO appenda disclaimer;
-                # BLOQUEAR/regenerated substitui por mensagem segura).
-                elif kind == "on_chain_end" and event.get("name") == "guardrail":
-                    output = event["data"].get("output") or {}
-                    guard_status = output.get("guardrail_status")
-                    yield {
-                        "event": "guardrail",
-                        "data": json.dumps(
-                            {
-                                "status": output.get("guardrail_status"),
-                                "reason": output.get("guardrail_reason"),
-                                "answer": output.get("answer"),
-                                "auditId": output.get("audit_id"),
-                            }
-                        ),
-                    }
+                    if name == "rerank":
+                        yield {
+                            "event": "sources",
+                            "data": json.dumps(
+                                {"sources": list(final_state.get("sources") or output.get("sources") or [])}
+                            ),
+                        }
+                        yield {
+                            "event": "reasoning",
+                            "data": json.dumps(
+                                {"steps": list(final_state.get("reasoning_steps") or output.get("reasoning_steps") or [])}
+                            ),
+                        }
 
-                # Token do LLM dentro do nó generate — filtra por nó para não vazar
-                # tokens internos do guardrail (classificador, regeneração).
-                elif kind == "on_chat_model_stream" and event.get("metadata", {}).get("langgraph_node") in {
-                    "generate_grounded_answer",
-                    "generate_direct_answer",
-                }:
-                    chunk = event["data"].get("chunk")
+                    elif name == "guardrail":
+                        guard_status = final_state.get("guardrail_status") or output.get("guardrail_status")
+                        yield {
+                            "event": "guardrail",
+                            "data": json.dumps(
+                                {
+                                    "status": final_state.get("guardrail_status"),
+                                    "reason": final_state.get("guardrail_reason"),
+                                    "answer": final_state.get("answer"),
+                                    "auditId": final_state.get("audit_id"),
+                                }
+                            ),
+                        }
+
+                elif kind == "on_chat_model_stream" and event.get("metadata", {}).get("langgraph_node") == "generate":
+                    chunk = data.get("chunk")
                     piece = getattr(chunk, "content", None) if chunk else None
                     if isinstance(piece, list):
                         piece = "".join(str(p) for p in piece)
                     if piece:
                         tokens_streamed += 1
+                        audit("sse_token_streamed", kind="chat", thread_id=thread_id)
                         yield {
                             "event": "token",
                             "data": json.dumps({"content": str(piece)}),
                         }
 
+            if not final_state:
+                snap = await graph.aget_state(config)
+                final_state = dict(snap.values or {})
+
+            final_payload = {
+                "text": final_state.get("answer") or "",
+                "sources": list(final_state.get("sources") or []),
+                "reasoning": list(final_state.get("reasoning_steps") or []),
+                "threadId": thread_id,
+                "auditId": final_state.get("audit_id"),
+                "guardrailStatus": final_state.get("guardrail_status"),
+                "guardrailReason": final_state.get("guardrail_reason"),
+            }
+
+            audit(
+                "sse_final_event_sent",
+                kind="chat",
+                thread_id=thread_id,
+                final_answer_length=len(final_payload["text"]),
+                final_sources_count=len(final_payload["sources"]),
+                tokens_streamed=tokens_streamed,
+            )
+
+            yield {
+                "event": "final",
+                "data": json.dumps(final_payload),
+            }
             yield {
                 "event": "done",
                 "data": json.dumps({"threadId": thread_id}),
@@ -238,10 +253,18 @@ async def post_chat(
                 "event": "error",
                 "data": json.dumps({"detail": str(exc)}),
             }
-            finalize_audit()
             return
-
-        finalize_audit()
+        finally:
+            audit(
+                "chat_response_done",
+                kind="chat",
+                latency_ms=round((time.perf_counter() - t_started) * 1000, 2),
+                thread_id=thread_id,
+                patient_id=(body.patient_id or None),
+                mode="sse",
+                guardrail_status=guard_status,
+                tokens_streamed=tokens_streamed,
+            )
 
     return EventSourceResponse(event_gen())
 

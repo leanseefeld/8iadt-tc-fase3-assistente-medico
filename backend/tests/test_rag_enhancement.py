@@ -993,7 +993,6 @@ def test_no_context_mismatch_goes_to_llm() -> None:
             },
         },
         "clinical_understanding": {},
-        "rag_audit_payload": {},
     }
 
     out = asyncio.run(generate_node(state, Settings()))
