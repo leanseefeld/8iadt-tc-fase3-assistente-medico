@@ -85,6 +85,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MEDICO_RAG_MIN_FINAL_SCORE_WITH_CATALOG", "RAG_MIN_FINAL_SCORE_WITH_CATALOG"),
         description="Score mínimo aplicado quando há candidato de catálogo confiável.",
     )
+    rag_use_llm_rerank: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MEDICO_RAG_USE_LLM_RERANK", "RAG_USE_LLM_RERANK"),
+        description="Ativa reranking/validação por LLM com fallback heurístico determinístico.",
+    )
+    rag_llm_rerank_top_n: int = Field(
+        default=12,
+        validation_alias=AliasChoices("MEDICO_RAG_LLM_RERANK_TOP_N", "RAG_LLM_RERANK_TOP_N"),
+        description="Número máximo de candidatos enviados ao LLM reranker.",
+    )
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(
         default=Path("./uploads"),

@@ -77,6 +77,11 @@ async def _invoke_payload_and_config(
         "reasoning_steps": [],
         "answer": "",
         "retrieval_query": "",
+        "retrieve_attempt": 1,
+        "max_retrieve_attempts": 2,
+        "candidate_docs": [],
+        "context_sufficient": False,
+        "insufficiency_reason": None,
     }
     if not has_persisted_history:
         payload["chat_history"] = _normalize_message_history(body)
@@ -173,8 +178,8 @@ async def post_chat(
             async for event in graph.astream_events(initial, config, version="v2"):
                 kind = event["event"]
 
-                # Retrieve terminou → envia metadados antes dos tokens.
-                if kind == "on_chain_end" and event.get("name") == "retrieve":
+                # Rerank terminou → envia metadados finais antes dos tokens.
+                if kind == "on_chain_end" and event.get("name") == "rerank_and_validate_context":
                     output = event["data"].get("output") or {}
                     yield {
                         "event": "sources",
@@ -206,7 +211,10 @@ async def post_chat(
 
                 # Token do LLM dentro do nó generate — filtra por nó para não vazar
                 # tokens internos do guardrail (classificador, regeneração).
-                elif kind == "on_chat_model_stream" and event.get("metadata", {}).get("langgraph_node") == "generate":
+                elif kind == "on_chat_model_stream" and event.get("metadata", {}).get("langgraph_node") in {
+                    "generate_grounded_answer",
+                    "generate_direct_answer",
+                }:
                     chunk = event["data"].get("chunk")
                     piece = getattr(chunk, "content", None) if chunk else None
                     if isinstance(piece, list):

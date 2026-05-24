@@ -320,6 +320,11 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
     audit_payload = dict(state.get("rag_audit_payload") or {})
     if audit_payload:
         audit_payload["answer"] = final_answer
+        audit_payload["guardrail"] = {
+            "status": guardrail_status,
+            "reason": reason,
+            "classifier_verdict": verdict,
+        }
         audit_id = str(audit_payload.get("audit_id") or "")
         if getattr(settings, "rag_audit_enabled", True):
             try:

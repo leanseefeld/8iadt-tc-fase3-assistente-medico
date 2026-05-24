@@ -19,6 +19,7 @@ from assistente_medico_api.graph.nodes.retrieve import format_context_block
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.graph.clinical_query_understanding import normalize_text_for_match
 from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.services.rag_pipeline_service import build_pipeline_audit
 
 # Persona e limites de segurança para o assistente (pt-BR).
 _SYSTEM_PROMPT = """\
@@ -229,10 +230,10 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
             controlled_response=True,
             reason="detected_disease_without_compatible_context",
         )
-        return {
+        out = {
             "answer": controlled_answer,
-            "rag_audit_payload": audit_payload,
         }
+        return {**out, "rag_audit_payload": build_pipeline_audit({**dict(state), **out}, generate_mode="grounded")}
 
     llm = _build_llm(settings)
     messages = _build_messages(state)
@@ -265,4 +266,53 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
     )
     # Histórico atualizado no guardrail_node, que conhece a resposta final
     # (pode ter sido substituída ou modificada pelo guardrail).
-    return {"answer": ans, "rag_audit_payload": audit_payload}
+    out = {"answer": ans}
+    return {**out, "rag_audit_payload": build_pipeline_audit({**dict(state), **out}, generate_mode="grounded")}
+
+
+async def generate_grounded_answer_node(state: ChatRAGState, settings: Settings) -> dict:
+    """Generate grounded answer using validated retrieved_docs."""
+    return await generate_node(state, settings)
+
+
+async def generate_insufficient_context_node(state: ChatRAGState, settings: Settings) -> dict:
+    """Return controlled insufficiency answer without asking the LLM for clinical content."""
+    del settings
+    structured = state.get("structured_terms") or {}
+    disease = structured.get("diretriz") or structured.get("disease") or "a condição solicitada"
+    intent = structured.get("intent") or "a pergunta"
+    reason = state.get("insufficiency_reason") or "contexto recuperado insuficiente"
+    answer = (
+        "Não encontrei trechos suficientes nos PCDTs recuperados para responder com segurança "
+        f"sobre {disease} e {intent}. Motivo: {reason}."
+    )
+    out = {"answer": answer}
+    audit(
+        "rag_generate_insufficient_context",
+        kind="rag",
+        patient_id=state.get("patient_id") or None,
+        disease=disease,
+        insufficiency_reason=reason,
+    )
+    return {**out, "rag_audit_payload": build_pipeline_audit({**dict(state), **out}, generate_mode="insufficient")}
+
+
+async def generate_direct_answer_node(state: ChatRAGState, settings: Settings) -> dict:
+    """Answer non-RAG interactions without inventing clinical guidance."""
+    del settings
+    query = normalize_text_for_match(state.get("query") or "")
+    if any(term in query for term in ("ola", "oi", "bom dia", "boa tarde", "boa noite")):
+        answer = "Olá. Como posso ajudar com uma pergunta clínica ou consulta a PCDTs?"
+    else:
+        answer = (
+            "Posso ajudar a consultar PCDTs e organizar informações clínicas. "
+            "Para orientação clínica específica, reformule a pergunta mencionando a condição, CID, protocolo ou conduta desejada."
+        )
+    out = {"answer": answer}
+    audit(
+        "rag_generate_direct_answer",
+        kind="rag",
+        patient_id=state.get("patient_id") or None,
+        router_decision=state.get("router_decision") or {},
+    )
+    return {**out, "rag_audit_payload": build_pipeline_audit({**dict(state), **out}, generate_mode="direct")}

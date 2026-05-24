@@ -45,7 +45,11 @@ try:
         format_source_label,
     )
     from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
-    from assistente_medico_api.services.rag_retrieval_service import run_rag_retrieval
+    from assistente_medico_api.services.rag_pipeline_service import (
+        run_rerank_and_validate_context,
+        run_retrieve,
+        run_rewrite_query,
+    )
     from pcdt_ingest.embed import (
         CHROMA_COLLECTION_PCDT,
         build_ollama_embeddings,
@@ -80,7 +84,13 @@ except ModuleNotFoundError as exc:
     def format_source_label(doc: Any, index: int) -> str:  # type: ignore[no-redef]
         return f"[{index}] PCDT ? (pp. ?-?)"
 
-    def run_rag_retrieval(*args, **kwargs):  # type: ignore[no-redef]
+    def run_rewrite_query(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    def run_retrieve(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    async def run_rerank_and_validate_context(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
     async def rewrite_query_node(*args, **kwargs):  # type: ignore[no-redef]
@@ -548,25 +558,35 @@ def main() -> None:
 
                     inspectable_store = InspectableStore(store)
                     t0 = time.perf_counter()
-                    retrieval_result = run_rag_retrieval(
+                    rewrite_structured = run_rewrite_query(
                         str(final_state.get("retrieval_query") or final_state.get("query") or ""),
-                        cast(Any, inspectable_store),
+                        final_state.get("memory_context") or {},
                         backend_settings,
-                        existing_reasoning_steps=list(final_state.get("reasoning_steps") or []),
                     )
+                    final_state.update(rewrite_structured)
+                    retrieve_structured = run_retrieve(
+                        expanded_query=str(final_state.get("expanded_query") or final_state.get("retrieval_query") or ""),
+                        structured_terms=cast(dict[str, Any], final_state.get("structured_terms") or {}),
+                        store=cast(Any, inspectable_store),
+                        settings=backend_settings,
+                        retrieve_attempt=1,
+                    )
+                    final_state.update(retrieve_structured)
+                    rerank_structured = cast(
+                        dict[str, Any],
+                        _run_async(
+                            run_rerank_and_validate_context(
+                                query=str(final_state.get("query") or ""),
+                                expanded_query=str(final_state.get("expanded_query") or final_state.get("retrieval_query") or ""),
+                                structured_terms=cast(dict[str, Any], final_state.get("structured_terms") or {}),
+                                clinical_understanding=cast(dict[str, Any], final_state.get("clinical_understanding") or {}),
+                                candidate_docs=cast(list[Document], final_state.get("candidate_docs") or []),
+                                settings=backend_settings,
+                            )
+                        ),
+                    )
+                    final_state.update(rerank_structured)
                     timing = replace(timing, retrieve_ms=(time.perf_counter() - t0) * 1000.0)
-                    final_state.update(
-                        {
-                            "retrieval_query": retrieval_result.expanded_query,
-                            "retrieved_docs": retrieval_result.retrieved_docs,
-                            "sources": retrieval_result.sources,
-                            "reasoning_steps": retrieval_result.reasoning_steps,
-                            "query_expansion": retrieval_result.query_expansion,
-                            "clinical_understanding": retrieval_result.clinical_understanding,
-                            "rag_audit_payload": retrieval_result.audit_payload,
-                            "_rag_retrieval_debug": retrieval_result.debug,
-                        }
-                    )
                     raw_candidates = inspectable_store.merged_pairs or inspectable_store.last_pairs
                     final_state["_inspector_retrieve_calls"] = inspectable_store.calls
                 except Exception as exc:
