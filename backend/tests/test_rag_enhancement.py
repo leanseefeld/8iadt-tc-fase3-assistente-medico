@@ -932,10 +932,9 @@ def test_chat_and_inspector_use_same_retrieval_service() -> None:
     )
 
     assert "run_retrieve" in retrieve_source
-    assert "run_rewrite_query" in inspector_source
-    assert "run_retrieve" in inspector_source
-    assert "run_rerank_and_validate_context" in inspector_source
+    assert "run_full_graph_debug" in inspector_source
     assert "retrieve_node(" not in inspector_source
+    assert "--export-audit" in inspector_source
 
 
 def test_generate_does_not_reinterpret_detected_abbreviation() -> None:

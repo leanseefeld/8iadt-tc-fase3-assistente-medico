@@ -7,16 +7,21 @@ import time
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
-from assistente_medico_api.services.rag_pipeline_service import append_audit_step, build_pipeline_audit, run_rewrite_query
+from assistente_medico_api.services.rag_pipeline_service import append_audit_step, build_pipeline_audit, run_llm_rewrite, run_rewrite_query
 
 
 async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
     """Rewrite current question and produce structured clinical expansion."""
     t0 = time.perf_counter()
+    query = state.get("query") or ""
+    memory_result = state.get("memory_result") or state.get("memory_context") or {}
+    resolved_query, rewrite_debug = await run_llm_rewrite(query, memory_result if isinstance(memory_result, dict) else {}, settings)
     out = run_rewrite_query(
-        state.get("query") or "",
-        state.get("memory_result") or state.get("memory_context"),
+        query,
+        memory_result,
         settings,
+        resolved_query=resolved_query,
+        rewrite_debug=rewrite_debug,
     )
     steps = list(state.get("reasoning_steps") or [])
     steps.append(
@@ -29,6 +34,7 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
         input_summary={
             "query": state.get("query") or "",
             "memory_last_disease": (state.get("memory_result") or {}).get("last_disease"),
+            "history_transcript_available": bool((state.get("memory_result") or {}).get("history_transcript")),
         },
         output_summary=out.get("rewrite_result") or {},
         settings=settings,
@@ -43,6 +49,8 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
         expanded_query_snippet=truncate(out.get("expanded_query") or ""),
         structured_terms=out.get("structured_terms") or {},
         catalog_candidates=out.get("catalog_candidates") or [],
+        used_history=bool(rewrite_debug.get("history_transcript_used")),
+        llm_rewrite_used=bool(rewrite_debug.get("llm_rewrite_used")),
     )
     return {
         **out,

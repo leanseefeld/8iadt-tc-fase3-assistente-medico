@@ -54,3 +54,7 @@ def retrieve_node(
         "reasoning_steps": steps,
         "rag_audit_payload": build_pipeline_audit(merged),
     }
+
+
+def retrieve_attempt_1_node(state: ChatRAGState, *, store: Chroma, settings: Settings) -> dict:
+    return retrieve_node({**dict(state), "retrieve_attempt": 1}, store=store, settings=settings)

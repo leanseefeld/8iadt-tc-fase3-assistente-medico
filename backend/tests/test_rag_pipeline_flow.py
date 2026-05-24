@@ -6,20 +6,19 @@ import inspect
 from langchain_core.documents import Document
 
 from assistente_medico_api.config import Settings
+from assistente_medico_api.graph import clinical_entity_resolver
 from assistente_medico_api.graph.nodes.generate import (
     generate_direct_answer_node,
     generate_grounded_answer_node,
     generate_insufficient_context_node,
 )
-from assistente_medico_api.graph.nodes.pipeline import (
-    context_quality_router,
-    fallback_retrieve_node,
-    load_memory_node,
-    route_search_needed,
-    router_search_needed_node,
-    save_memory_node,
-)
+from assistente_medico_api.graph.nodes.fallback_retrieve import fallback_retrieve_node
+from assistente_medico_api.graph.nodes.load_memory import load_memory_node
+from assistente_medico_api.graph.nodes.rerank import context_quality_router
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
+from assistente_medico_api.graph.nodes.router import route_search_needed, router_search_needed_node
+from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
+from assistente_medico_api.graph.nodes.save_memory import save_memory_node
 from assistente_medico_api.services import rag_pipeline_service as svc
 from assistente_medico_api.services.rag_pipeline_service import (
     MEMORY_STORE,
@@ -70,6 +69,28 @@ def test_router_protocol_query_and_smalltalk() -> None:
     assert route_search_needed(greeting) == "direct"
 
 
+def test_required_nodes_are_importable_from_nodes_package() -> None:
+    import assistente_medico_api.graph.nodes.fallback_retrieve as fallback_retrieve
+    import assistente_medico_api.graph.nodes.generate as generate
+    import assistente_medico_api.graph.nodes.guardrail as guardrail
+    import assistente_medico_api.graph.nodes.load_memory as load_memory
+    import assistente_medico_api.graph.nodes.rerank as rerank
+    import assistente_medico_api.graph.nodes.retrieve as retrieve
+    import assistente_medico_api.graph.nodes.router as router
+    import assistente_medico_api.graph.nodes.save_memory as save_memory
+    import assistente_medico_api.graph.nodes.rewrite as rewrite
+
+    assert load_memory.load_memory_node
+    assert router.router_search_needed_node
+    assert rewrite.rewrite_query_node
+    assert retrieve.retrieve_attempt_1_node
+    assert rerank.rerank_and_validate_context_node
+    assert fallback_retrieve.fallback_retrieve_node
+    assert generate.generate_grounded_answer_node
+    assert guardrail.guardrail_node
+    assert save_memory.save_memory_node
+
+
 def test_memory_uses_structured_terms_without_clinical_hardcode() -> None:
     source = inspect.getsource(run_load_memory)
 
@@ -108,6 +129,71 @@ def test_follow_up_rewrite_uses_memory_structured_terms(monkeypatch) -> None:
     assert out["rewrite_result"]["resolved_query"] == "E os critérios de exclusão? para Síndrome de Guillain-Barré"
     assert "Síndrome de Guillain-Barré" in out["expanded_query"]
     assert "CRITÉRIOS DE EXCLUSÃO" in out["expanded_query"]
+
+
+def test_rewrite_node_preserves_main_llm_history_rewrite(monkeypatch) -> None:
+    monkeypatch.setattr(svc, "cached_conitec_catalog", lambda: _catalog())
+    calls = []
+
+    class _FakeLLM:
+        async def ainvoke(self, messages):
+            calls.append(messages)
+
+            class _Result:
+                content = "Quais são os critérios de exclusão para Síndrome de Guillain-Barré?"
+
+            return _Result()
+
+    monkeypatch.setattr(svc, "_build_llm", lambda settings: _FakeLLM())
+    state = {
+        "query": "E os critérios de exclusão?",
+        "memory_result": {
+            "history_transcript": "Usuário: Quais são os critérios de inclusão para SGB?\nAssistente: Síndrome de Guillain-Barré...",
+            "last_structured_terms": {
+                "disease": "Síndrome de Guillain-Barré",
+                "diretriz": "Síndrome de Guillain-Barré",
+                "disease_normalized": "sindrome de guillain barre",
+                "cid10_codes": ["G61.0"],
+            },
+        },
+    }
+
+    out = asyncio.run(rewrite_query_node(state, Settings()))
+
+    assert calls
+    assert out["rewrite_result"]["llm_rewrite_used"] is True
+    assert out["rewrite_result"]["resolved_query"] == "Quais são os critérios de exclusão para Síndrome de Guillain-Barré?"
+    assert "CRITÉRIOS DE EXCLUSÃO" in out["expanded_query"]
+
+
+def test_clinical_entity_resolver_uses_medspacy_when_available(monkeypatch) -> None:
+    class _Ent:
+        text = "diabetes"
+        label_ = "PROBLEM"
+
+    class _Doc:
+        ents = [_Ent()]
+
+    class _NLP:
+        def __call__(self, text):
+            return _Doc()
+
+    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", lambda: (_NLP(), "medspacy"))
+
+    out = clinical_entity_resolver.resolve_clinical_entities("diabetes", catalog={})
+
+    assert out["medspacy_used"] is True
+    assert out["spacy_used"] is True
+    assert out["linked_entities"][0]["source"] == "medspacy"
+
+
+def test_clinical_entity_resolver_fallback_does_not_break(monkeypatch) -> None:
+    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", lambda: (None, "none"))
+
+    out = clinical_entity_resolver.resolve_clinical_entities("pergunta sem backend", catalog={})
+
+    assert out["medspacy_used"] is False
+    assert out["linked_entities"] == []
 
 
 def test_rewrite_sgb_structured_expansion(monkeypatch) -> None:

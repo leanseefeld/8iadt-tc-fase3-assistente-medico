@@ -50,6 +50,7 @@ try:
         run_rerank_and_validate_context,
         run_retrieve,
         run_rewrite_query,
+        run_save_memory,
     )
     from pcdt_ingest.embed import (
         CHROMA_COLLECTION_PCDT,
@@ -95,6 +96,9 @@ except ModuleNotFoundError as exc:
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
     async def run_full_graph_debug(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    def run_save_memory(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
     async def rewrite_query_node(*args, **kwargs):  # type: ignore[no-redef]
@@ -288,6 +292,16 @@ def _run_async(coro):
     return asyncio.run(coro)
 
 
+def _export_audit_path_from_argv() -> Path | None:
+    args = list(sys.argv)
+    for idx, value in enumerate(args):
+        if value == "--export-audit" and idx + 1 < len(args):
+            return Path(args[idx + 1]).expanduser()
+        if value.startswith("--export-audit="):
+            return Path(value.split("=", 1)[1]).expanduser()
+    return None
+
+
 def _fmt_ms(value: Any) -> str:
     return f"{float(value):.1f}" if value is not None else "-"
 
@@ -377,6 +391,7 @@ def main() -> None:
 
     if "last_run" not in st.session_state:
         st.session_state["last_run"] = None
+    export_audit_path = _export_audit_path_from_argv()
 
     cfg0 = _default_settings()
     with st.sidebar:
@@ -647,6 +662,9 @@ def main() -> None:
                     guardrail_out = cast(dict[str, Any], _run_async(guardrail_node(cast(Any, final_state), backend_settings)))
                     final_state.update(guardrail_out)
                     answer_text = str(final_state.get("answer") or "")
+                    save_out = run_save_memory(cast(dict[str, Any], final_state), settings=backend_settings)
+                    final_state["save_memory_result"] = save_out
+                    final_state.update(save_out)
                     timing = replace(timing, guardrail_ms=(time.perf_counter() - t0) * 1000.0)
                 except Exception as exc:
                     errors.append(f"Falha no guardrail do backend: {_format_exception(exc)}")
@@ -695,6 +713,7 @@ def main() -> None:
                     "retrieve_result": retrieve_result,
                     "rerank_result": rerank_result,
                     "audit_trace": final_state.get("audit_trace") or {},
+                    "save_memory_result": final_state.get("save_memory_result") or {},
                     "sources": final_state.get("sources") or [],
                     "reasoning_steps": final_state.get("reasoning_steps") or [],
                     "rag_audit_payload": audit_payload,
@@ -757,6 +776,12 @@ def main() -> None:
                 "errors": errors,
             }
             st.session_state["last_run"] = payload
+            if export_audit_path is not None:
+                export_audit_path.parent.mkdir(parents=True, exist_ok=True)
+                export_audit_path.write_text(
+                    json.dumps(payload.get("backend_state", {}).get("audit_trace") or {}, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
 
         last = st.session_state.get("last_run")
         if last and isinstance(last, dict):
@@ -777,6 +802,8 @@ def main() -> None:
             exec_cols[3].metric("Guardrail", "sim" if mode.get("guardrail_enabled") else "não")
             if mode.get("uses_shared_debug_pipeline"):
                 st.caption("Inspector usando `run_full_graph_debug`, o mesmo serviço central chamado pelo fluxo real do chat.")
+            if export_audit_path is not None:
+                st.caption(f"Audit trace será exportado para `{export_audit_path}` após cada execução.")
             if not mode.get("uses_compiled_langgraph"):
                 st.caption(
                     "Este painel chama os nodes reais do backend em sequência para expor scores, prompt e tempos. "
@@ -794,6 +821,7 @@ def main() -> None:
                     "retrieve_result": backend_state.get("retrieve_result") or {},
                     "rerank_result": backend_state.get("rerank_result") or {},
                     "audit_trace": backend_state.get("audit_trace") or {},
+                    "save_memory_result": backend_state.get("save_memory_result") or {},
                     "sources": backend_state.get("sources") or [],
                     "reasoning_steps": backend_state.get("reasoning_steps") or [],
                     "audit_id": backend_state.get("audit_id") or "",

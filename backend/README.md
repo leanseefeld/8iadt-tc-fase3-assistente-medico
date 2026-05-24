@@ -125,6 +125,26 @@ Contratos principais no estado:
 
 `retrieve_attempt_1` e `fallback_retrieve_attempt_2` são as únicas buscas possíveis. Se uma pergunta pede seção específica, por exemplo `CRITÉRIOS DE INCLUSÃO`, e só há chunk de `CID-10`, o contexto fica `partial`, `context_sufficient=false` e o fallback é acionado. Depois da segunda tentativa, contexto ainda parcial/insuficiente gera resposta controlada, sem LLM inventar conteúdo clínico.
 
+Localização dos nós:
+
+- `graph/nodes/load_memory.py`: carrega histórico, transcript e últimos termos estruturados.
+- `graph/nodes/router.py`: decide `search_needed` de forma conservadora.
+- `graph/nodes/rewrite.py`: restaura o LLM rewrite da `main`; usa `memory_result.history_transcript` e `last_structured_terms` para produzir `resolved_query`, depois aplica catálogo/entity resolver.
+- `graph/nodes/retrieve.py`: busca apenas candidatos no Chroma.
+- `graph/nodes/rerank.py`: filtra, reranqueia e valida suficiência.
+- `graph/nodes/fallback_retrieve.py`: executa só a segunda busca direcionada.
+- `graph/nodes/generate.py`: gera `grounded`, `direct` ou `insufficient`.
+- `graph/nodes/guardrail.py`: avalia segurança da resposta final.
+- `graph/nodes/save_memory.py`: salva o turno final pós-guardrail.
+
+O rewrite combina três fontes:
+
+1. LLM rewrite conversacional com transcript do histórico, preservado da `main`.
+2. `last_structured_terms` da memória para resolver follow-ups sem regex de doenças.
+3. Catálogo Conitec e `clinical_entity_resolver` para `linked_entities`, `catalog_candidates`, `structured_terms` e `expanded_query`.
+
+O `clinical_entity_resolver` tenta medSpaCy quando disponível, depois spaCy, e cai em fallback pelo catálogo Conitec. Nenhum modelo é baixado em runtime; se medSpaCy/spaCy não estiver instalado ou configurado, o backend continua funcionando.
+
 ## Recuperação RAG
 
 O fluxo de recuperação do chat agora é:
@@ -185,6 +205,7 @@ Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `
 - Catálogo achou doença, mas Chroma não achou chunks: confira se `build-conitec-catalog`, `chunk-pcdt --force` e `build-vectorstore --force` foram executados na mesma base.
 - LLM rerank desligado: por padrão `MEDICO_RAG_USE_LLM_RERANK=false` por desempenho; o rerank heurístico continua determinístico. Habilite para auditoria adicional quando houver Ollama disponível.
 - Pergunta clínica sem fonte: com `MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER=true`, o backend retorna resposta de contexto insuficiente em vez de gerar resposta clínica sem documentos validados.
+- Ollama indisponível no rewrite: o nó registra fallback e usa a pergunta atual com `last_structured_terms` quando houver memória, preservando auditoria do erro.
 
 Exemplos rápidos para testar:
 

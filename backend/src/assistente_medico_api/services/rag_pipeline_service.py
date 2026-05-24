@@ -16,6 +16,7 @@ from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field, ValidationError
 
 from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
+from assistente_medico_api.graph.clinical_entity_resolver import resolve_clinical_entities
 from assistente_medico_api.graph.clinical_query_understanding import (
     classify_clinical_intent,
     normalize_text_for_match,
@@ -33,6 +34,13 @@ PIPELINE_VERSION = "separated_nodes_v2"
 CONTEXT_SUFFICIENT = "sufficient"
 CONTEXT_PARTIAL = "partial"
 CONTEXT_INSUFFICIENT = "insufficient"
+_REWRITE_SYSTEM = """\
+Você reformula a última pergunta do médico como uma única consulta autocontida para busca \
+por similaridade em documentos dos Protocolos Clínicos e Diretrizes Terapêuticas (PCDT) do Brasil.
+Use o histórico e os termos clínicos estruturados apenas para resolver referências conversacionais.
+Preserve termos clínicos, siglas resolvidas, CID/procedimentos e intenção da pergunta.
+Responda apenas com a consulta reformulada, sem prefixos nem explicações.\
+"""
 
 
 class ConversationMemoryStore(Protocol):
@@ -287,10 +295,54 @@ def run_search_router(
     return {"search_needed": bool(decision["search_needed"]), "router_result": decision, "router_decision": decision}
 
 
+async def run_llm_rewrite(
+    query: str,
+    memory_result: dict[str, Any] | None,
+    settings: Settings,
+) -> tuple[str, dict[str, Any]]:
+    """Rewrite the current turn with the same conversational LLM behavior from main."""
+    current = str(query or "").strip()
+    memory = memory_result or {}
+    transcript = str(memory.get("history_transcript") or "").strip()
+    last_structured = memory.get("last_structured_terms") or {}
+    if not transcript and not last_structured:
+        return current, {"llm_rewrite_used": False, "reason": "no_history"}
+
+    human = (
+        f"Histórico da conversa:\n{transcript or '(sem histórico textual)'}\n\n"
+        f"Termos estruturados anteriores:\n{last_structured}\n\n"
+        f"Última pergunta do médico:\n{current}\n\n"
+        "Reformule em uma consulta única, autocontida e adequada para busca nos PCDTs."
+    )
+    try:
+        result = await _build_llm(settings).ainvoke([SystemMessage(content=_REWRITE_SYSTEM), HumanMessage(content=human)])
+        raw = getattr(result, "content", None) or ""
+        if isinstance(raw, list):
+            raw = "".join(str(part) for part in raw)
+        resolved = str(raw or "").strip()
+        if not resolved:
+            raise ValueError("resposta vazia do modelo")
+        return resolved, {"llm_rewrite_used": True, "method": "llm", "history_transcript_used": transcript}
+    except Exception as exc:
+        fallback = current
+        disease = str(last_structured.get("diretriz") or last_structured.get("disease") or "").strip()
+        if disease and normalize_text_for_match(disease) not in normalize_text_for_match(current):
+            fallback = f"{current} para {disease}".strip()
+        return fallback, {
+            "llm_rewrite_used": False,
+            "method": "fallback",
+            "error": str(exc)[:240],
+            "history_transcript_used": transcript,
+        }
+
+
 def run_rewrite_query(
     query: str,
     memory_result: dict | str | None,
     settings: Settings,
+    *,
+    resolved_query: str | None = None,
+    rewrite_debug: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     del settings
     original_query = (query or "").strip()
@@ -299,27 +351,60 @@ def run_rewrite_query(
 
     first_expansion = expand_query_with_conitec_catalog(original_query, catalog, max_terms=10)
     first_structured = first_expansion.get("structured_terms") or {}
-    resolved_query = original_query
+    final_resolved_query = (resolved_query or "").strip() or original_query
     last_structured = memory.get("last_structured_terms") or {}
     last_disease = str(last_structured.get("diretriz") or last_structured.get("disease") or "").strip()
     current_disease = str(first_structured.get("diretriz") or first_structured.get("disease") or "").strip()
-    if last_disease and not current_disease:
-        resolved_query = f"{original_query} para {last_disease}".strip()
+    if not resolved_query and last_disease and not current_disease:
+        final_resolved_query = f"{original_query} para {last_disease}".strip()
 
-    expansion = first_expansion if resolved_query == original_query else expand_query_with_conitec_catalog(resolved_query, catalog, max_terms=10)
+    expansion = (
+        first_expansion
+        if final_resolved_query == original_query
+        else expand_query_with_conitec_catalog(final_resolved_query, catalog, max_terms=10)
+    )
     structured = expansion.get("structured_terms") or {}
     understanding = expansion.get("clinical_understanding") or {}
-    expanded_query = str(expansion.get("expanded_query") or resolved_query).strip()
+    entity_result = resolve_clinical_entities(
+        final_resolved_query,
+        catalog=catalog,
+        intent=understanding.get("intent_result") or {"intent": structured.get("intent"), "confidence": structured.get("confidence")},
+    )
+    linked_entities = _merge_linked_entities(
+        entity_result.get("linked_entities") or [],
+        structured.get("linked_entities") or understanding.get("linked_entities") or [],
+    )
+    catalog_candidates = (
+        structured.get("catalog_candidates")
+        or understanding.get("catalog_candidates")
+        or entity_result.get("catalog_candidates")
+        or []
+    )
+    structured = {**structured, "linked_entities": linked_entities, "catalog_candidates": catalog_candidates}
+    understanding = {
+        **understanding,
+        "linked_entities": linked_entities,
+        "catalog_candidates": catalog_candidates,
+        "entity_backend": entity_result.get("entity_backend"),
+        "medspacy_used": entity_result.get("medspacy_used"),
+        "spacy_used": entity_result.get("spacy_used"),
+    }
+    expanded_query = str(expansion.get("expanded_query") or final_resolved_query).strip()
     rewrite_result = {
         "original_query": original_query,
-        "resolved_query": resolved_query,
+        "resolved_query": final_resolved_query,
         "retrieval_query": expanded_query,
         "expanded_query": expanded_query,
         "structured_terms": structured,
         "clinical_understanding": understanding,
-        "linked_entities": structured.get("linked_entities") or understanding.get("linked_entities") or [],
-        "catalog_candidates": structured.get("catalog_candidates") or understanding.get("catalog_candidates") or [],
+        "linked_entities": linked_entities,
+        "catalog_candidates": catalog_candidates,
         "confidence": float(structured.get("confidence") or 0.0),
+        "history_transcript_used": memory.get("history_transcript") or "",
+        "llm_rewrite_used": bool((rewrite_debug or {}).get("llm_rewrite_used")),
+        "rewrite_debug": rewrite_debug or {},
+        "medspacy_used": entity_result.get("medspacy_used"),
+        "spacy_used": entity_result.get("spacy_used"),
     }
     return {
         "rewrite_result": rewrite_result,
@@ -331,6 +416,25 @@ def run_rewrite_query(
         "catalog_candidates": rewrite_result["catalog_candidates"],
         "query_expansion": expansion,
     }
+
+
+def _merge_linked_entities(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for group in groups:
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            key = (
+                normalize_text_for_match(item.get("text") or ""),
+                normalize_text_for_match(item.get("canonical") or ""),
+                str(item.get("source") or ""),
+            )
+            if not key[0] or key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+    return out
 
 
 def _metadata_filter(structured_terms: dict[str, Any]) -> dict[str, Any] | None:
@@ -799,7 +903,14 @@ async def run_full_graph_debug(
         state["generation_result"] = {"mode": "direct", "answer": ""}
         return {"state": state, "audit": build_pipeline_audit(state), "route": "direct"}
 
-    state.update(run_rewrite_query(query, state.get("memory_result"), settings))
+    resolved_query, rewrite_debug = await run_llm_rewrite(query, state.get("memory_result") or {}, settings)
+    state.update(run_rewrite_query(query, state.get("memory_result"), settings, resolved_query=resolved_query, rewrite_debug=rewrite_debug))
+    state["audit_trace"] = append_audit_step(
+        state,
+        node="rewrite_query",
+        output_summary=state.get("rewrite_result") or {},
+        settings=settings,
+    )
     retrieve = run_retrieve(
         expanded_query=state.get("expanded_query") or query,
         structured_terms=state.get("structured_terms") or {},
