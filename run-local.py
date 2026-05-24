@@ -114,6 +114,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Instala dependências opcionais do chunking semântico.",
     )
+    parser.add_argument(
+        "--setup-scispacy",
+        action="store_true",
+        help=(
+            "Instala o extra opcional scispaCy em llm e backend "
+            "(Python 3.11–3.13; ver llm/README.md)."
+        ),
+    )
     parser.add_argument("--build-vectorstore", action="store_true", help="Executa a pipeline RAG completa.")
     parser.add_argument(
         "--chunk-strategy",
@@ -149,6 +157,8 @@ def main() -> int:
     args = parse_args()
     if args.setup_semantic:
         args.setup = True
+    if args.setup_scispacy:
+        args.setup = True
     repo_root = resolve_repo_root()
     llm_config = load_llm_config(repo_root)
     venv_python = resolve_venv_python(repo_root)
@@ -167,6 +177,11 @@ def main() -> int:
             print("Instalando dependências opcionais do chunking semântico...")
             run_checked([str(venv_python), "-m", "pip", "install", "-e", f"{repo_root / 'llm'}[semantic]"], repo_root)
 
+        if args.setup_scispacy:
+            print("Instalando dependências opcionais scispaCy...")
+            run_checked([str(venv_python), "-m", "pip", "install", "-e", f"{repo_root / 'llm'}[scispacy]"], repo_root)
+            run_checked([str(venv_python), "-m", "pip", "install", "-e", f"{repo_root / 'backend'}[scispacy]"], repo_root)
+
         # Try to download recommended spaCy Portuguese model if spaCy is
         # available in the created virtualenv. This is safe (non-fatal) and
         # helps users who opt into the medical NLP extras to have the model
@@ -178,7 +193,11 @@ def main() -> int:
             print("Baixando modelo spaCy 'pt_core_news_sm' (pode demorar)...")
             run_checked([str(venv_python), "-m", "spacy", "download", "pt_core_news_sm"], repo_root)
         except Exception:
-            print("Aviso: spaCy não disponível no ambiente ou falha ao baixar 'pt_core_news_sm'. Para habilitar NLP médico, instale 'llm[medical-nlp]' e rode: python -m spacy download pt_core_news_sm")
+            print(
+                "Aviso: spaCy não disponível no ambiente ou falha ao baixar 'pt_core_news_sm'. "
+                "Para EntityLinker biomédico (scispaCy), instale 'llm[scispacy]' (Python 3.11–3.13) "
+                "e rode: python -m spacy download pt_core_news_sm"
+            )
 
         print("Instalando dependências do frontend...")
         run_checked(["npm", "install"], repo_root / "frontend")

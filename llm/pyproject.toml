@@ -29,12 +29,15 @@ dependencies = [
     "rapidfuzz>=3.6",
     "spacy>=3.7",
     "medspacy>=1.2",
-    "scispacy>=0.6.2",
 ]
 
 [project.optional-dependencies]
 semantic = [
     "langchain-experimental>=0.3",
+]
+# scispacy 0.6.2+ ainda não suporta Python 3.14; use Python 3.11–3.13 ou omita esse extra.
+scispacy = [
+    "scispacy>=0.6.2",
 ]
 
 [project.scripts]

@@ -141,7 +141,7 @@ O resolvedor biomédico tenta, nessa ordem, scispaCy com EntityLinker, QuickUMLS
 
 O reranking é heurístico e explicável. Ele usa `structured_terms`, não parseia a string expandida, para decidir doença/diretriz, CIDs, intenção e seções preferenciais. Quando há candidato de catálogo confiável, documentos da mesma diretriz/doença têm prioridade e documentos de outra doença não sobem apenas por seção; se o filtro por catálogo não encontra documentos compatíveis, o fluxo registra baixa confiança e evita completar o top final com documentos errados. A posição original do Chroma continua como base, mas `catalog_candidate_match` pesa mais que `section_intent_match`. CIDs explícitos na pergunta geram `cid_explicit_match`; CIDs vindos do catálogo entram como reforço leve (`cid_catalog_hint`) e não dominam critérios de inclusão.
 
-Depois do rerank heurístico, é possível habilitar reranking por `sentence-transformers` CrossEncoder para reordenar os candidatos já recuperados. As dependências biomédicas (`spacy`, `medspacy`, `scispacy`) fazem parte da instalação padrão do backend. O reranking por CrossEncoder continua opcional:
+Depois do rerank heurístico, é possível habilitar reranking por `sentence-transformers` CrossEncoder para reordenar os candidatos já recuperados. `spacy` e `medspacy` fazem parte da instalação padrão do backend; **scispaCy** é opcional (`pip install -e "backend[scispacy]"`; use **Python 3.11–3.13** — não há pacote adequado para 3.14 ainda). O reranking por CrossEncoder continua opcional:
 
 ```bash
 pip install -e "backend[rerank]"

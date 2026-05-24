@@ -21,7 +21,13 @@ pip install -e "llm[semantic]"
 ollama pull nomic-embed-text
 ```
 
-Para reconhecimento biomédico no chat médico, `spacy`, `medspacy` e `scispacy` fazem parte das dependências padrão. A instalação não baixa modelos de linguagem automaticamente:
+`spacy` e `medspacy` fazem parte das dependências padrão. O **scispaCy** (EntityLinker com modelos tipo `*_core_sci_*`) é **opcional** via extra `[scispacy]` — versões ≥0.6.2 ainda não têm distribuições para **Python 3.14**; use **Python 3.11–3.13** para esse extra. Para habilitar:
+
+```bash
+pip install -e "llm[scispacy]"
+```
+
+A instalação não baixa modelos de linguagem automaticamente:
 
 ```bash
 # NER genérico em português, opcional

@@ -39,6 +39,9 @@ python run-local.py --build-vectorstore
 # instala dependências opcionais para chunking semântico
 python run-local.py --setup --setup-semantic
 
+# opcional: scispaCy (EntityLinker); em Python 3.14 use 3.11–3.13 ou omita (há fallback no chat)
+python run-local.py --setup --setup-scispacy
+
 # executa a pipeline RAG usando chunking semântico
 python run-local.py --build-vectorstore --chunk-strategy semantic
 

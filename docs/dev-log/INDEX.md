@@ -14,6 +14,8 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ### 2026-05-24
 
+- **scispacy-extra-py314** — agent:cursor — `scispacy` sai do núcleo e vira extra `[scispacy]` em `llm/` + `backend/`; README + `--setup-scispacy` no `run-local.py` (fallback clínico continua sem o pacote). — Revisão: `e1ee2a6` feat: contexto do paciente na conversa + melhoria de prompt
+
 - **no-contexto-paciente-rag** — agent:cursor — LangGraph: entrypoint `load_patient_context` com cache por thread + invalidação em PATCH paciente/exame; schema `gender`/`symptoms`/`exams.completed_at`; check-in/TopBar; RAG Inspector simulado. — Revisão: `15df709` feat: CID opcional; preservar sugestões/ações anteriores
 
 ### 2026-05-23
