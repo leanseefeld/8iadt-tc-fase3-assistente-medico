@@ -397,7 +397,87 @@ Avalia ou remove avaliação de uma mensagem do assistente (👍/👎 na UI).
 { "messageId": "msg-...", "feedbackRating": "positive" | "negative" | null }
 ```
 
-**Erros:** **400** se a mensagem não for do assistente; **403** se a conversa for de outro médico; **404** conversa/mensagem inexistente.
+**Erros:** **400** se a mensagem não for do assistente; **403** se a conversa for de outro médico; **404** conversa/mensagem inexistente; **410** se a conversa estiver arquivada.
+
+---
+
+### 7.2 `GET /assistant/conversations?patientId=`
+
+Lista conversas **não arquivadas** iniciadas pelo médico logado para o paciente.
+
+**Cabeçalho obrigatório:** `X-User-Id`.
+
+**Resposta 200:**
+
+```json
+{
+  "conversations": [
+    {
+      "id": "uuid-thread",
+      "patientId": "p1",
+      "createdAt": "2026-05-24T12:00:00Z",
+      "updatedAt": "2026-05-24T12:05:00Z",
+      "preview": "Como tratar febre alta?"
+    }
+  ]
+}
+```
+
+`preview` — trecho da primeira mensagem do médico (até ~80 caracteres).
+
+**Erros:** **400** sem `X-User-Id`; **404** paciente inexistente.
+
+---
+
+### 7.3 `GET /assistant/conversations/:conversationId/messages`
+
+Mensagens persistidas para hidratar a UI ao retomar uma conversa.
+
+**Cabeçalho obrigatório:** `X-User-Id` (dono da conversa).
+
+**Resposta 200:**
+
+```json
+{
+  "conversationId": "uuid-thread",
+  "patientId": "p1",
+  "messages": [
+    {
+      "id": "msg-...",
+      "author": "user",
+      "content": "texto",
+      "sources": null,
+      "reasoningSteps": null,
+      "feedbackRating": null,
+      "createdAt": "2026-05-24T12:00:00Z"
+    }
+  ]
+}
+```
+
+**Erros:** **403** outro médico; **404** conversa inexistente; **410** conversa arquivada.
+
+---
+
+### 7.4 `PATCH /assistant/conversations/:conversationId/archive`
+
+Arquiva a conversa (permanece no SQLite, inacessível na UI). Corpo vazio ou `{}`.
+
+**Cabeçalho obrigatório:** `X-User-Id`. O servidor preenche `archived_by` com esse valor.
+
+**Resposta 200:**
+
+```json
+{
+  "id": "uuid-thread",
+  "archivedAt": "2026-05-24T12:10:00Z",
+  "archivedBy": "dr-ana"
+}
+```
+
+**Erros:** **403** outro médico; **404** conversa inexistente; **409** já arquivada.
+
+---
 
 **Premissas alteradas em relação ao protótipo só-mock:**
 

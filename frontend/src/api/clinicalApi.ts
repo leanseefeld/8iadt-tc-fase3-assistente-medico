@@ -21,7 +21,7 @@ import type { PrescriptionCreateBody } from '@/types/prescription';
 import { quickQuestionsForCid } from '@/mocks/internal/chatMocks';
 import type { AssistantChatRequestOptions } from '@/api/clinicalApi.http';
 
-export type { AssistantChatRequestOptions, AssistantMessageHistoryItem } from '@/api/clinicalApi.http';
+export type { AssistantChatRequestOptions } from '@/api/clinicalApi.http';
 export type { ChatStreamHandlers } from '@/api/sseChat';
 export type { PatchPatientBody, ReAdmitOverrides } from '@/api/clinicalApi.types';
 export type { Prescription, PrescriptionCreateBody } from '@/types/prescription';
@@ -212,6 +212,10 @@ export async function postAssistantChatMock(
 }
 
 export const patchAssistantMessageFeedback = http.patchAssistantMessageFeedback;
+export const listAssistantConversations = http.listAssistantConversations;
+export const getAssistantConversationMessages =
+  http.getAssistantConversationMessages;
+export const archiveAssistantConversation = http.archiveAssistantConversation;
 
 /** Lista de perguntas rápidas: função pura, igual em ambos os transportes. */
 export { quickQuestionsForCid };
