@@ -47,6 +47,18 @@ def _parse_medications(text: str | None) -> list[str]:
 	return [line for line in lines if line]
 
 
+def _normalize_cid(cid: Cid | None) -> tuple[str, str]:
+	if cid is None:
+		return "", ""
+	code = (cid.code or "").strip()
+	label = (cid.label or "").strip()
+	return code, label
+
+
+def _patient_cid_tuple(patient: Patient) -> tuple[str, str]:
+	return (patient.cid_code or "").strip(), (patient.cid_label or "").strip()
+
+
 async def _add_agent_log(
 	session: AsyncSession,
 	*,
@@ -111,6 +123,16 @@ async def append_vitals(
 
 
 async def apply_protocol(session: AsyncSession, patient: Patient, step: str) -> None:
+	if not (patient.cid_code or "").strip():
+		await _add_agent_log(
+			session,
+			patient_id=patient.id,
+			step=step,
+			status="done",
+			detail="CID não informado — protocolo não aplicado",
+		)
+		return
+
 	protocol = get_protocol_for_cid(patient.cid_code)
 	now = _now()
 
@@ -152,6 +174,7 @@ async def apply_protocol(session: AsyncSession, patient: Patient, step: str) -> 
 
 async def create_patient(session: AsyncSession, body: PatientCreateRequest) -> Patient:
 	now = _now()
+	cid_code, cid_label = _normalize_cid(body.cid)
 	patient = Patient(
 		id=_new_id("pt"),
 		name=(body.name or "Paciente sem nome").strip() or "Paciente sem nome",
@@ -159,24 +182,35 @@ async def create_patient(session: AsyncSession, body: PatientCreateRequest) -> P
 		sex=body.sex or "M",
 		status="admitted",
 		admitted_at=now,
-		cid_code=body.cid.code,
-		cid_label=body.cid.label,
+		cid_code=cid_code,
+		cid_label=cid_label,
 		observations=(body.observations or "Não informado").strip() or "Não informado",
 		comorbidities=list(body.comorbidities or []),
 		current_medications=_parse_medications(body.current_medications),
 	)
 	await patient_repo.create_patient(session, patient)
 	await append_vitals(session, patient=patient)
-	await apply_protocol(session, patient, "admission")
+	if cid_code:
+		await apply_protocol(session, patient, "admission")
 	await session.flush()
 	return patient
 
 
 async def change_cid(session: AsyncSession, patient: Patient, cid: Cid) -> None:
-	patient.cid_code = cid.code
-	patient.cid_label = cid.label
-	await patient_repo.delete_patient_children(session, patient.id)
-	await apply_protocol(session, patient, "cid-update")
+	cid_code, cid_label = _normalize_cid(cid)
+	patient.cid_code = cid_code
+	patient.cid_label = cid_label
+	if cid_code:
+		await patient_repo.delete_patient_children(session, patient.id)
+		await apply_protocol(session, patient, "cid-update")
+	else:
+		await _add_agent_log(
+			session,
+			patient_id=patient.id,
+			step="cid-update",
+			status="done",
+			detail="CID removido",
+		)
 	await session.flush()
 
 
@@ -195,8 +229,10 @@ async def patch_patient(session: AsyncSession, patient: Patient, patch: PatientP
 		patient.comorbidities = patch.comorbidities
 	if patch.current_medications is not None:
 		patient.current_medications = patch.current_medications
-	if patch.cid is not None and patch.cid.code != patient.cid_code:
-		await change_cid(session, patient, patch.cid)
+	if patch.cid is not None:
+		new_cid = _normalize_cid(patch.cid)
+		if new_cid != _patient_cid_tuple(patient):
+			await change_cid(session, patient, Cid(code=new_cid[0], label=new_cid[1]))
 	await session.flush()
 	return patient
 
@@ -206,7 +242,8 @@ async def readmit_patient(session: AsyncSession, patient: Patient) -> Patient:
 	patient.admitted_at = _now()
 	await patient_repo.delete_patient_children(session, patient.id)
 	await append_vitals(session, patient=patient)
-	await apply_protocol(session, patient, "readmission")
+	if (patient.cid_code or "").strip():
+		await apply_protocol(session, patient, "readmission")
 	await session.flush()
 	return patient
 

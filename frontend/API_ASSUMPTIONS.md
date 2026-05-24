@@ -197,12 +197,12 @@ Admissão (Página 0). Corpo JSON alinhado ao formulário:
 | `age`                 | number      | sim         |
 | `sex`                 | `M` \| `F` | sim         |
 | `bed`                 | string      | sim         |
-| `cid`                 | `Cid`       | sim         |
+| `cid`                 | `Cid`       | não (`code`/`label` vazios = sem CID) |
 | `observations`      | string      | sim         |
 | `comorbidities`       | string[]    | não         |
 | `currentMedications`  | string      | não (multilinha → split em array no servidor; permite híbrido catálogo + texto livre) |
 
-O servidor aplica o protocolo mock do CID: preenche `exams`, `suggestedItems`, `protocolRef` nos itens, `agentLog` inicial quando aplicável, e alertas específicos (ex.: sepse T81.4 farmácia, A41.9 crítico).
+Sem CID na admissão, o servidor **não** aplica protocolo mock (`exams` e `suggestedItems` vazios). Com CID válido, aplica o protocolo do código: preenche `exams`, `suggestedItems`, `protocolRef` nos itens, `agentLog` inicial quando aplicável, e alertas específicos (ex.: sepse T81.4 farmácia, A41.9 crítico).
 
 **Resposta 201:** `{ "patient": Patient }`
 
@@ -224,7 +224,7 @@ Corpo JSON **parcial**. Campos de primeiro nível suportados (lista mínima do p
 - **`exams`**: array de objetos `{ id, ...campos }` — **merge por `id`**: cada elemento atualiza o exame existente com os campos enviados.
 - **`suggestedItems`**: idem — merge por `id` para aceitar / modificar / rejeitar / alterar `description`.
 
-Quando `cid` muda, o servidor **substitui** `exams` e `suggestedItems` pelos derivados do novo protocolo (como na referência após editar CID).
+Quando `cid` muda para um código não vazio, o servidor **substitui** `exams` e `suggestedItems` pelos derivados do novo protocolo (como na referência após editar CID). Enviar `{"code":"","label":""}` remove apenas o CID; `exams`, `suggestedItems` e demais dados do paciente permanecem.
 
 **Resposta 200:** `{ "patient": Patient }`
 

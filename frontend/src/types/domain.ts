@@ -119,8 +119,8 @@ export interface CreatePatientRequestBody {
   /** Omisso ou inválido no mock → 45. */
   age?: number;
   sex?: PatientSex;
-  /** Omisso no mock → "S/N". */
-  cid: Cid;
+  /** Omisso → admissão sem CID (code/label vazios). */
+  cid?: Cid;
   /** Omisso no mock → "Não informado". */
   observations?: string;
   comorbidities?: string[];

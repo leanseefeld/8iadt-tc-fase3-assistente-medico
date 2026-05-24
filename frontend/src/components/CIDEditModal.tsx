@@ -5,12 +5,19 @@ import { getCidListMock, patchPatientMock } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import type { Cid, Patient } from '@/types/domain';
+import { formatPatientCid, hasPatientCid } from '@/utils/formatPatientCid';
+
+const EMPTY_CID: Cid = { code: '', label: '' };
 
 export interface CIDEditModalProps {
   open: boolean;
   patient: Patient | null;
   onClose: () => void;
   onSaved?: () => void;
+}
+
+function normalizeCidCode(cid: Cid | null): string {
+  return (cid?.code ?? '').trim();
 }
 
 export function CIDEditModal({
@@ -37,7 +44,11 @@ export function CIDEditModal({
     }
     void getCidListMock().then(setCids);
     setQ('');
-    setSelected(patient ? { ...patient.cid } : null);
+    if (patient && hasPatientCid(patient.cid)) {
+      setSelected({ ...patient.cid });
+    } else {
+      setSelected(null);
+    }
   }, [open, patient]);
 
   if (!open || !patient) {
@@ -50,26 +61,43 @@ export function CIDEditModal({
       c.label.toLowerCase().includes(q.trim().toLowerCase()),
   );
 
+  const patientHasCid = hasPatientCid(patient.cid);
+  const selectedCode = normalizeCidCode(selected);
+  const patientCode = normalizeCidCode(patient.cid);
+  const removingCid = patientHasCid && selected === null;
   const cidChanged =
-    selected != null && selected.code !== patient.cid.code;
+    removingCid ||
+    (selected !== null && selectedCode !== patientCode);
 
   async function confirm() {
-    if (!selected || !patient || selected.code === patient.cid.code) {
+    if (!patient || !cidChanged) {
       return;
     }
+
+    const nextCid = removingCid ? EMPTY_CID : selected;
+    if (!nextCid) {
+      return;
+    }
+
     setSaving(true);
-    const updated = await patchPatientMock(patient.id, { cid: selected });
+    const updated = await patchPatientMock(patient.id, { cid: nextCid });
     setSaving(false);
     if (!updated) {
       showToast('Não foi possível atualizar o CID.');
       return;
     }
     await refreshAdmittedPatients();
-    showToast('CID atualizado. Fluxo de decisão re-executado.');
-    setPendingFlowReview(true);
+
+    if (removingCid) {
+      showToast('CID removido.');
+    } else {
+      showToast('CID atualizado. Fluxo de decisão re-executado.');
+      setPendingFlowReview(true);
+      navigate('/flow');
+    }
+
     onSaved?.();
     onClose();
-    navigate('/flow');
   }
 
   return (
@@ -85,14 +113,29 @@ export function CIDEditModal({
             Editar CID principal
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Busque e selecione o CID que substituirá o atual (
-            <span className="font-mono text-slate-800">{patient.cid.code}</span>
-            ).
+            {patientHasCid ? (
+              <>
+                Busque e selecione o CID que substituirá o atual (
+                <span className="font-mono text-slate-800">{patient.cid.code}</span>
+                ), ou remova o CID.
+              </>
+            ) : (
+              <>
+                O paciente está sem CID (
+                {formatPatientCid(patient.cid)}). Selecione um código na lista.
+              </>
+            )}
           </p>
-          {cidChanged ? (
+          {cidChanged && !removingCid ? (
             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
               Ao confirmar, o protocolo será atualizado e novos exames ou ações
               podem ser identificados. Revise o fluxo de decisão em seguida.
+            </p>
+          ) : null}
+          {removingCid ? (
+            <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+              Ao confirmar, apenas o CID será removido. Exames e ações sugeridas
+              permanecem inalterados.
             </p>
           ) : null}
         </div>
@@ -126,7 +169,16 @@ export function CIDEditModal({
             ))}
           </ul>
         </div>
-        <div className="flex justify-end gap-2 border-t border-[var(--color-border-subtle)] px-4 py-3">
+        <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--color-border-subtle)] px-4 py-3">
+          {patientHasCid ? (
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="mr-auto rounded-lg px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
+            >
+              Remover CID
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -136,7 +188,7 @@ export function CIDEditModal({
           </button>
           <button
             type="button"
-            disabled={!selected || saving || !cidChanged}
+            disabled={!cidChanged || saving}
             onClick={() => void confirm()}
             className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50"
           >

@@ -144,8 +144,9 @@ const MOCK_PATIENTS_DISCHARGED = [
 ### CIDEditModal
 
 - Campo de busca com filtro sobre lista de CIDs mock (mínimo 20 entradas cobrindo os casos de teste)
-- Ao confirmar: atualiza `patient.cid`, dispara re-execução do fluxo de decisão, exibe toast: *"CID atualizado. Fluxo de decisão re-executado."*
-- Exibe aviso: *"Novos exames podem ter sido identificados com base no protocolo atualizado."* e navega para Página 3
+- Botão **Remover CID** quando o paciente tem código definido; confirma com `cid` vazio (exames e ações sugeridas permanecem)
+- Ao definir ou trocar CID: atualiza `patient.cid`, dispara protocolo mock, toast *"CID atualizado. Fluxo de decisão re-executado."*, navega para Página 3
+- Ao remover CID: toast *"CID removido."* (sem navegação automática para o fluxo)
 
 ---
 
@@ -166,7 +167,7 @@ Formulário centralizado, largura máxima 640px, fundo em card.
 | Idade | number | ✅ | min 0, max 120 |
 | Sexo | select | ✅ | Masculino / Feminino |
 | Leito | text | ✅ | ex: "UTI-03" |
-| CID Principal | searchable select | ✅ | Busca por código ou descrição |
+| CID Principal | searchable select | — | Opcional; busca por código ou descrição; pode informar depois em Editar CID |
 | Queixa principal | textarea | ✅ | máx 300 chars |
 | Comorbidades | checkbox group | — | Carregadas do backend via `GET /api/assistant/comorbidities` |
 | Medicamentos em uso | textarea | — | Campo livre, uma linha por medicamento |

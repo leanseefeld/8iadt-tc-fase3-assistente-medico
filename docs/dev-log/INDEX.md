@@ -12,6 +12,10 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ## Marcos
 
+### 2026-05-23
+
+- **cid-opcional-admissao-edicao** — agent:cursor — CID opcional no check-in (sem fallback da lista); `CIDEditModal` remove CID; backend não aplica protocolo mock sem código (`patient_service`). — Revisão: `2ccf897` fix: add missing test dependency
+
 ### 2026-05-22
 
 - **chat-meta-por-mensagem** — agent:cursor — Chat: fontes e raciocínio por turno em `ChatMessage`; accordion inline (`AssistantMessageMeta`); sem painel lateral; rodapé só após streaming e se houver meta. — Revisão: `4856e6a` feat: fine tuning v1

@@ -49,7 +49,7 @@ class PatientCreateRequest(BaseModel):
     name: str | None = None
     age: int | None = None
     sex: str | None = None
-    cid: Cid
+    cid: Cid | None = None
     observations: str | None = None
     comorbidities: list[str] | None = None
     current_medications: str | None = Field(default=None, alias="currentMedications")

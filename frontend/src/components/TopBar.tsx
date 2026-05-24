@@ -5,6 +5,7 @@ import { CIDEditModal } from '@/components/CIDEditModal';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
+import { formatPatientCid } from '@/utils/formatPatientCid';
 
 function formatSexDisplay(sex: 'M' | 'F'): string {
   return sex === 'F' ? 'Feminino' : 'Masculino';
@@ -107,7 +108,7 @@ export function TopBar() {
             {patient.name}
           </button>
           <p className="mt-0.5 text-sm text-slate-600">
-            CID {patient.cid.code} — {patient.cid.label}
+            {formatPatientCid(patient.cid)}
           </p>
           <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm">
             <div>

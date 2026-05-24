@@ -10,6 +10,7 @@ import {
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import type { Cid, MedicationOption, Patient, PatientSex } from '@/types/domain';
+import { formatPatientCid } from '@/utils/formatPatientCid';
 import { Search, UserPlus, UserRoundSearch } from 'lucide-react';
 import {
   useEffect,
@@ -308,19 +309,13 @@ export function CheckInPage() {
       return;
     }
 
-    const cid = selectedCid ?? cids[0];
-    if (!cid) {
-      showToast('Lista de CIDs ainda não carregou. Aguarde um instante.');
-      return;
-    }
-
     setSpinning(true);
     try {
       const patient = await createPatientMock({
         name: trimmedName,
         age: ageNum,
         sex,
-        cid,
+        cid: selectedCid ?? { code: '', label: '' },
         observations: observations.trim() || undefined,
         comorbidities,
         currentMedications: medications,
@@ -381,7 +376,7 @@ export function CheckInPage() {
                           {p.name}
                         </span>
                         <span className="text-xs text-slate-600">
-                          {p.cid.code} · {p.cid.label}
+                          {formatPatientCid(p.cid)}
                         </span>
                         <span className="font-mono text-[10px] text-slate-400">
                           {p.id}
@@ -415,7 +410,7 @@ export function CheckInPage() {
                   <div className="flex justify-between gap-4">
                     <dt className="text-slate-500">CID</dt>
                     <dd className="text-right text-slate-800">
-                      {selectedReturn.cid.code} — {selectedReturn.cid.label}
+                      {formatPatientCid(selectedReturn.cid)}
                     </dd>
                   </div>
                   <div className="border-t border-slate-200 pt-2">
@@ -565,14 +560,20 @@ export function CheckInPage() {
                   </ul>
                 </div>
               ) : null}
-              <p className="mt-1 text-xs text-slate-500">
-                Sem escolha no envio, usa o primeiro CID da lista.
-              </p>
+              {selectedCid ? (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCid(null)}
+                  className="mt-1 text-xs font-medium text-teal-700 hover:text-teal-900"
+                >
+                  Limpar seleção
+                </button>
+              ) : null}
             </div>
 
             <div>
               <label className="text-sm font-medium text-slate-700">
-                Observações:
+                Observações
               </label>
               <textarea
                 maxLength={300}
@@ -733,7 +734,7 @@ export function CheckInPage() {
                 rows={3}
                 value={medications}
                 onChange={(e) => setMedications(e.target.value)}
-                placeholder="Uma linha por medicamento. Pode combinar catalogo oficial com texto livre."
+                placeholder="Um medicamento por linha. Complementar ao que for escolhido no catálogo oficial."
                 className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
               />
             </div>
