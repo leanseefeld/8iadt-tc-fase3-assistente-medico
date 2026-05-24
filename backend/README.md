@@ -27,6 +27,26 @@ pip install -e llm
 pip install -e backend/
 ```
 
+## Testes
+
+Na pasta `backend/`:
+
+```bash
+source .venv/bin/activate
+
+# todos
+pytest
+
+# um arquivo
+pytest tests/test_patients_endpoint_contract.py
+
+# um teste
+pytest tests/test_cids_endpoint_contract.py::test_get_cids_contract
+
+# por padrão no nome
+pytest -k "patients"
+```
+
 ## Executar
 
 ```bash
@@ -180,7 +200,7 @@ A expansão usa apenas o catálogo local `llm/data/processed/conitec/pcdt_catalo
 A saída da expansão tem dois canais:
 
 - `expanded_query`: texto limpo enviado ao Chroma, com pergunta original, diretriz/doença canônica, um CID-10 quando houver um único código relevante, e seção preferencial. Não contém JSON, nomes de campos ou listas serializadas.
-- `structured_terms`: dados serializáveis usados por filtro, rerank, prompt e auditoria, incluindo doença, diretriz, CID-10, intenção, seções preferenciais, candidatos do catálogo, entidades linkadas e confiança.
+- `structured_terms`: dados serializáveis usados por filtro, rerank e auditoria, incluindo doença, diretriz, CID-10, intenção, seções preferenciais, candidatos do catálogo, entidades linkadas e confiança. O mesmo objeto alimenta `clinical_understanding` no estado do grafo; esse entendimento **não** entra no prompt do LLM na geração atual.
 
 Medicamentos e CIDs múltiplos ficam em `structured_terms`; eles não entram automaticamente no texto vetorial quando isso poluiria a busca.
 
@@ -196,7 +216,7 @@ pip install -e "backend[rerank]"
 
 O modelo CrossEncoder só é carregado se `RAG_USE_CROSS_ENCODER_RERANK=true`. Se o modelo configurado falhar ao carregar, o fluxo mantém o ranking heurístico.
 
-O prompt enviado ao LLM inclui metadados ricos por documento:
+O prompt enviado ao LLM (`generate._build_messages`) inclui: system prompt, histórico de turnos e, na última mensagem humana, contexto clínico do paciente (quando admitido), trechos PCDT recuperados e a pergunta do médico. Cada trecho PCDT traz metadados ricos no bloco de contexto:
 
 - diretriz e doença;
 - CID-10;
@@ -205,21 +225,12 @@ O prompt enviado ao LLM inclui metadados ricos por documento:
 - portaria e data;
 - fonte e páginas;
 - score final e motivos do ranking.
-- entendimento clínico da pergunta (intenção, doença, CID e medicamento explícitos).
-- entidades biomédicas linkadas e candidatos do catálogo.
+
+O entendimento clínico da pergunta (intenção, doença/CID explícitos, entidades biomédicas linkadas e candidatos do catálogo) é calculado antes do retrieve e permanece em `clinical_understanding` / `structured_terms` no estado e na API, mas **não** é repetido no prompt de geração.
 
 A resposta continua citando documentos pelo identificador `[n]`. A política de segurança de doses/posologia permanece sob o guardrail existente.
 
-Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `original_query`, `retrieval_query`, `expanded_query`, `structured_terms`, documentos candidatos, documentos finais, `rerank_result`, modo de geração e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta. Para depurar o fluxo, confira `router_decision`, `query_expansion`, `retrieve_result`, `rerank_result`, `generation_mode`, `sources`, `guardrail_status` e `guardrail_reason` no retorno/stream do chat ou use o RAG Inspector em `llm/scripts/rag_inspector_app.py`.
-
-### Troubleshooting RAG
-
-- Inspector diferente do chat: confirme `MEDICO_CHROMA_PERSIST_DIR`, `MEDICO_CHROMA_COLLECTION`, `MEDICO_OLLAMA_EMBED_MODEL` e se o inspector está mostrando `uses_shared_debug_pipeline=true`.
-- Catálogo achou doença, mas Chroma não achou chunks: confira se `build-conitec-catalog`, `chunk-pcdt --force` e `build-vectorstore --force` foram executados na mesma base.
-- LLM rerank desligado: por padrão `MEDICO_RAG_USE_LLM_RERANK=false` por desempenho; o rerank heurístico continua determinístico. Habilite para auditoria adicional quando houver Ollama disponível.
-- Pergunta clínica sem fonte: com `MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER=true`, o backend retorna resposta de contexto insuficiente em vez de gerar resposta clínica sem documentos validados.
-- Ollama indisponível no rewrite: o nó registra fallback e usa a pergunta atual com `last_structured_terms` quando houver memória, preservando auditoria do erro.
-- Chat pendurado antes do retrieve: rode com `MEDICO_ENABLE_MEDICAL_NLP=false` e `MEDICO_USE_MEDSPACY=false`. Os logs `rewrite: before_entity_resolver` e `rewrite: after_entity_resolver` mostram se travou no NLP médico.
+Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `original_query`, `expanded_query`, `structured_terms`, `added_terms`, documentos finais, scores, `ranking_reasons`, uso de CrossEncoder e resposta final pós-guardrail. Falha de auditoria é registrada em log e não derruba a resposta. Para depurar expansão e auditoria (incluindo entendimento clínico fora do prompt), confira `query_expansion`, `clinical_understanding` e `rag_audit_payload` no retorno/stream do chat ou use o RAG Inspector em `llm/scripts/rag_inspector_app.py`.
 
 Exemplos rápidos para testar:
 

@@ -9,7 +9,8 @@ import {
 } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
-import type { Cid, MedicationOption, Patient, PatientSex } from '@/types/domain';
+import type { Cid, MedicationOption, Patient, PatientSex, PatientGender } from '@/types/domain';
+import { formatPatientCid } from '@/utils/formatPatientCid';
 import { Search, UserPlus, UserRoundSearch } from 'lucide-react';
 import {
   useEffect,
@@ -21,6 +22,16 @@ import {
 import { useNavigate } from 'react-router-dom';
 
 type CheckInMode = 'new' | 'return';
+
+const GENDER_OPTIONS: { value: PatientGender; label: string }[] = [
+  { value: 'mulher_cis', label: 'Mulher cisgênero' },
+  { value: 'homem_cis', label: 'Homem cisgênero' },
+  { value: 'mulher_trans', label: 'Mulher transgênero' },
+  { value: 'homem_trans', label: 'Homem transgênero' },
+  { value: 'travesti', label: 'Travesti' },
+  { value: 'nao_binario', label: 'Não binário' },
+  { value: 'outro', label: 'Outro' },
+];
 
 export function CheckInPage() {
   const navigate = useNavigate();
@@ -54,6 +65,8 @@ export function CheckInPage() {
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [sex, setSex] = useState<PatientSex>('M');
+  const [gender, setGender] = useState<PatientGender | ''>('');
+  const [symptoms, setSymptoms] = useState('');
   const [observations, setChiefComplaint] = useState('');
   const [comorbidities, setComorbidities] = useState<string[]>([]);
   const [comorbidityOptions, setComorbidityOptions] = useState<ComorbidityOption[]>([]);
@@ -308,19 +321,15 @@ export function CheckInPage() {
       return;
     }
 
-    const cid = selectedCid ?? cids[0];
-    if (!cid) {
-      showToast('Lista de CIDs ainda não carregou. Aguarde um instante.');
-      return;
-    }
-
     setSpinning(true);
     try {
       const patient = await createPatientMock({
         name: trimmedName,
         age: ageNum,
         sex,
-        cid,
+        gender: gender || undefined,
+        symptoms: symptoms.trim() || undefined,
+        cid: selectedCid ?? { code: '', label: '' },
         observations: observations.trim() || undefined,
         comorbidities,
         currentMedications: medications,
@@ -381,7 +390,7 @@ export function CheckInPage() {
                           {p.name}
                         </span>
                         <span className="text-xs text-slate-600">
-                          {p.cid.code} · {p.cid.label}
+                          {formatPatientCid(p.cid)}
                         </span>
                         <span className="font-mono text-[10px] text-slate-400">
                           {p.id}
@@ -415,7 +424,7 @@ export function CheckInPage() {
                   <div className="flex justify-between gap-4">
                     <dt className="text-slate-500">CID</dt>
                     <dd className="text-right text-slate-800">
-                      {selectedReturn.cid.code} — {selectedReturn.cid.label}
+                      {formatPatientCid(selectedReturn.cid)}
                     </dd>
                   </div>
                   <div className="border-t border-slate-200 pt-2">
@@ -505,7 +514,7 @@ export function CheckInPage() {
               </div>
               <div>
                 <label className="text-sm font-medium text-slate-700">
-                  Sexo
+                  Sexo biológico do nascimento
                 </label>
                 <select
                   value={sex}
@@ -517,6 +526,27 @@ export function CheckInPage() {
                 </select>
               </div>
             </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-700">
+                Identidade de gênero
+              </label>
+              <select
+                value={gender}
+                onChange={(e) =>
+                  setGender(e.target.value as PatientGender | '')
+                }
+                className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
+              >
+                <option value="">Não informado</option>
+                {GENDER_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div ref={cidPickerRef} className="relative">
               <label className="text-sm font-medium text-slate-700">
                 CID principal
@@ -565,14 +595,37 @@ export function CheckInPage() {
                   </ul>
                 </div>
               ) : null}
-              <p className="mt-1 text-xs text-slate-500">
-                Sem escolha no envio, usa o primeiro CID da lista.
+              {selectedCid ? (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCid(null)}
+                  className="mt-1 text-xs font-medium text-teal-700 hover:text-teal-900"
+                >
+                  Limpar seleção
+                </button>
+              ) : null}
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-700">
+                Sintomas
+              </label>
+              <textarea
+                maxLength={500}
+                rows={3}
+                value={symptoms}
+                onChange={(e) => setSymptoms(e.target.value)}
+                placeholder="Digite um sintoma por linha (ex: febre, tosse seca)"
+                className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
+              />
+              <p className="mt-0.5 text-xs text-slate-500">
+                {symptoms.length}/500 — um sintoma por linha
               </p>
             </div>
 
             <div>
               <label className="text-sm font-medium text-slate-700">
-                Observações:
+                Observações
               </label>
               <textarea
                 maxLength={300}
@@ -733,7 +786,7 @@ export function CheckInPage() {
                 rows={3}
                 value={medications}
                 onChange={(e) => setMedications(e.target.value)}
-                placeholder="Uma linha por medicamento. Pode combinar catalogo oficial com texto livre."
+                placeholder="Um medicamento por linha. Complementar ao que for escolhido no catálogo oficial."
                 className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
               />
             </div>

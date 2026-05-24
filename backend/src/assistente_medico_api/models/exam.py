@@ -14,6 +14,7 @@ class Exam(SQLModel, table=True):
     patient_id: str = Field(foreign_key="patients.id", index=True)
     name: str
     requested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
     status: str = Field(default="pending")
     result: str | None = None
     interpretation: str | None = None

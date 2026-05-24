@@ -54,6 +54,7 @@ def _normalize_message_history(
 
 
 async def _invoke_payload_and_config(
+    request: Request,
     body: ChatRequest,
     graph,
 ) -> tuple[dict, dict, str]:
@@ -72,20 +73,20 @@ async def _invoke_payload_and_config(
     payload: dict = {
         "query": body.message.strip(),
         "patient_id": body.patient_id,
-        "conversation_id": tid,
-        "audit_id": str(uuid.uuid4()),
-        "retrieve_attempt": 1,
         "retrieved_docs": [],
         "sources": [],
         "reasoning_steps": [],
         "answer": "",
         "retrieval_query": "",
-        "candidate_docs": [],
-        "context_sufficient": False,
-        "insufficiency_reason": None,
+        "patient_context": "",
     }
     if not has_persisted_history:
         payload["chat_history"] = _normalize_message_history(body)
+
+    registry = getattr(request.app.state, "patient_threads_registry", None)
+    if registry is not None and body.patient_id:
+        registry.setdefault(body.patient_id, set()).add(tid)
+
     return payload, config, tid
 
 
@@ -112,7 +113,7 @@ async def post_chat(
 ):
     """Chat RAG: SSE com graph.astream_events(); JSON de fallback com graph.invoke()."""
     graph = _get_graph(request)
-    initial, config, thread_id = await _invoke_payload_and_config(body, graph)
+    initial, config, thread_id = await _invoke_payload_and_config(request, body, graph)
     wants_stream = bool(accept and "text/event-stream" in accept.lower())
 
     set_thread_id(thread_id)

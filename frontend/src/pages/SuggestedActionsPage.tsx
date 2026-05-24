@@ -5,6 +5,7 @@ import { patchPatientMock } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
 import type { SuggestedActionItem, SuggestedActionType } from '@/types/domain';
+import { formatPatientCid } from '@/utils/formatPatientCid';
 
 const TYPE_ORDER: SuggestedActionType[] = [
   'exam',
@@ -88,7 +89,7 @@ export function SuggestedActionsPage() {
       <div className="rounded-xl border border-[var(--color-border-subtle)] bg-white p-5 shadow-sm">
         <h2 className="text-xl font-semibold text-slate-900">Resumo do caso</h2>
         <p className="mt-3 text-sm font-medium text-slate-800">
-          Hipótese (mock): {p.cid.label} ({p.cid.code})
+          Hipótese (mock): {formatPatientCid(p.cid)}
         </p>
         <p className="mt-2 text-sm leading-relaxed text-slate-700">
           Paciente internado com queixa principal descrita no check-in. Contexto

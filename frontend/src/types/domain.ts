@@ -2,6 +2,15 @@
 
 export type PatientSex = 'M' | 'F';
 
+export type PatientGender =
+  | 'mulher_cis'
+  | 'homem_cis'
+  | 'mulher_trans'
+  | 'homem_trans'
+  | 'travesti'
+  | 'nao_binario'
+  | 'outro';
+
 export type PatientStatus = 'admitted' | 'discharged';
 
 export interface Cid {
@@ -39,6 +48,7 @@ export interface Exam {
   id: string;
   name: string;
   requestedAt: string;
+  completedAt?: string;
   status: ExamStatus;
   result?: string;
   interpretation?: string;
@@ -85,6 +95,8 @@ export interface Patient {
   admittedAt: string;
   cid: Cid;
   observations: string;
+  gender?: PatientGender | string;
+  symptoms: string;
   comorbidities: string[];
   currentMedications: string[];
   vitalSigns: VitalSigns;
@@ -119,10 +131,12 @@ export interface CreatePatientRequestBody {
   /** Omisso ou inválido no mock → 45. */
   age?: number;
   sex?: PatientSex;
-  /** Omisso no mock → "S/N". */
-  cid: Cid;
+  /** Omisso → admissão sem CID (code/label vazios). */
+  cid?: Cid;
   /** Omisso no mock → "Não informado". */
   observations?: string;
+  gender?: PatientGender | string;
+  symptoms?: string;
   comorbidities?: string[];
   /** Texto multilinha do formulário; normalizado para array no mock */
   currentMedications?: string;

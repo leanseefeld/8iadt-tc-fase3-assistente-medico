@@ -104,6 +104,9 @@ except ModuleNotFoundError as exc:
     async def rewrite_query_node(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
+    def format_patient_context(*args, **kwargs):  # type: ignore[no-redef]
+        return ""
+
     def vectorstore_chroma_dir() -> Path:
         return Path.cwd().parent / "vectorstore" / "chroma"
 
@@ -143,6 +146,7 @@ class InspectorSettings:
 @dataclass(frozen=True)
 class Timing:
     store_ms: float | None
+    patient_context_ms: float | None
     rewrite_ms: float | None
     embed_ms: float | None
     retrieve_ms: float | None
@@ -364,6 +368,23 @@ def _render_educational_tips(*, query: str, has_docs: bool, scores: list[float])
         st.markdown(f"- {t}")
 
 
+_DEFAULT_PATIENT_CONTEXT = """Contexto do paciente admitido:
+- Nome: Maria Oliveira
+- Sexo biológico (nascimento): Feminino
+- Identidade de gênero: Mulher transgênero
+- Idade: 38 anos
+- Sintomas:
+  - febre alta
+  - tosse seca
+- Medicamentos em uso: Metformina, Losartana 50mg
+- CID/diagnóstico: E11 — Diabetes Mellitus Tipo 2
+- Comorbidades: Hipertensão Arterial Sistêmica
+- Exames concluídos (últimos 6 meses):
+  - Glicemia em jejum: 145 mg/dL (concluído em 10/05/2026, há 13 dias)
+- Exames pendentes (últimos 6 meses):
+  - Creatinina: pendente (solicitado em 20/05/2026, há 3 dias)"""
+
+
 def main() -> None:
     st.set_page_config(page_title="RAG Inspector", layout="wide")
     st.title("RAG Inspector (PCDT) — debug completo do pipeline")
@@ -490,6 +511,17 @@ def main() -> None:
                 value="[]",
                 help='Mesmo formato do backend: [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]',
             )
+            with st.expander("Contexto do paciente (simulado — opcional)", expanded=False):
+                patient_context_sim = st.text_area(
+                    "patient_context",
+                    height=180,
+                    value=_DEFAULT_PATIENT_CONTEXT,
+                    help=(
+                        "Pré-preenche o campo patient_context no estado do grafo para simular o nó. "
+                        "Deixe em branco para ver o prompt sem contexto clínico."
+                    ),
+                    label_visibility="collapsed",
+                )
             run_mode = st.radio(
                 "Modo de execução",
                 options=["RAG apenas", "RAG + geração LLM", "Fluxo completo (geração + guardrail)"],
@@ -505,7 +537,7 @@ def main() -> None:
 
         with col_r:
             st.subheader("Flow diagram (atual)")
-            flow_text = "backend.rewrite  →  backend.retrieve(expand + chroma + rerank)  →  backend.prompt_preview"
+            flow_text = "backend.load_patient_context(sim)  →  backend.rewrite  →  backend.retrieve(expand + chroma + rerank)  →  backend.prompt_preview"
             if run_generate:
                 flow_text = f"{flow_text}  →  backend.generate"
             if run_guardrail:
@@ -525,6 +557,7 @@ def main() -> None:
                     st.dataframe(
                         [
                             {"etapa": "abrir Chroma", "ms": t.get("store_ms")},
+                            {"etapa": "contexto paciente (simulado)", "ms": t.get("patient_context_ms")},
                             {"etapa": "embedding debug", "ms": t.get("embed_ms")},
                             {"etapa": "rewrite", "ms": t.get("rewrite_ms")},
                             {"etapa": "retrieve", "ms": t.get("retrieve_ms")},
@@ -543,6 +576,7 @@ def main() -> None:
             errors: list[str] = []
             timing = Timing(
                 store_ms=None,
+                patient_context_ms=None,
                 rewrite_ms=None,
                 embed_ms=None,
                 retrieve_ms=None,
@@ -566,6 +600,7 @@ def main() -> None:
                 "reasoning_steps": [],
                 "answer": "",
                 "retrieval_query": "",
+                "patient_context": "",
             }
             backend_settings = _backend_settings(cfg)
 
@@ -580,6 +615,13 @@ def main() -> None:
                 ]
             except Exception as exc:
                 errors.append(f"Histórico JSON inválido; executando sem histórico: {_format_exception(exc)}")
+
+            # --- Contexto clínico simulado (sem DB) ---
+            sim_context = (patient_context_sim or "").strip()
+            if sim_context:
+                t0 = time.perf_counter()
+                final_state["patient_context"] = sim_context
+                timing = replace(timing, patient_context_ms=(time.perf_counter() - t0) * 1000.0)
 
             # --- Load store ---
             try:
@@ -720,6 +762,7 @@ def main() -> None:
                     "audit_id": final_state.get("audit_id") or audit_payload.get("audit_id") or "",
                     "guardrail_status": final_state.get("guardrail_status") or "",
                     "guardrail_reason": final_state.get("guardrail_reason") or "",
+                    "patient_context_preview": (final_state.get("patient_context") or "")[:300],
                 },
                 "retrieve": {
                     "legacy_k": int(cfg.retrieval_k),
@@ -827,6 +870,7 @@ def main() -> None:
                     "audit_id": backend_state.get("audit_id") or "",
                     "guardrail_status": backend_state.get("guardrail_status") or "",
                     "guardrail_reason": backend_state.get("guardrail_reason") or "",
+                    "patient_context_preview": backend_state.get("patient_context_preview") or "",
                 },
                 expanded=False,
             )

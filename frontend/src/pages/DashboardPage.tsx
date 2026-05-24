@@ -6,6 +6,7 @@ import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
 import type { VitalSigns } from '@/types/domain';
+import { formatPatientCid } from '@/utils/formatPatientCid';
 
 function parseSystolicPressure(value: number | string): number | null {
   const left = String(value).split('/')[0]?.trim();
@@ -241,7 +242,7 @@ export function DashboardPage() {
             onClick={() => setCidOpen(true)}
             className="mt-2 text-left text-sm text-teal-700 underline"
           >
-            {patient.cid.code} — {patient.cid.label}
+            {formatPatientCid(patient.cid)}
           </button>
           <div className="mt-3 flex flex-wrap gap-1">
             {patient.comorbidities.map((c) => (

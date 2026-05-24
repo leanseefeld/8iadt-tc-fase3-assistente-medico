@@ -14,25 +14,30 @@ from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.graph.clinical_query_understanding import normalize_text_for_match
 from assistente_medico_api.observability.audit import audit, truncate
 
+# Persona e limites de segurança para o assistente (pt-BR).
 _SYSTEM_PROMPT = """\
-Você é um assistente clínico de apoio a médicos no Brasil.
-Responda em português do Brasil, de forma objetiva e profissional.
-Use apenas o contexto disponível quando houver fonte documental.
-Não invente dados clínicos.
-Não prescreva doses, posologias ou esquemas terapêuticos específicos.\
-"""
+Você gera respostas para um assistente clínico de apoio a médicos no Brasil.
+Responda em português do Brasil, de forma objetiva, profissional e fluída para manter o tom da conversa.
 
-_DIRECT_SYSTEM_PROMPT = """\
-Você é um assistente clínico de apoio a médicos no Brasil.
-Responda de forma curta e útil a saudações ou perguntas genéricas.
-Não invente dados clínicos e não sugira condutas sem contexto documental.\
-"""
+Uma busca por Protocolos Clínicos e Diretrizes Terapêuticas (PCDT) pode ter sido realizada para responder a pergunta.
 
-_INSUFFICIENT_SYSTEM_PROMPT = """\
-Você é um assistente clínico de apoio a médicos no Brasil.
-Explique que o contexto recuperado foi insuficiente para responder com segurança.
-Oriente o médico a revisar o PCDT correspondente ou refinar a pergunta.
-Responda em português do Brasil.\
+Quando resultados de busca nos PCDTs forem fornecidos:
+- Use-os quando forem relevantes para a pergunta; cite pelo identificador [n] correspondente.
+- Ignore trechos que não sejam construtivos para a pergunta.
+- Se nenhum resultado for suficiente, diga que documentos relevantes não foram encontrados.
+- Mencione apenas os trechos que sejam relevantes para a pergunta, evitando descrever trechos irrelevantes.
+
+Quando não houver resultados de busca (pergunta conversacional ou de acompanhamento):
+- Responda com base no histórico da conversa e no seu conhecimento geral.
+- Evite inventar dados clínicos; se necessário, sinalize que é conhecimento geral sem respaldo de protocolo.
+
+Você recebe contexto relevante em cada turno da conversa, mas deve responder diretamente ao conteúdo de "Mensagem do médico:".
+O médico não tem acesso direto ao contexto, apenas as mensagens que ele mesmo enviou e o que você respondeu.
+Assuma que quem estruturou o contexto foi você mesmo, não o médico.
+
+Use o contexto clínico do paciente para personalizar a resposta quando aplicável. Não invente dados além do fornecido.
+Use pronomes adequados para o gênero do paciente.
+Só cumprimente se for cumprimentado.\
 """
 
 
@@ -93,6 +98,20 @@ def _build_messages(state: ChatRAGState, *, mode: str = "grounded") -> list:
         state.get("structured_terms") or query_expansion.get("structured_terms") or {},
         query_expansion.get("_complementary_retrieve_info") or {},
     )
+    patient_context = (state.get("patient_context") or "").strip()
+    patient_block = (
+        f"Contexto clínico do paciente:\n{patient_context}\n\n"
+        if patient_context
+        else ""
+    )
+    # Bloco PCDT só na pergunta corrente (turno final do utilizador).
+    final_human = (
+        f"{patient_block}\n\n"
+        f"Resultado da busca por trechos PCDT:\n{context}\n\n"
+        f"Mensagem do médico:\n{user_text}\n\n"
+
+    )
+    out: list = [SystemMessage(content=_SYSTEM_PROMPT)]
 
     if mode == "direct":
         human = (

@@ -18,6 +18,7 @@ class Exam(BaseModel):
     id: str
     name: str
     requested_at: datetime = Field(alias="requestedAt")
+    completed_at: datetime | None = Field(default=None, alias="completedAt")
     status: str
     result: str | None = None
     interpretation: str | None = None

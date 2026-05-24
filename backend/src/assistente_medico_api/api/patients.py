@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistente_medico_api.config import Settings
@@ -28,6 +29,7 @@ from assistente_medico_api.schemas.suggested_items import (
     SuggestedItemResponse,
 )
 from assistente_medico_api.services import alert_service, patient_service
+from assistente_medico_api.services.patient_context_cache import invalidate_patient_context
 from assistente_medico_api.observability.audit import audit
 from assistente_medico_api.observability.context import set_patient_id
 
@@ -105,6 +107,7 @@ async def get_vitals_history(
 
 @router.patch("/patients/{patient_id}", response_model=PatientResponse)
 async def patch_patient(
+    request: Request,
     patient_id: str,
     body: PatientPatchRequest,
     session: AsyncSession = Depends(get_session),
@@ -114,6 +117,7 @@ async def patch_patient(
         raise HTTPException(status_code=404, detail="Paciente não encontrado")
     await patient_service.patch_patient(session, patient, body)
     await session.commit()
+    await invalidate_patient_context(request.app.state, patient_id)
     return PatientResponse(patient=await patient_service.build_patient_schema(session, patient))
 
 
@@ -227,7 +231,11 @@ async def patch_vitals(
 
 
 @router.post("/patients/{patient_id}/readmit", response_model=PatientResponse)
-async def readmit_patient(patient_id: str, session: AsyncSession = Depends(get_session)) -> PatientResponse:
+async def readmit_patient(
+    request: Request,
+    patient_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> PatientResponse:
     patient = await patient_repo.get_patient_by_id(session, patient_id)
     if patient is None:
         raise HTTPException(status_code=404, detail="Paciente não encontrado")
@@ -236,11 +244,13 @@ async def readmit_patient(patient_id: str, session: AsyncSession = Depends(get_s
 
     await patient_service.readmit_patient(session, patient)
     await session.commit()
+    await invalidate_patient_context(request.app.state, patient_id)
     return PatientResponse(patient=await patient_service.build_patient_schema(session, patient))
 
 
 @router.post("/patients/{patient_id}/exams", response_model=ExamResponse, status_code=201)
 async def create_manual_exam(
+    request: Request,
     patient_id: str,
     body: ExamCreateRequest,
     session: AsyncSession = Depends(get_session),
@@ -258,11 +268,13 @@ async def create_manual_exam(
     )
     await exam_repo.create_exam(session, exam)
     await session.commit()
+    await invalidate_patient_context(request.app.state, patient_id)
     return ExamResponse(exam=await patient_service.exam_to_schema_with_attachments(session, exam))
 
 
 @router.patch("/patients/{patient_id}/exams/{exam_id}", response_model=ExamResponse)
 async def patch_exam(
+    request: Request,
     patient_id: str,
     exam_id: str,
     body: ExamPatchRequest,
@@ -280,6 +292,10 @@ async def patch_exam(
         exam.result = body.result
     if body.interpretation is not None:
         exam.interpretation = body.interpretation
+
+    # Registra data de conclusão na primeira transição para completed/critical.
+    if body.status in {"completed", "critical"} and exam.completed_at is None:
+        exam.completed_at = datetime.now(UTC)
 
     if body.status == "critical" and previous_status != "critical":
         result_text = exam.result or "sem valor informado"
@@ -303,6 +319,7 @@ async def patch_exam(
     )
 
     await session.commit()
+    await invalidate_patient_context(request.app.state, patient_id)
     return ExamResponse(exam=await patient_service.exam_to_schema_with_attachments(session, exam))
 
 

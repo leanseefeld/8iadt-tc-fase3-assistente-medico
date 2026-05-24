@@ -49,7 +49,7 @@ _COMORBIDITIES = [
     ComorbidityOption(code="Tabagismo", label="Tabagismo", category="behavioral"),
     ComorbidityOption(code="Etilismo", label="Etilismo Crônico", category="behavioral"),
     ComorbidityOption(code="Gravidez", label="Gravidez", category="reproductive"),
-    ComorbidityOption(code="Puerperio", label="Puerpério", category="reproductive"),
+    ComorbidityOption(code="Puerperio (resguardo)", label="Puerpério", category="reproductive"),
     ComorbidityOption(code="Outras", label="Outras Comorbidades", category="other"),
 ]
 

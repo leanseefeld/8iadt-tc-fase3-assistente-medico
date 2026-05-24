@@ -20,6 +20,8 @@ class Patient(SQLModel, table=True):
     cid_code: str
     cid_label: str
     observations: str
+    gender: str | None = None
+    symptoms: str = Field(default="")
     comorbidities: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     current_medications: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
 
