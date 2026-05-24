@@ -16,6 +16,12 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 - **chat-message-feedback** — agent:cursor — Chat: `messageId` no JSON/SSE `done`; PATCH feedback (`positive`/`negative`/null) em `conversation_messages.feedback_rating`; UI 👍/👎 na barra de meta (direita, hover, toggle). — Revisão: `f5a89b2` feat(chat): persistencia de conversas
 - **chat-conversations-db** — agent:cursor — Chat: tabelas `conversations`/`conversation_messages` (médico, paciente, system_prompt, llm_input/output, fontes, raciocínio); `threadId`=PK; `X-User-Id` obrigatório; frontend só `threadId` (sem `messageHistory`). — Revisão: `83bd4f9` feat(generate): simplificação do prompt
+- **auditoria-clinica-jsonl-diaria** — agent:cursor — JSONL `audit_clinical_*` com ações clínicas **e** eventos enxutos do RAG/chat/backend (`reescrita_consulta_rag`, `recuperacao_contexto_rag`, etc.); paralelamente reposto `audit()` JSON (retrieve/generate/startup/chat/guardrail); `pytest` não grava JSONL; `RAG_AUDIT_ENABLED` para JSONL técnico. — Revisão: `9ab7006` fix-scispacy
+
+- **startup-jsonl-uma-linha-por-pid** — agent:cursor — `backend_assistente_iniciado`: no máximo **uma** entrada JSONL por processo (lifespan repetida); `audit(rag_backend_startup)` inalterado. — Revisão: `9ab7006` fix-scispacy
+
+- **scispacy-extra-py314** — agent:cursor — `scispacy` sai do núcleo e vira extra `[scispacy]` em `llm/` + `backend/`; README + `--setup-scispacy` no `run-local.py` (fallback clínico continua sem o pacote). — Revisão: `e1ee2a6` feat: contexto do paciente na conversa + melhoria de prompt
+
 - **no-contexto-paciente-rag** — agent:cursor — LangGraph: entrypoint `load_patient_context` com cache por thread + invalidação em PATCH paciente/exame; schema `gender`/`symptoms`/`exams.completed_at`; check-in/TopBar; RAG Inspector simulado. — Revisão: `15df709` feat: CID opcional; preservar sugestões/ações anteriores
 
 ### 2026-05-23

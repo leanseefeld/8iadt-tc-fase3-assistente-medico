@@ -103,10 +103,18 @@ export async function patchPatientHttp(
 export async function patchVitalsHttp(
   id: string,
   patch: Partial<VitalSigns>,
+  options?: { auditContextDemo?: boolean },
 ): Promise<Patient | null> {
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  });
+  if (options?.auditContextDemo) {
+    headers.set('X-Audit-Context', 'demo');
+  }
   const res = await apiFetch(`${API_BASE_URL}/patients/${id}/vitals`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers,
     body: JSON.stringify(patch),
   });
   if (res.status === 404) {

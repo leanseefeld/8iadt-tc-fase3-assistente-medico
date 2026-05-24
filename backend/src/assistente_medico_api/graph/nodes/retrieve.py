@@ -11,6 +11,7 @@ from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.rag_enhancement import format_rich_context_block
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 from assistente_medico_api.services.rag_retrieval_service import (
     format_source_label,
     run_rag_retrieval,
@@ -61,6 +62,30 @@ def retrieve_node(
         complementary_retrieve_info=result.audit_payload.get("complementary_retrieve"),
         final_documents=result.audit_payload.get("final_documents"),
         top_k=result.audit_payload.get("retrieval_final_k"),
+    )
+
+    stems_resumo = stems_list[:15]
+    structured = result.structured_terms if isinstance(result.structured_terms, dict) else {}
+    clinical_audit(
+        ClinicalAuditAction.RECUPERACAO_CONTEXTO_RAG,
+        patient_id=pid,
+        descricao=f"Recuperação RAG PCDT: {len(result.retrieved_docs)} documento(s), {latency_ms} ms.",
+        detalhes={
+            "latency_ms": latency_ms,
+            "documentos_recuperados": len(result.retrieved_docs),
+            "consulta_truncada": truncate(query, n=280),
+            "consulta_expandida_truncada": truncate(result.expanded_query, n=280),
+            "top_k": result.audit_payload.get("retrieval_final_k"),
+            "stems_fonte_resumo": stems_resumo,
+            "intencao_extracao": structured.get("intent"),
+            "doenca_ou_diretriz_extracao": structured.get("diretriz") or structured.get("disease"),
+            "candidatos_catalogo_quantidade": (
+                len(result.catalog_candidates)
+                if isinstance(result.catalog_candidates, list)
+                else None
+            ),
+        },
+        settings=settings,
     )
 
     return {

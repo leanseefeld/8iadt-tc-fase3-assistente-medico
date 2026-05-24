@@ -9,6 +9,8 @@ _request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 _thread_id_var: ContextVar[str | None] = ContextVar("thread_id", default=None)
 _patient_id_var: ContextVar[str | None] = ContextVar("patient_id", default=None)
 _user_id_var: ContextVar[str | None] = ContextVar("user_id", default=None)
+# Contexto opcional (ex.: demo da UI): cabeçalho `X-Audit-Context`.
+_audit_context_var: ContextVar[str | None] = ContextVar("audit_context", default=None)
 
 
 def new_request_id() -> str:
@@ -67,7 +69,20 @@ def reset_user_id(token: Token[str | None]) -> None:
     _user_id_var.reset(token)
 
 
+def get_audit_context() -> str | None:
+    return _audit_context_var.get()
+
+
+def set_audit_context(value: str | None) -> Token[str | None]:
+    return _audit_context_var.set(value)
+
+
+def reset_audit_context(token: Token[str | None]) -> None:
+    _audit_context_var.reset(token)
+
+
 def clear_assistant_scope() -> None:
     """Limpa IDs de fluxo definidos durante tratamento da requisição (evita vazamento entre requests)."""
     _thread_id_var.set(None)
     _patient_id_var.set(None)
+    _audit_context_var.set(None)

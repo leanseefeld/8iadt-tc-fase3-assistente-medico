@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,11 +19,18 @@ from assistente_medico_api.api.prescriptions import router as prescriptions_rout
 from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
 from assistente_medico_api.observability.audit import audit
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 from assistente_medico_api.observability.logging_setup import configure_logging
 from assistente_medico_api.observability.middleware import RequestContextMiddleware
 
 
 configure_logging(Settings())
+
+# Evita encher `audit_clinical_*.jsonl` com várias cópias se a lifespan correr mais
+# do que uma vez no mesmo processo (ex.: múltiplos clientes ASGI de teste).
+_clinical_startup_jsonl_lock = threading.Lock()
+_clinical_startup_jsonl_state: dict[str, bool] = {"emitted": False}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -52,6 +60,7 @@ async def lifespan(app: FastAPI):
         catalog_path = data_root() / DEFAULT_CATALOG_RELATIVE_PATH
     except Exception:
         catalog_path = None
+
     audit(
         "rag_backend_startup",
         kind="rag",
@@ -64,6 +73,26 @@ async def lifespan(app: FastAPI):
         conitec_catalog_path=str(catalog_path) if catalog_path else "",
         conitec_catalog_exists=bool(catalog_path and catalog_path.is_file()),
     )
+    detalhes_startup = {
+        "chroma_persist_dir": str(chroma_path),
+        "chroma_collection": settings.chroma_collection,
+        "chroma_document_count": chroma_count,
+        "ollama_base_url": settings.ollama_base_url,
+        "ollama_embed_model": settings.ollama_embed_model,
+        "ollama_chat_model": settings.ollama_chat_model,
+        "conitec_catalog_path": str(catalog_path) if catalog_path else "",
+        "conitec_catalog_exists": bool(catalog_path and catalog_path.is_file()),
+    }
+    with _clinical_startup_jsonl_lock:
+        if not _clinical_startup_jsonl_state["emitted"]:
+            clinical_audit(
+                ClinicalAuditAction.BACKEND_ASSISTENTE_INICIADO,
+                descricao="Backend do assistente iniciado com vectorstore RAG e modelos Ollama.",
+                detalhes=detalhes_startup,
+                settings=settings,
+            )
+            _clinical_startup_jsonl_state["emitted"] = True
+
     app.state.settings = settings
     app.state.chroma_store = store
     app.state.chat_checkpointer = MemorySaver()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from datetime import UTC, datetime, timedelta
 
 from assistente_medico_api.config import Settings
@@ -10,7 +9,6 @@ from assistente_medico_api.db.session import AsyncSessionLocal
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.models.exam import Exam
 from assistente_medico_api.models.patient import Patient
-from assistente_medico_api.observability.audit import audit
 from assistente_medico_api.repositories import patient_repo
 
 # Rótulos de identidade de gênero (códigos canônicos do check-in).
@@ -228,25 +226,15 @@ async def load_patient_context_node(state: ChatRAGState, settings: Settings) -> 
 
     if not pid:
         step = "Contexto clínico: paciente não informado."
-        audit("rag_patient_context_loaded", kind="rag", patient_id=None, cache_hit=False, loaded=False)
         return {
             "patient_context": "",
             "reasoning_steps": existing_steps + [step],
         }
 
-    t0 = time.perf_counter()
     async with AsyncSessionLocal() as session:
         patient = await patient_repo.get_patient_by_id(session, pid)
         if patient is None:
             step = f"Contexto clínico: paciente {pid} não encontrado."
-            audit(
-                "rag_patient_context_loaded",
-                kind="rag",
-                patient_id=pid,
-                cache_hit=False,
-                loaded=False,
-                latency_ms=round((time.perf_counter() - t0) * 1000, 2),
-            )
             return {
                 "patient_context": "",
                 "reasoning_steps": existing_steps + [step],
@@ -255,17 +243,7 @@ async def load_patient_context_node(state: ChatRAGState, settings: Settings) -> 
         exams = await patient_repo.list_exams(session, pid)
         formatted = format_patient_context(patient, exams)
 
-    latency_ms = round((time.perf_counter() - t0) * 1000, 2)
     step = f"Contexto clínico carregado: {patient.name}, {patient.age}a, CID {patient.cid_code}"
-    audit(
-        "rag_patient_context_loaded",
-        kind="rag",
-        patient_id=pid,
-        cache_hit=False,
-        loaded=True,
-        exam_count=len(exams),
-        latency_ms=latency_ms,
-    )
     return {
         "patient_context": formatted,
         "reasoning_steps": existing_steps + [step],

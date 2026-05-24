@@ -19,6 +19,7 @@ from assistente_medico_api.graph.nodes.retrieve import format_context_block
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.graph.clinical_query_understanding import normalize_text_for_match
 from assistente_medico_api.observability.audit import audit, truncate
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 
 # Persona e limites de segurança para o assistente (pt-BR).
 GENERATE_SYSTEM_PROMPT = """\
@@ -264,6 +265,19 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
             controlled_response=True,
             reason="detected_disease_without_compatible_context",
         )
+        clinical_audit(
+            ClinicalAuditAction.GERACAO_RESPOSTA_RAG,
+            patient_id=pid,
+            descricao="Resposta do assistente: caminho controlado (contexto PCDT incompatível com doença detectada).",
+            detalhes={
+                "latency_ms": latency_ms,
+                "tipo": "resposta_controlada",
+                "motivo": "detected_disease_without_compatible_context",
+                "caracteres_resposta": len(controlled_answer),
+                "documentos_recuperados": len(docs),
+            },
+            settings=settings,
+        )
         return {
             "answer": controlled_answer,
             "rag_audit_payload": audit_payload,
@@ -299,6 +313,19 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
         retrieved_count=len(docs),
         source_stems=stems,
         controlled_response=False,
+    )
+    clinical_audit(
+        ClinicalAuditAction.GERACAO_RESPOSTA_RAG,
+        patient_id=pid,
+        descricao="Geração da resposta do assistente (LLM) concluída.",
+        detalhes={
+            "latency_ms": latency_ms,
+            "tipo": "geracao_llm",
+            "caracteres_resposta": len(ans),
+            "documentos_recuperados": len(docs),
+            "stems_fonte_resumo": stems[:15],
+        },
+        settings=settings,
     )
     # Histórico atualizado no guardrail_node, que conhece a resposta final
     # (pode ter sido substituída ou modificada pelo guardrail).

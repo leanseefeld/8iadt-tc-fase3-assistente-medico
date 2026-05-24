@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistente_medico_api.deps import get_session
-from assistente_medico_api.repositories import alert_repo
+from assistente_medico_api.repositories import alert_repo, patient_repo
 from assistente_medico_api.schemas.alerts import (
     AlertCreateRequest,
     AlertListResponse,
@@ -14,6 +14,7 @@ from assistente_medico_api.schemas.alerts import (
     AlertResponse,
 )
 from assistente_medico_api.services import alert_service
+from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 
 router = APIRouter(tags=["alerts"])
 
@@ -79,9 +80,25 @@ async def patch_alert(
     if alert is None:
         raise HTTPException(status_code=404, detail="Alerta não encontrado")
 
+    was_resolved = alert.resolved
+
     if body.resolved is not None:
         alert.resolved = body.resolved
 
     await alert_repo.update_alert(session, alert)
     await session.commit()
+
+    if body.resolved is True and not was_resolved:
+        pname = None
+        patient = await patient_repo.get_patient_by_id(session, alert.patient_id)
+        if patient is not None:
+            pname = patient.name
+        clinical_audit(
+            ClinicalAuditAction.ALERTA_RESOLVIDO,
+            patient_id=alert.patient_id,
+            patient_name=pname,
+            descricao=f"Alerta {alert_id} marcado como resolvido.",
+            detalhes={"alert_id": alert_id, "categoria": alert.category},
+        )
+
     return AlertResponse(alert=await alert_service.build_alert_schema(alert))
