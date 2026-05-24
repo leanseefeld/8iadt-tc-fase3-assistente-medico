@@ -27,6 +27,26 @@ pip install -e llm
 pip install -e backend/
 ```
 
+## Testes
+
+Na pasta `backend/`:
+
+```bash
+source .venv/bin/activate
+
+# todos
+pytest
+
+# um arquivo
+pytest tests/test_patients_endpoint_contract.py
+
+# um teste
+pytest tests/test_cids_endpoint_contract.py::test_get_cids_contract
+
+# por padrão no nome
+pytest -k "patients"
+```
+
 ## Executar
 
 ```bash
