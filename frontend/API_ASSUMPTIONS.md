@@ -155,6 +155,7 @@ O histórico completo é consumido separadamente pela dashboard via `GET /patien
 | `sources`    | string[]   |
 | `reasoning`  | string[]   |
 | `threadId`   | string     |
+| `messageId`  | string (opcional) — id persistido da mensagem do assistente no turno |
 
 ### `DecisionFlowResponse`
 
@@ -362,7 +363,7 @@ O servidor FastAPI aceita `patientId` (alias); internamente pode mapear para `pa
 | `sources` | `{ "sources": string[] }` | Rótulos das fontes PCDT recuperadas |
 | `reasoning` | `{ "steps": string[] }` | Traço curto da etapa de recuperação (no cliente mapeado para o painel «raciocínio») |
 | `token` | `{ "content": string }` | Fragmento incremental da resposta do modelo |
-| `done` | `{ "threadId": string }` | Fim do fluxo com sucesso (id do thread para as próximas mensagens) |
+| `done` | `{ "threadId": string, "messageId": string }` | Fim do fluxo com sucesso (thread + id da mensagem do assistente persistida) |
 | `error` | `{ "detail": string }` | Erro durante recuperação ou geração |
 
 O cliente (`src/api/sseChat.ts`) agrega os `token` em `ChatResponse.text` e usa `sources` + `steps` como `sources` e `reasoning`.
@@ -370,9 +371,33 @@ O cliente (`src/api/sseChat.ts`) agrega os `token` em `ChatResponse.text` e usa 
 **Modo alternativo — JSON (bloqueante):**
 
 - Sem `Accept: text/event-stream` (ex.: `Accept: application/json` ou omisso, conforme implementação do cliente)
-- **Resposta 200:** corpo JSON alinhado a `ChatResponse` (`text`, `sources`, `reasoning`, `threadId`)
+- **Resposta 200:** corpo JSON alinhado a `ChatResponse` (`text`, `sources`, `reasoning`, `threadId`, `messageId`)
 
 **Erros HTTP:** ex. **503** se Chroma/Ollama indisponíveis na inicialização ou falha grave na invocação do grafo (detalhe em `detail` quando aplicável).
+
+---
+
+### 7.1 `PATCH /assistant/conversations/:conversationId/messages/:messageId`
+
+Avalia ou remove avaliação de uma mensagem do assistente (👍/👎 na UI).
+
+**Cabeçalho obrigatório:** `X-User-Id` (mesmo médico da conversa).
+
+**Corpo:**
+
+```json
+{ "feedbackRating": "positive" | "negative" | null }
+```
+
+`null` remove a avaliação (`feedback_rating` volta a `NULL` no SQLite).
+
+**Resposta 200:**
+
+```json
+{ "messageId": "msg-...", "feedbackRating": "positive" | "negative" | null }
+```
+
+**Erros:** **400** se a mensagem não for do assistente; **403** se a conversa for de outro médico; **404** conversa/mensagem inexistente.
 
 **Premissas alteradas em relação ao protótipo só-mock:**
 

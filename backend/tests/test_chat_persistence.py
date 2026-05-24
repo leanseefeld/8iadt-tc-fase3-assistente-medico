@@ -69,7 +69,9 @@ async def test_chat_persists_conversation_and_messages_on_first_turn(
         json={"patientId": "p1", "message": "ola"},
     )
     assert res.status_code == 200
-    thread_id = res.json()["threadId"]
+    body = res.json()
+    thread_id = body["threadId"]
+    assert body["messageId"].startswith("msg-")
 
     async with test_session_factory() as session:
         conv = (
@@ -100,6 +102,7 @@ async def test_chat_persists_conversation_and_messages_on_first_turn(
     assert messages[1].llm_input[0]["role"] == "system"
     assert messages[1].sources == ["[1] PCDT — secao"]
     assert messages[1].guardrail_status == "safe"
+    assert messages[1].id == body["messageId"]
 
 
 @pytest.mark.asyncio

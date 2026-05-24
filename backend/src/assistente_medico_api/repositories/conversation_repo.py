@@ -42,3 +42,23 @@ async def create_message(
     session.add(row)
     await session.flush()
     return row
+
+
+async def get_message_by_id(
+    session: AsyncSession,
+    message_id: str,
+) -> ConversationMessage | None:
+    statement = select(ConversationMessage).where(ConversationMessage.id == message_id)
+    result = await session.execute(statement)
+    return result.scalar_one_or_none()
+
+
+async def set_message_feedback(
+    session: AsyncSession,
+    message: ConversationMessage,
+    rating: str | None,
+) -> ConversationMessage:
+    message.feedback_rating = rating
+    session.add(message)
+    await session.flush()
+    return message

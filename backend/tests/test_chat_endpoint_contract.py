@@ -73,6 +73,7 @@ async def test_post_chat_json_uses_ainvoke_not_invoke(
     assert payload["sources"] == ["S1"]
     assert payload["reasoning"] == ["R1"]
     assert "threadId" in payload and payload["threadId"]
+    assert payload["messageId"].startswith("msg-")
     assert dummy.ainvoke_calls == 1
     assert dummy.invoke_calls == 0
     assert dummy.last_initial.get("chat_history") == []

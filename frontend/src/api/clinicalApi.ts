@@ -195,6 +195,8 @@ export async function postAssistantChatMock(
   return http.postAssistantChatMock(patientId, message, options);
 }
 
+export const patchAssistantMessageFeedback = http.patchAssistantMessageFeedback;
+
 /** Lista de perguntas rápidas: função pura, igual em ambos os transportes. */
 export { quickQuestionsForCid };
 

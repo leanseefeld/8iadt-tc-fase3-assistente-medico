@@ -14,6 +14,7 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ### 2026-05-24
 
+- **chat-message-feedback** — agent:cursor — Chat: `messageId` no JSON/SSE `done`; PATCH feedback (`positive`/`negative`/null) em `conversation_messages.feedback_rating`; UI 👍/👎 na barra de meta (direita, hover, toggle). — Revisão: `f5a89b2` feat(chat): persistencia de conversas
 - **chat-conversations-db** — agent:cursor — Chat: tabelas `conversations`/`conversation_messages` (médico, paciente, system_prompt, llm_input/output, fontes, raciocínio); `threadId`=PK; `X-User-Id` obrigatório; frontend só `threadId` (sem `messageHistory`). — Revisão: `83bd4f9` feat(generate): simplificação do prompt
 - **no-contexto-paciente-rag** — agent:cursor — LangGraph: entrypoint `load_patient_context` com cache por thread + invalidação em PATCH paciente/exame; schema `gender`/`symptoms`/`exams.completed_at`; check-in/TopBar; RAG Inspector simulado. — Revisão: `15df709` feat: CID opcional; preservar sugestões/ações anteriores
 

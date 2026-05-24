@@ -107,14 +107,23 @@ export interface Patient {
 
 export type GuardrailStatus = 'safe' | 'warned' | 'blocked' | 'regenerated';
 
+export type MessageFeedbackRating = 'positive' | 'negative';
+
 export interface ChatResponse {
   text: string;
   sources: string[];
   reasoning: string[];
   /** Presente quando o backend devolve o id do thread (LangGraph checkpointer). */
   threadId?: string;
+  /** Id persistido da mensagem do assistente neste turno. */
+  messageId?: string;
   /** Status do guardrail de segurança clínica. Ausente se não aplicável. */
   guardrailStatus?: GuardrailStatus;
+}
+
+export interface MessageFeedbackPatchResponse {
+  messageId: string;
+  feedbackRating: MessageFeedbackRating | null;
 }
 
 export interface DecisionFlowResponse {

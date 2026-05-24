@@ -63,8 +63,8 @@ async def append_turn(
     conversation: Conversation,
     doctor_message: str,
     final_state: ChatRAGState,
-) -> None:
-    """Grava par médico + assistente após turno bem-sucedido do grafo."""
+) -> str:
+    """Grava par médico + assistente após turno bem-sucedido do grafo. Retorna id da mensagem do assistente."""
     now = datetime.now(UTC)
     doctor_row = ConversationMessage(
         conversation_id=conversation.id,
@@ -88,3 +88,4 @@ async def append_turn(
     )
     await conversation_repo.create_message(session, assistant_row)
     await conversation_repo.touch_conversation_updated_at(session, conversation)
+    return assistant_row.id

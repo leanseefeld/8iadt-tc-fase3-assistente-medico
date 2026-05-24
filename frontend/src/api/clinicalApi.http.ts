@@ -2,7 +2,12 @@
  * Transporte HTTP para endpoints do assistente.
  */
 import { apiFetch, API_BASE_URL } from '@/api/client';
-import type { ChatResponse, DecisionFlowResponse } from '@/types/domain';
+import type {
+  ChatResponse,
+  DecisionFlowResponse,
+  MessageFeedbackPatchResponse,
+  MessageFeedbackRating,
+} from '@/types/domain';
 import {
   consumeAssistantChatSse,
   type ChatStreamHandlers,
@@ -76,6 +81,28 @@ async function parseHttpErrorDetail(res: Response): Promise<string> {
     /* corpo não é JSON */
   }
   return raw.slice(0, 280);
+}
+
+export async function patchAssistantMessageFeedback(
+  conversationId: string,
+  messageId: string,
+  feedbackRating: MessageFeedbackRating | null,
+): Promise<MessageFeedbackPatchResponse> {
+  const res = await apiFetch(
+    `${API_BASE_URL}/assistant/conversations/${conversationId}/messages/${messageId}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ feedbackRating }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await parseHttpErrorDetail(res));
+  }
+  return (await res.json()) as MessageFeedbackPatchResponse;
 }
 
 export async function postAssistantDecisionFlowMock(
