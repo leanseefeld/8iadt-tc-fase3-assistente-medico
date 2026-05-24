@@ -8,6 +8,8 @@ def patient_create_payload() -> dict:
         "sex": "M",
         "cid": {"code": "A41.9", "label": "Sepse não especificada"},
         "observations": "Observacao inicial",
+        "gender": "mulher_cis",
+        "symptoms": "Febre\nTosse",
         "comorbidities": ["HAS"],
         "currentMedications": "Losartana",
     }
@@ -73,6 +75,8 @@ async def test_create_and_get_patient(async_client):
     data = create.json()["patient"]
     assert data["id"].startswith("pt-")
     assert data["cid"]["code"] == "A41.9"
+    assert data["gender"] == "mulher_cis"
+    assert data["symptoms"] == "Febre\nTosse"
     assert len(data["exams"]) >= 1
 
     got = await async_client.get(f"/api/patients/{data['id']}")

@@ -37,6 +37,8 @@ class Patient(BaseModel):
     admitted_at: datetime = Field(alias="admittedAt")
     cid: Cid
     observations: str
+    gender: str | None = None
+    symptoms: str = ""
     comorbidities: list[str]
     current_medications: list[str] = Field(alias="currentMedications")
     vital_signs: VitalSigns = Field(alias="vitalSigns")
@@ -51,6 +53,8 @@ class PatientCreateRequest(BaseModel):
     sex: str | None = None
     cid: Cid | None = None
     observations: str | None = None
+    gender: str | None = None
+    symptoms: str | None = None
     comorbidities: list[str] | None = None
     current_medications: str | None = Field(default=None, alias="currentMedications")
 
@@ -62,6 +66,8 @@ class PatientPatchRequest(BaseModel):
     status: str | None = None
     cid: Cid | None = None
     observations: str | None = None
+    gender: str | None = None
+    symptoms: str | None = None
     comorbidities: list[str] | None = None
     current_medications: list[str] | None = Field(default=None, alias="currentMedications")
 

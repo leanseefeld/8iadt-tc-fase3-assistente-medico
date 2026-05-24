@@ -67,6 +67,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.chroma_store = store
     app.state.chat_checkpointer = MemorySaver()
+    app.state.patient_threads_registry = {}
     app.state.chat_graph = build_compiled_chat_graph(
         store, settings, app.state.chat_checkpointer
     )
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
     app.state.chroma_store = None
     app.state.chat_graph = None
     app.state.chat_checkpointer = None
+    app.state.patient_threads_registry = None
     app.state.settings = None
 
 

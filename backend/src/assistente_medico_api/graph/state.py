@@ -34,3 +34,4 @@ class ChatRAGState(TypedDict, total=False):
     answer: str
     guardrail_status: str  # "safe" | "warned" | "blocked" | "regenerated"
     guardrail_reason: str
+    patient_context: str

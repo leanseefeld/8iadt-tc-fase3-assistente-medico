@@ -185,6 +185,8 @@ async def create_patient(session: AsyncSession, body: PatientCreateRequest) -> P
 		cid_code=cid_code,
 		cid_label=cid_label,
 		observations=(body.observations or "Não informado").strip() or "Não informado",
+		gender=(body.gender or "").strip() or None,
+		symptoms=(body.symptoms or "").strip(),
 		comorbidities=list(body.comorbidities or []),
 		current_medications=_parse_medications(body.current_medications),
 	)
@@ -225,6 +227,10 @@ async def patch_patient(session: AsyncSession, patient: Patient, patch: PatientP
 		patient.status = patch.status
 	if patch.observations is not None:
 		patient.observations = patch.observations
+	if patch.gender is not None:
+		patient.gender = patch.gender.strip() or None
+	if patch.symptoms is not None:
+		patient.symptoms = patch.symptoms.strip()
 	if patch.comorbidities is not None:
 		patient.comorbidities = patch.comorbidities
 	if patch.current_medications is not None:
@@ -253,6 +259,7 @@ def exam_to_schema(exam: Exam) -> ExamSchema:
 		"id": exam.id,
 		"name": exam.name,
 		"requestedAt": exam.requested_at,
+		"completedAt": exam.completed_at,
 		"status": exam.status,
 		"result": exam.result,
 		"interpretation": exam.interpretation,
@@ -270,6 +277,7 @@ async def exam_to_schema_with_attachments(
 		"id": exam.id,
 		"name": exam.name,
 		"requestedAt": exam.requested_at,
+		"completedAt": exam.completed_at,
 		"status": exam.status,
 		"result": exam.result,
 		"interpretation": exam.interpretation,
@@ -322,6 +330,8 @@ async def build_patient_schema(session: AsyncSession, patient: Patient) -> Patie
 		admittedAt=patient.admitted_at,
 		cid=Cid(code=patient.cid_code, label=patient.cid_label),
 		observations=patient.observations,
+		gender=patient.gender,
+		symptoms=patient.symptoms,
 		comorbidities=patient.comorbidities,
 		currentMedications=patient.current_medications,
 		vitalSigns=vitals_to_schema(vitals),

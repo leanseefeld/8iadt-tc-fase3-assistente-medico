@@ -7,6 +7,16 @@ import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
 import { formatPatientCid } from '@/utils/formatPatientCid';
 
+const GENDER_LABELS: Record<string, string> = {
+  mulher_cis: 'Mulher cisgênero',
+  homem_cis: 'Homem cisgênero',
+  mulher_trans: 'Mulher transgênero',
+  homem_trans: 'Homem transgênero',
+  travesti: 'Travesti',
+  nao_binario: 'Não binário',
+  outro: 'Outro',
+};
+
 function formatSexDisplay(sex: 'M' | 'F'): string {
   return sex === 'F' ? 'Feminino' : 'Masculino';
 }
@@ -117,6 +127,14 @@ export function TopBar() {
                 {formatSexDisplay(patient.sex)}
               </dd>
             </div>
+            {patient.gender ? (
+              <div>
+                <dt className="text-xs text-slate-500">Identidade de gênero</dt>
+                <dd className="font-medium text-slate-800">
+                  {GENDER_LABELS[patient.gender] ?? patient.gender}
+                </dd>
+              </div>
+            ) : null}
             <div>
               <dt className="text-xs text-slate-500">Idade</dt>
               <dd className="font-medium text-slate-800">{patient.age} anos</dd>

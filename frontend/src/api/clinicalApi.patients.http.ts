@@ -14,6 +14,8 @@ function normalizeCreateBody(body: CreatePatientRequestBody): Record<string, unk
     sex: body.sex,
     cid: body.cid,
     observations: body.observations,
+    gender: body.gender,
+    symptoms: body.symptoms,
     comorbidities: body.comorbidities,
     currentMedications: body.currentMedications,
   };

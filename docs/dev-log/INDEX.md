@@ -12,6 +12,10 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ## Marcos
 
+### 2026-05-24
+
+- **no-contexto-paciente-rag** — agent:cursor — LangGraph: entrypoint `load_patient_context` com cache por thread + invalidação em PATCH paciente/exame; schema `gender`/`symptoms`/`exams.completed_at`; check-in/TopBar; RAG Inspector simulado. — Revisão: `15df709` feat: CID opcional; preservar sugestões/ações anteriores
+
 ### 2026-05-23
 
 - **cid-opcional-admissao-edicao** — agent:cursor — CID opcional no check-in (sem fallback da lista); `CIDEditModal` remove CID; backend não aplica protocolo mock sem código (`patient_service`). — Revisão: `2ccf897` fix: add missing test dependency

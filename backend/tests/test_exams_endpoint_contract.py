@@ -28,7 +28,9 @@ async def test_create_and_patch_manual_exam(async_client):
         json={"status": "completed", "result": "Normal"},
     )
     assert patched.status_code == 200
-    assert patched.json()["exam"]["status"] == "completed"
+    patched_exam = patched.json()["exam"]
+    assert patched_exam["status"] == "completed"
+    assert patched_exam["completedAt"] is not None
 
 
 @pytest.mark.asyncio

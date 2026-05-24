@@ -12,6 +12,8 @@ export type PatchPatientBody = Partial<
     | 'cid'
     | 'status'
     | 'observations'
+    | 'gender'
+    | 'symptoms'
     | 'comorbidities'
     | 'vitalSigns'
   >
