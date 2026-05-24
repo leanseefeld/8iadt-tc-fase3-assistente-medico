@@ -39,6 +39,12 @@ python run-local.py --build-vectorstore
 # instala dependências opcionais para chunking semântico
 python run-local.py --setup --setup-semantic
 
+# baixa o modelo português para medSpaCy/spaCy clínico
+python run-local.py --setup-medical-nlp
+
+# sobe o backend usando medSpaCy com modelo português
+python run-local.py --use-medspacy-pt
+
 # executa a pipeline RAG usando chunking semântico
 python run-local.py --build-vectorstore --chunk-strategy semantic
 

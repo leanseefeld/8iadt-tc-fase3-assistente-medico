@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_embed_model: str = "nomic-embed-text"
-    ollama_chat_model: str = "gemma4:e4b-it-q4_K_M"
+    ollama_chat_model: str = "llama3.2:3b"
     chroma_persist_dir: Path | None = Field(
         default=None,
         description="Se None, usa vectorstore/chroma na raiz do repositório (via pcdt_ingest.paths).",
@@ -117,6 +117,36 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("MEDICO_RAG_DEBUG", "RAG_DEBUG"),
         description="Expõe diagnóstico RAG adicional em rotas/inspector quando habilitado.",
+    )
+    enable_medical_nlp: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MEDICO_ENABLE_MEDICAL_NLP", "ENABLE_MEDICAL_NLP"),
+        description="Ativa resolvedores NLP médicos opcionais no rewrite; catálogo Conitec permanece ativo quando falso.",
+    )
+    use_medspacy: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MEDICO_USE_MEDSPACY", "USE_MEDSPACY"),
+        description="Ativa medSpaCy/PyRuSH no resolvedor clínico. Desligado por padrão para evitar travamentos locais.",
+    )
+    medspacy_model: str = Field(
+        default="pt_core_news_sm",
+        validation_alias=AliasChoices("MEDICO_MEDSPACY_MODEL", "MEDSPACY_MODEL"),
+        description="Modelo spaCy usado pelo medSpaCy quando MEDICO_USE_MEDSPACY=true.",
+    )
+    medspacy_language_code: str = Field(
+        default="pt",
+        validation_alias=AliasChoices("MEDICO_MEDSPACY_LANGUAGE_CODE", "MEDSPACY_LANGUAGE_CODE"),
+        description="Código de idioma passado ao medSpaCy.",
+    )
+    use_spacy: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MEDICO_USE_SPACY", "USE_SPACY"),
+        description="Ativa spaCy NER leve no resolvedor clínico quando modelo local existir.",
+    )
+    spacy_model: str = Field(
+        default="pt_core_news_sm",
+        validation_alias=AliasChoices("MEDICO_SPACY_MODEL", "SPACY_MODEL"),
+        description="Modelo spaCy local para NER leve quando MEDICO_USE_SPACY=true.",
     )
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(

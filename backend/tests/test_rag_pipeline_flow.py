@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 
 from langchain_core.documents import Document
 
@@ -22,6 +23,8 @@ from assistente_medico_api.graph.nodes.save_memory import save_memory_node
 from assistente_medico_api.services import rag_pipeline_service as svc
 from assistente_medico_api.services.rag_pipeline_service import (
     MEMORY_STORE,
+    append_audit_step,
+    build_pipeline_audit,
     run_full_graph_debug,
     run_load_memory,
     run_rerank_and_validate_context,
@@ -178,22 +181,54 @@ def test_clinical_entity_resolver_uses_medspacy_when_available(monkeypatch) -> N
         def __call__(self, text):
             return _Doc()
 
-    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", lambda: (_NLP(), "medspacy"))
+    captured = {}
 
-    out = clinical_entity_resolver.resolve_clinical_entities("diabetes", catalog={})
+    def _fake_load_spacy_pipeline(**kwargs):
+        captured.update(kwargs)
+        return _NLP(), "medspacy"
+
+    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", _fake_load_spacy_pipeline)
+
+    out = clinical_entity_resolver.resolve_clinical_entities(
+        "diabetes",
+        catalog={},
+        enable_medical_nlp=True,
+        use_medspacy=True,
+        use_spacy=False,
+        medspacy_model="pt_core_news_sm",
+        medspacy_language_code="pt",
+    )
 
     assert out["medspacy_used"] is True
+    assert out["medspacy_model"] == "pt_core_news_sm"
+    assert captured["medspacy_language_code"] == "pt"
     assert out["spacy_used"] is True
     assert out["linked_entities"][0]["source"] == "medspacy"
 
 
 def test_clinical_entity_resolver_fallback_does_not_break(monkeypatch) -> None:
-    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", lambda: (None, "none"))
+    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", lambda **kwargs: (None, "none"))
 
     out = clinical_entity_resolver.resolve_clinical_entities("pergunta sem backend", catalog={})
 
     assert out["medspacy_used"] is False
     assert out["linked_entities"] == []
+
+
+def test_clinical_entity_resolver_can_disable_medical_nlp(monkeypatch) -> None:
+    called = False
+
+    def _raise_if_called(**kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("NLP backend should not be loaded")
+
+    monkeypatch.setattr(clinical_entity_resolver, "_load_spacy_pipeline", _raise_if_called)
+
+    out = clinical_entity_resolver.resolve_clinical_entities("sgb", catalog={}, enable_medical_nlp=False)
+
+    assert called is False
+    assert out["entity_backend"] == "disabled"
 
 
 def test_rewrite_sgb_structured_expansion(monkeypatch) -> None:
@@ -387,3 +422,18 @@ def test_inspector_debug_pipeline_matches_backend_rewrite(monkeypatch) -> None:
     assert state["expanded_query"] == rewrite["expanded_query"]
     assert state["structured_terms"] == rewrite["structured_terms"]
     assert state["rerank_result"]["context_quality"] == "sufficient"
+
+
+def test_pipeline_audit_payload_is_json_serializable_with_documents() -> None:
+    doc = _doc("chunk", source_stem="pcdt", section="DIAGNÓSTICO", page_start=1, page_end=2)
+    state = {
+        "query": "q",
+        "retrieve_result": {"attempt": 1, "query": "q", "candidate_docs": [doc], "candidate_count": 1},
+        "rerank_result": {"selected_docs": [doc], "context_quality": "sufficient"},
+    }
+    state["audit_trace"] = append_audit_step(state, node="retrieve_attempt_1", output_summary=state["retrieve_result"])
+
+    payload = build_pipeline_audit(state)
+
+    json.dumps(payload, ensure_ascii=False)
+    assert payload["audit_trace"]["steps"][0]["output_summary"]["candidate_docs"][0]["source_stem"] == "pcdt"

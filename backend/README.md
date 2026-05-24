@@ -67,6 +67,12 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `MEDICO_RAG_LLM_RERANK_TOP_N` | `12` | Número de candidatos enviados ao LLM reranker quando habilitado |
 | `MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER` | `true` | Impede geração clínica grounded sem contexto validado suficiente |
 | `MEDICO_RAG_DEBUG` | `false` | Habilita diagnóstico adicional em rotas/ferramentas de debug |
+| `MEDICO_ENABLE_MEDICAL_NLP` | `true` | Ativa resolvedores NLP médicos opcionais no rewrite; catálogo Conitec continua ativo quando `false` |
+| `MEDICO_USE_MEDSPACY` | `false` | Ativa medSpaCy/PyRuSH. Desligado por padrão para evitar travamentos locais |
+| `MEDICO_MEDSPACY_MODEL` | `pt_core_news_sm` | Modelo spaCy em português usado pelo medSpaCy quando habilitado |
+| `MEDICO_MEDSPACY_LANGUAGE_CODE` | `pt` | Código de idioma passado ao medSpaCy |
+| `MEDICO_USE_SPACY` | `true` | Ativa spaCy NER leve quando modelo local existir |
+| `MEDICO_SPACY_MODEL` | `pt_core_news_sm` | Modelo spaCy local usado no fallback leve |
 | `MEDICO_DATABASE_URL`       | `sqlite+aiosqlite:///./assistente_medico.db` | URL do banco (SQLite assíncrono por padrão)                              |
 | `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para `assistente_medico.jsonl` |
 | `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível efetivo dos loggers `assistente_medico.*` (ex.: `DEBUG`, `INFO`)                    |
@@ -143,7 +149,24 @@ O rewrite combina três fontes:
 2. `last_structured_terms` da memória para resolver follow-ups sem regex de doenças.
 3. Catálogo Conitec e `clinical_entity_resolver` para `linked_entities`, `catalog_candidates`, `structured_terms` e `expanded_query`.
 
-O `clinical_entity_resolver` tenta medSpaCy quando disponível, depois spaCy, e cai em fallback pelo catálogo Conitec. Nenhum modelo é baixado em runtime; se medSpaCy/spaCy não estiver instalado ou configurado, o backend continua funcionando.
+O `clinical_entity_resolver` usa o catálogo Conitec como fallback permanente. Por padrão, ele tenta spaCy leve quando houver modelo local e não carrega medSpaCy/PyRuSH. Para usar medSpaCy com modelo em português, instale o modelo spaCy localmente e configure:
+
+```bash
+python -m spacy download pt_core_news_sm
+export MEDICO_ENABLE_MEDICAL_NLP=true
+export MEDICO_USE_MEDSPACY=true
+export MEDICO_MEDSPACY_MODEL=pt_core_news_sm
+export MEDICO_MEDSPACY_LANGUAGE_CODE=pt
+```
+
+Com o orquestrador local:
+
+```bash
+python run-local.py --setup-medical-nlp
+python run-local.py --use-medspacy-pt
+```
+
+Nenhum modelo é baixado em runtime; se medSpaCy/spaCy não estiver instalado ou configurado, o backend continua funcionando pelo catálogo.
 
 ## Recuperação RAG
 
@@ -206,6 +229,7 @@ Auditoria: cada interação RAG grava uma linha JSON em `RAG_AUDIT_JSONL`, com `
 - LLM rerank desligado: por padrão `MEDICO_RAG_USE_LLM_RERANK=false` por desempenho; o rerank heurístico continua determinístico. Habilite para auditoria adicional quando houver Ollama disponível.
 - Pergunta clínica sem fonte: com `MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER=true`, o backend retorna resposta de contexto insuficiente em vez de gerar resposta clínica sem documentos validados.
 - Ollama indisponível no rewrite: o nó registra fallback e usa a pergunta atual com `last_structured_terms` quando houver memória, preservando auditoria do erro.
+- Chat pendurado antes do retrieve: rode com `MEDICO_ENABLE_MEDICAL_NLP=false` e `MEDICO_USE_MEDSPACY=false`. Os logs `rewrite: before_entity_resolver` e `rewrite: after_entity_resolver` mostram se travou no NLP médico.
 
 Exemplos rápidos para testar:
 

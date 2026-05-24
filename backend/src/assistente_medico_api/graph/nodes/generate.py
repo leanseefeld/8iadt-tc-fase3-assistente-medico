@@ -199,6 +199,7 @@ async def generate_node(state: ChatRAGState, settings: Settings) -> dict:
     Nó assíncrono do grafo: acumula tokens via astream para que
     graph.astream_events() emita eventos on_chat_model_stream por token.
     """
+    audit("generate: start", kind="rag")
     pid = state.get("patient_id") or None
     t0 = time.perf_counter()
     docs = state.get("retrieved_docs") or []

@@ -114,6 +114,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Instala dependências opcionais do chunking semântico.",
     )
+    parser.add_argument(
+        "--setup-medical-nlp",
+        action="store_true",
+        help="Baixa o modelo spaCy em português usado pelo medSpaCy/spaCy clínico.",
+    )
+    parser.add_argument(
+        "--medical-nlp-model",
+        default="pt_core_news_sm",
+        help="Modelo spaCy em português para medSpaCy/spaCy clínico.",
+    )
+    parser.add_argument(
+        "--use-medspacy-pt",
+        action="store_true",
+        help="Inicia o backend com MEDICO_USE_MEDSPACY=true e idioma pt.",
+    )
     parser.add_argument("--build-vectorstore", action="store_true", help="Executa a pipeline RAG completa.")
     parser.add_argument(
         "--chunk-strategy",
@@ -147,7 +162,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.setup_semantic:
+    if args.setup_semantic or args.setup_medical_nlp:
         args.setup = True
     repo_root = resolve_repo_root()
     llm_config = load_llm_config(repo_root)
@@ -167,18 +182,9 @@ def main() -> int:
             print("Instalando dependências opcionais do chunking semântico...")
             run_checked([str(venv_python), "-m", "pip", "install", "-e", f"{repo_root / 'llm'}[semantic]"], repo_root)
 
-        # Try to download recommended spaCy Portuguese model if spaCy is
-        # available in the created virtualenv. This is safe (non-fatal) and
-        # helps users who opt into the medical NLP extras to have the model
-        # ready locally.
-        try:
-            # Check if spacy is importable in the venv. This will raise if
-            # spacy is not installed yet in the venv (no fatal error).
-            run_checked([str(venv_python), "-c", "import importlib; importlib.import_module('spacy')"], repo_root)
-            print("Baixando modelo spaCy 'pt_core_news_sm' (pode demorar)...")
-            run_checked([str(venv_python), "-m", "spacy", "download", "pt_core_news_sm"], repo_root)
-        except Exception:
-            print("Aviso: spaCy não disponível no ambiente ou falha ao baixar 'pt_core_news_sm'. Para habilitar NLP médico, instale 'llm[medical-nlp]' e rode: python -m spacy download pt_core_news_sm")
+        if args.setup_medical_nlp:
+            print(f"Baixando modelo spaCy '{args.medical_nlp_model}' para medSpaCy/spaCy clínico...")
+            run_checked([str(venv_python), "-m", "spacy", "download", args.medical_nlp_model], repo_root)
 
         print("Instalando dependências do frontend...")
         run_checked(["npm", "install"], repo_root / "frontend")
@@ -195,6 +201,17 @@ def main() -> int:
         "MEDICO_OLLAMA_EMBED_MODEL": str(config_value(llm_config, "OLLAMA_EMBED_MODEL", "nomic-embed-text")),
         "MEDICO_OLLAMA_CHAT_MODEL": "llama3.2:3b",
     }
+    if args.use_medspacy_pt:
+        medico_vars.update(
+            {
+                "MEDICO_ENABLE_MEDICAL_NLP": "true",
+                "MEDICO_USE_MEDSPACY": "true",
+                "MEDICO_MEDSPACY_MODEL": args.medical_nlp_model,
+                "MEDICO_MEDSPACY_LANGUAGE_CODE": "pt",
+                "MEDICO_USE_SPACY": "true",
+                "MEDICO_SPACY_MODEL": args.medical_nlp_model,
+            }
+        )
 
     if args.build_vectorstore:
         print("\n--- Verificando status do Ollama ---")

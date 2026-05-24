@@ -31,6 +31,18 @@ python -m spacy download pt_core_news_sm
 export QUICKUMLS_FP=/caminho/quickumls
 ```
 
+Também é possível baixar o modelo português pelo orquestrador da raiz:
+
+```bash
+python run-local.py --setup-medical-nlp
+```
+
+Para iniciar o backend usando medSpaCy com esse modelo:
+
+```bash
+python run-local.py --use-medspacy-pt
+```
+
 O backend tenta scispaCy + EntityLinker, QuickUMLS e, por último, spaCy apenas como NER. Se esses backends não existirem, o chat continua funcionando com fallback pelo catálogo Conitec local, sem baixar modelos em runtime.
 
 Para usar o download Einstein com navegador (Playwright), instale também o Chromium:

@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from functools import lru_cache
 import json
+import logging
 from typing import Any, Protocol
 
 import httpx
@@ -41,6 +42,7 @@ Use o histórico e os termos clínicos estruturados apenas para resolver referê
 Preserve termos clínicos, siglas resolvidas, CID/procedimentos e intenção da pergunta.
 Responda apenas com a consulta reformulada, sem prefixos nem explicações.\
 """
+_logger = logging.getLogger("assistente_medico.rag")
 
 
 class ConversationMemoryStore(Protocol):
@@ -114,6 +116,24 @@ def _settings_config(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _audit_safe(value: Any) -> Any:
+    """Convert runtime objects to JSON-safe audit data."""
+    if isinstance(value, Document):
+        rank = int((value.metadata or {}).get("dense_rank") or 0) or 1
+        return document_audit_record(value, rank)
+    if isinstance(value, dict):
+        return {str(key): _audit_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_audit_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_audit_safe(item) for item in value]
+    if isinstance(value, set):
+        return [_audit_safe(item) for item in sorted(value, key=str)]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
 def _audit_base(state: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
     trace = deepcopy(state.get("audit_trace") or {})
     trace.setdefault("pipeline_version", PIPELINE_VERSION)
@@ -137,9 +157,9 @@ def append_audit_step(
         {
             "node": node,
             "timestamp": _utc_now(),
-            "input_summary": input_summary or {},
-            "output_summary": output_summary or {},
-            "warnings": warnings or [],
+            "input_summary": _audit_safe(input_summary or {}),
+            "output_summary": _audit_safe(output_summary or {}),
+            "warnings": _audit_safe(warnings or []),
         }
     )
     return trace
@@ -308,6 +328,7 @@ async def run_llm_rewrite(
     if not transcript and not last_structured:
         return current, {"llm_rewrite_used": False, "reason": "no_history"}
 
+    _logger.info("rewrite: before_llm_rewrite")
     human = (
         f"Histórico da conversa:\n{transcript or '(sem histórico textual)'}\n\n"
         f"Termos estruturados anteriores:\n{last_structured}\n\n"
@@ -322,8 +343,10 @@ async def run_llm_rewrite(
         resolved = str(raw or "").strip()
         if not resolved:
             raise ValueError("resposta vazia do modelo")
+        _logger.info("rewrite: after_llm_rewrite")
         return resolved, {"llm_rewrite_used": True, "method": "llm", "history_transcript_used": transcript}
     except Exception as exc:
+        _logger.info("rewrite: after_llm_rewrite")
         fallback = current
         disease = str(last_structured.get("diretriz") or last_structured.get("disease") or "").strip()
         if disease and normalize_text_for_match(disease) not in normalize_text_for_match(current):
@@ -344,7 +367,7 @@ def run_rewrite_query(
     resolved_query: str | None = None,
     rewrite_debug: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    del settings
+    _logger.info("rewrite: start")
     original_query = (query or "").strip()
     memory = memory_result if isinstance(memory_result, dict) else {}
     catalog = cached_conitec_catalog()
@@ -365,10 +388,24 @@ def run_rewrite_query(
     )
     structured = expansion.get("structured_terms") or {}
     understanding = expansion.get("clinical_understanding") or {}
+    _logger.info("rewrite: before_entity_resolver")
     entity_result = resolve_clinical_entities(
         final_resolved_query,
         catalog=catalog,
         intent=understanding.get("intent_result") or {"intent": structured.get("intent"), "confidence": structured.get("confidence")},
+        enable_medical_nlp=bool(getattr(settings, "enable_medical_nlp", True)),
+        use_medspacy=bool(getattr(settings, "use_medspacy", False)),
+        use_spacy=bool(getattr(settings, "use_spacy", True)),
+        medspacy_model=str(getattr(settings, "medspacy_model", "pt_core_news_sm")),
+        medspacy_language_code=str(getattr(settings, "medspacy_language_code", "pt")),
+        spacy_model=str(getattr(settings, "spacy_model", "pt_core_news_sm")),
+    )
+    _logger.info(
+        "rewrite: after_entity_resolver backend=%s medspacy=%s spacy=%s linked_entities=%s",
+        entity_result.get("entity_backend"),
+        entity_result.get("medspacy_used"),
+        entity_result.get("spacy_used"),
+        len(entity_result.get("linked_entities") or []),
     )
     linked_entities = _merge_linked_entities(
         entity_result.get("linked_entities") or [],
@@ -388,6 +425,8 @@ def run_rewrite_query(
         "entity_backend": entity_result.get("entity_backend"),
         "medspacy_used": entity_result.get("medspacy_used"),
         "spacy_used": entity_result.get("spacy_used"),
+        "medspacy_model": entity_result.get("medspacy_model"),
+        "spacy_model": entity_result.get("spacy_model"),
     }
     expanded_query = str(expansion.get("expanded_query") or final_resolved_query).strip()
     rewrite_result = {
@@ -405,6 +444,8 @@ def run_rewrite_query(
         "rewrite_debug": rewrite_debug or {},
         "medspacy_used": entity_result.get("medspacy_used"),
         "spacy_used": entity_result.get("spacy_used"),
+        "medspacy_model": entity_result.get("medspacy_model"),
+        "spacy_model": entity_result.get("spacy_model"),
     }
     return {
         "rewrite_result": rewrite_result,
@@ -473,6 +514,7 @@ def run_retrieve(
     retrieve_attempt: int,
     fallback_query: str | None = None,
 ) -> dict[str, Any]:
+    _logger.info("retrieve: start")
     query = (fallback_query or expanded_query or "").strip()
     k = max(1, int(getattr(settings, "rag_retrieve_candidates_k", 30)))
     metadata_filter = _metadata_filter(structured_terms)
@@ -487,11 +529,12 @@ def run_retrieve(
         pairs = store.similarity_search_with_score(query, k=k)
         metadata_filter = None
     candidate_docs = _with_dense_metadata(list(pairs), attempt=retrieve_attempt)
+    candidate_records = [document_audit_record(doc, i) for i, doc in enumerate(candidate_docs, start=1)]
     retrieve_result = {
         "attempt": retrieve_attempt,
         "query": query,
         "metadata_filter": metadata_filter,
-        "candidate_docs": candidate_docs,
+        "candidate_documents": candidate_records,
         "candidate_count": len(candidate_docs),
         "filter_applied": filter_applied,
         "fallback_to_unfiltered": fallback_to_unfiltered,
@@ -658,6 +701,7 @@ async def run_rerank_and_validate_context(
     candidate_docs: list[Document],
     settings: Settings,
 ) -> dict[str, Any]:
+    _logger.info("rerank: start")
     disease_required = bool(structured_terms.get("disease") or structured_terms.get("diretriz"))
     preferred_sections = _as_list(structured_terms.get("preferred_sections"))
     removed_docs = []
@@ -733,7 +777,7 @@ async def run_rerank_and_validate_context(
     sources = [format_source_label(doc, i) for i, doc in enumerate(selected_docs, start=1)]
     selected_audit = [document_audit_record(doc, i) for i, doc in enumerate(selected_docs, start=1)]
     rerank_result = {
-        "selected_docs": selected_docs,
+        "selected_docs": selected_audit,
         "context_quality": context_quality,
         "context_sufficient": context_sufficient,
         "failure_type": failure_type,
@@ -840,7 +884,7 @@ def build_pipeline_audit(
         payload["generate_mode"] = generate_mode
     if guardrail:
         payload["guardrail"] = guardrail
-    return payload
+    return _audit_safe(payload)
 
 
 def run_save_memory(
