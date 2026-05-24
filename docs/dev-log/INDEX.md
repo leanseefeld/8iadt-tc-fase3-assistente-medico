@@ -14,6 +14,7 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ### 2026-05-24
 
+- **chat-conversations-sidebar** — agent:cursor — Chat: lista/retomada/arquivamento no sidebar; GET conversas/mensagens; PATCH archive (`archived_at`/`archived_by`); hidratação do grafo a partir do DB. — Revisão: `231d8f0` feat(chat): feedback de mensagens
 - **chat-message-feedback** — agent:cursor — Chat: `messageId` no JSON/SSE `done`; PATCH feedback (`positive`/`negative`/null) em `conversation_messages.feedback_rating`; UI 👍/👎 na barra de meta (direita, hover, toggle). — Revisão: `f5a89b2` feat(chat): persistencia de conversas
 - **chat-conversations-db** — agent:cursor — Chat: tabelas `conversations`/`conversation_messages` (médico, paciente, system_prompt, llm_input/output, fontes, raciocínio); `threadId`=PK; `X-User-Id` obrigatório; frontend só `threadId` (sem `messageHistory`). — Revisão: `83bd4f9` feat(generate): simplificação do prompt
 - **auditoria-clinica-jsonl-diaria** — agent:cursor — JSONL `audit_clinical_*` com ações clínicas **e** eventos enxutos do RAG/chat/backend (`reescrita_consulta_rag`, `recuperacao_contexto_rag`, etc.); paralelamente reposto `audit()` JSON (retrieve/generate/startup/chat/guardrail); `pytest` não grava JSONL; `RAG_AUDIT_ENABLED` para JSONL técnico. — Revisão: `9ab7006` fix-scispacy

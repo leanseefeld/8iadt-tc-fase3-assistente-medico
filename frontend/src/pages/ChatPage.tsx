@@ -1,8 +1,11 @@
-import { Send } from 'lucide-react';
+import { Archive, Send } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  archiveAssistantConversation,
+  getAssistantConversationMessages,
   patchAssistantMessageFeedback,
   postAssistantChatMock,
   quickQuestionsForCid,
@@ -13,9 +16,14 @@ import {
   type ExpandedMetaPanel,
 } from '@/components/chat/AssistantMessageMeta';
 import { useAppSession } from '@/context/AppSessionContext';
+import { useConversationRefresh } from '@/context/ConversationRefreshContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
-import type { GuardrailStatus, MessageFeedbackRating } from '@/types/domain';
+import type {
+  ConversationMessageDto,
+  GuardrailStatus,
+  MessageFeedbackRating,
+} from '@/types/domain';
 
 interface ChatMessage {
   id: string;
@@ -44,21 +52,86 @@ function patchAssistantMessage(
   );
 }
 
+function mapPersistedMessages(rows: ConversationMessageDto[]): ChatMessage[] {
+  return rows.map((row) => ({
+    id: row.id,
+    role: row.author,
+    text: row.content,
+    sources: row.sources ?? undefined,
+    reasoning: row.reasoningSteps ?? undefined,
+    persistedMessageId: row.author === 'assistant' ? row.id : undefined,
+    feedbackRating: row.feedbackRating ?? undefined,
+  }));
+}
+
 export function ChatPage() {
   const { activePatientId } = useAppSession();
   const { patient } = usePatientDetail(activePatientId);
   const { showToast } = useToast();
+  const { refreshConversations } = useConversationRefresh();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const threadFromUrl = searchParams.get('thread');
+
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [assistantThreadId, setAssistantThreadId] = useState<string | null>(null);
+  const [loadingThread, setLoadingThread] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
   const [feedbackBusyMessageId, setFeedbackBusyMessageId] = useState<string | null>(
     null,
   );
 
+  // Hidrata conversa salva ou inicia nova quando URL/paciente mudam.
   useEffect(() => {
-    setMessages([]);
-    setAssistantThreadId(null);
-  }, [activePatientId]);
+    if (!activePatientId) {
+      setMessages([]);
+      setAssistantThreadId(null);
+      return;
+    }
+
+    if (!threadFromUrl) {
+      setMessages([]);
+      setAssistantThreadId(null);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingThread(true);
+
+    void getAssistantConversationMessages(threadFromUrl)
+      .then((res) => {
+        if (cancelled) {
+          return;
+        }
+        if (res.patientId !== activePatientId) {
+          showToast('Esta conversa pertence a outro paciente.');
+          navigate('/chat', { replace: true });
+          return;
+        }
+        setAssistantThreadId(res.conversationId);
+        setMessages(mapPersistedMessages(res.messages));
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        showToast('Não foi possível carregar a conversa.');
+        setMessages([]);
+        setAssistantThreadId(null);
+        navigate('/chat', { replace: true });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingThread(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePatientId, threadFromUrl, navigate, showToast]);
 
   async function handleFeedbackSelect(
     localMessageId: string,
@@ -116,6 +189,24 @@ export function ChatPage() {
     );
   }
 
+  async function confirmArchive() {
+    if (!assistantThreadId) {
+      return;
+    }
+    setArchiveBusy(true);
+    try {
+      await archiveAssistantConversation(assistantThreadId);
+      showToast('Conversa arquivada.');
+      setArchiveOpen(false);
+      refreshConversations();
+      navigate('/chat', { replace: true });
+    } catch {
+      showToast('Não foi possível arquivar a conversa.');
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
   if (!activePatientId || !patient) {
     return (
       <p className="text-slate-600">Selecione um paciente para usar o chat.</p>
@@ -126,7 +217,7 @@ export function ChatPage() {
 
   async function send(text: string) {
     const trimmed = text.trim();
-    if (!trimmed) {
+    if (!trimmed || loadingThread) {
       return;
     }
     // Histórico multi-turno: servidor (threadId + checkpointer); não enviar messageHistory.
@@ -177,6 +268,12 @@ export function ChatPage() {
       );
       if (res.threadId) {
         setAssistantThreadId(res.threadId);
+        if (!threadFromUrl) {
+          navigate(`/chat?thread=${encodeURIComponent(res.threadId)}`, {
+            replace: true,
+          });
+        }
+        refreshConversations();
       }
       if (!res.text.trim()) {
         setMessages((m) =>
@@ -200,13 +297,26 @@ export function ChatPage() {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
       <div className="flex min-h-[420px] flex-col rounded-xl border border-[var(--color-border-subtle)] bg-white shadow-sm">
-        <div className="border-b px-4 py-3">
+        <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
           <h2 className="text-lg font-semibold text-slate-900">
             Chat com o assistente
           </h2>
+          {assistantThreadId ? (
+            <button
+              type="button"
+              onClick={() => setArchiveOpen(true)}
+              className="flex items-center gap-1 rounded-lg border border-amber-600 px-2 py-1 text-xs text-amber-900 hover:bg-amber-50"
+            >
+              <Archive className="h-3.5 w-3.5" aria-hidden />
+              Arquivar
+            </button>
+          ) : null}
         </div>
         <div className="flex-1 space-y-3 overflow-y-auto p-4">
-          {messages.length === 0 ? (
+          {loadingThread ? (
+            <p className="text-sm text-slate-500">Carregando conversa…</p>
+          ) : null}
+          {!loadingThread && messages.length === 0 ? (
             <p className="text-sm text-slate-500">
               Use as perguntas rápidas ou digite uma mensagem.
             </p>
@@ -276,7 +386,8 @@ export function ChatPage() {
                 key={q}
                 type="button"
                 onClick={() => void send(q)}
-                className="rounded-full border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-900 hover:bg-teal-100"
+                disabled={loadingThread}
+                className="rounded-full border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-900 hover:bg-teal-100 disabled:opacity-50"
               >
                 {q.length > 42 ? `${q.slice(0, 40)}…` : q}
               </button>
@@ -287,11 +398,13 @@ export function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Digite sua pergunta…"
-              className="min-w-0 flex-1 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
+              disabled={loadingThread}
+              className="min-w-0 flex-1 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm disabled:opacity-50"
             />
             <button
               type="submit"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white hover:bg-teal-700"
+              disabled={loadingThread}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50"
               aria-label="Enviar"
             >
               <Send className="h-4 w-4" />
@@ -299,6 +412,36 @@ export function ChatPage() {
           </form>
         </div>
       </div>
+
+      {archiveOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-sm rounded-xl border bg-white p-5 shadow-xl">
+            <h4 className="font-semibold text-slate-900">Arquivar conversa?</h4>
+            <p className="mt-2 text-sm text-slate-600">
+              A conversa ficará inacessível, mas permanecerá registrada para
+              auditoria.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setArchiveOpen(false)}
+                disabled={archiveBusy}
+                className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={archiveBusy}
+                onClick={() => void confirmArchive()}
+                className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                Arquivar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

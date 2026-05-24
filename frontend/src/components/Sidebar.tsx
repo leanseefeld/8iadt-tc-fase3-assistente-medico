@@ -1,9 +1,9 @@
 import { NavLink } from 'react-router-dom';
+import { ConversationSidebarSection } from '@/components/chat/ConversationSidebarSection';
 import { useAppSession } from '@/context/AppSessionContext';
 
 const NAV: { to: string; label: string; showBadge?: boolean }[] = [
   { to: '/dashboard', label: '🏠 Dashboard' },
-  { to: '/chat', label: '💬 Chat com Assistente' },
   { to: '/flow', label: '🔀 Fluxo de Decisão' },
   { to: '/exams', label: '🧪 Exames' },
   { to: '/prescriptions', label: '💊 Prescrições' },
@@ -68,15 +68,15 @@ export function Sidebar() {
             ))}
           </select>
         )}
-        
-        <nav className="flex flex-1 flex-col gap-0.5 p-2" aria-label="Principal">
+
+        <nav className="flex flex-col gap-0.5 px-1.5 py-1.5" aria-label="Principal">
           {NAV.map(({ to, label, showBadge }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
                 [
-                  'flex items-center justify-between rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                  'flex items-center justify-between rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
                   isActive
                     ? 'bg-teal-600 text-white'
                     : 'text-slate-700 hover:bg-slate-100',
@@ -94,6 +94,7 @@ export function Sidebar() {
         </nav>
       </div>
 
+      <ConversationSidebarSection />
     </aside>
   );
 }

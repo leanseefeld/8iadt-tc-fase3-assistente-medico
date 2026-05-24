@@ -126,6 +126,40 @@ export interface MessageFeedbackPatchResponse {
   feedbackRating: MessageFeedbackRating | null;
 }
 
+export interface ConversationSummary {
+  id: string;
+  patientId: string;
+  createdAt: string;
+  updatedAt: string;
+  preview?: string | null;
+}
+
+export interface ConversationListResponse {
+  conversations: ConversationSummary[];
+}
+
+export interface ConversationMessageDto {
+  id: string;
+  author: 'user' | 'assistant';
+  content: string;
+  sources?: string[] | null;
+  reasoningSteps?: string[] | null;
+  feedbackRating?: MessageFeedbackRating | null;
+  createdAt: string;
+}
+
+export interface ConversationMessagesResponse {
+  conversationId: string;
+  patientId: string;
+  messages: ConversationMessageDto[];
+}
+
+export interface ConversationArchiveResponse {
+  id: string;
+  archivedAt: string;
+  archivedBy: string;
+}
+
 export interface DecisionFlowResponse {
   lines: string[];
   meta: {
