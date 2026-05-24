@@ -20,6 +20,8 @@ class Conversation(SQLModel, table=True):
     system_prompt: str = Field(sa_column=Column(Text, nullable=False))
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)
+    archived_at: datetime | None = Field(default=None, index=True)
+    archived_by: str | None = None
 
 
 class ConversationMessage(SQLModel, table=True):

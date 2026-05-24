@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -90,6 +91,66 @@ class MessageFeedbackPatchResponse(BaseModel):
     feedback_rating: Literal["positive", "negative"] | None = Field(
         serialization_alias="feedbackRating",
     )
+
+
+class ConversationSummary(BaseModel):
+    """Resumo de conversa para listagem no sidebar."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    patient_id: str = Field(serialization_alias="patientId")
+    created_at: datetime = Field(serialization_alias="createdAt")
+    updated_at: datetime = Field(serialization_alias="updatedAt")
+    preview: str | None = None
+
+
+class ConversationListResponse(BaseModel):
+    """Lista de conversas não arquivadas do médico logado."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    conversations: list[ConversationSummary]
+
+
+class ConversationMessageResponse(BaseModel):
+    """Mensagem persistida para hidratar a UI."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    author: Literal["user", "assistant"]
+    content: str
+    sources: list[str] | None = None
+    reasoning_steps: list[str] | None = Field(
+        default=None,
+        serialization_alias="reasoningSteps",
+    )
+    feedback_rating: Literal["positive", "negative"] | None = Field(
+        default=None,
+        serialization_alias="feedbackRating",
+    )
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class ConversationMessagesResponse(BaseModel):
+    """Mensagens completas de uma conversa."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    conversation_id: str = Field(serialization_alias="conversationId")
+    patient_id: str = Field(serialization_alias="patientId")
+    messages: list[ConversationMessageResponse]
+
+
+class ConversationArchiveResponse(BaseModel):
+    """Resposta após arquivar conversa."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    archived_at: datetime = Field(serialization_alias="archivedAt")
+    archived_by: str = Field(serialization_alias="archivedBy")
 
 
 class DecisionFlowRequest(BaseModel):

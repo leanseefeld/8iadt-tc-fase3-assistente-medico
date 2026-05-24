@@ -4,6 +4,9 @@
 import { apiFetch, API_BASE_URL } from '@/api/client';
 import type {
   ChatResponse,
+  ConversationArchiveResponse,
+  ConversationListResponse,
+  ConversationMessagesResponse,
   DecisionFlowResponse,
   MessageFeedbackPatchResponse,
   MessageFeedbackRating,
@@ -103,6 +106,49 @@ export async function patchAssistantMessageFeedback(
     throw new Error(await parseHttpErrorDetail(res));
   }
   return (await res.json()) as MessageFeedbackPatchResponse;
+}
+
+export async function listAssistantConversations(
+  patientId: string,
+): Promise<ConversationListResponse> {
+  const url = new URL(`${API_BASE_URL}/assistant/conversations`);
+  url.searchParams.set('patientId', patientId);
+  const res = await apiFetch(url.toString(), {
+    headers: { Accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(await parseHttpErrorDetail(res));
+  }
+  return (await res.json()) as ConversationListResponse;
+}
+
+export async function getAssistantConversationMessages(
+  conversationId: string,
+): Promise<ConversationMessagesResponse> {
+  const res = await apiFetch(
+    `${API_BASE_URL}/assistant/conversations/${conversationId}/messages`,
+    { headers: { Accept: 'application/json' } },
+  );
+  if (!res.ok) {
+    throw new Error(await parseHttpErrorDetail(res));
+  }
+  return (await res.json()) as ConversationMessagesResponse;
+}
+
+export async function archiveAssistantConversation(
+  conversationId: string,
+): Promise<ConversationArchiveResponse> {
+  const res = await apiFetch(
+    `${API_BASE_URL}/assistant/conversations/${conversationId}/archive`,
+    {
+      method: 'PATCH',
+      headers: { Accept: 'application/json' },
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await parseHttpErrorDetail(res));
+  }
+  return (await res.json()) as ConversationArchiveResponse;
 }
 
 export async function postAssistantDecisionFlowMock(

@@ -7,7 +7,7 @@ import json
 import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -19,6 +19,9 @@ from assistente_medico_api.schemas.chat import (
     ChatHistoryTurnModel,
     ChatRequest,
     ChatResponseJson,
+    ConversationArchiveResponse,
+    ConversationListResponse,
+    ConversationMessagesResponse,
     DecisionFlowMeta,
     DecisionFlowRequest,
     DecisionFlowResponse,
@@ -65,12 +68,15 @@ async def _invoke_payload_and_config(
     body: ChatRequest,
     graph,
     thread_id: str,
+    session: AsyncSession,
+    *,
+    is_resumed_thread: bool,
 ) -> tuple[dict, dict, str]:
     """
     Monta o update de estado e o RunnableConfig (thread_id) para o grafo com checkpointer.
 
     Se já existe chat_history no checkpoint, não reenvia `chat_history` no update (merge).
-    Caso contrário, semeia a partir de `messageHistory` no corpo (clientes sem threadId).
+    Caso contrário, semeia a partir do DB (thread retomado) ou `messageHistory` no corpo.
     """
     tid = thread_id
     config: dict = {"configurable": {"thread_id": tid}}
@@ -88,7 +94,13 @@ async def _invoke_payload_and_config(
         "retrieval_query": "",
     }
     if not has_persisted_history:
-        payload["chat_history"] = _normalize_message_history(body)
+        if is_resumed_thread:
+            payload["chat_history"] = await chat_persistence.build_chat_history_from_db(
+                session,
+                tid,
+            )
+        else:
+            payload["chat_history"] = _normalize_message_history(body)
 
     registry = getattr(request.app.state, "patient_threads_registry", None)
     if registry is not None and body.patient_id:
@@ -139,8 +151,14 @@ async def post_chat(
         doctor_id=doctor_id,
         patient_id=body.patient_id,
     )
+    is_resumed_thread = bool((body.thread_id or "").strip())
     initial, config, thread_id = await _invoke_payload_and_config(
-        request, body, graph, thread_id
+        request,
+        body,
+        graph,
+        thread_id,
+        session,
+        is_resumed_thread=is_resumed_thread,
     )
     wants_stream = bool(accept and "text/event-stream" in accept.lower())
 
@@ -350,6 +368,57 @@ async def post_chat(
     return EventSourceResponse(event_gen())
 
 
+@router.get("/conversations", response_model=ConversationListResponse)
+async def list_conversations(
+    patient_id: Annotated[str, Query(alias="patientId")],
+    session: AsyncSession = Depends(get_session),
+) -> ConversationListResponse:
+    """Lista conversas não arquivadas do médico logado para o paciente."""
+    doctor_id = _require_doctor_id()
+    result = await chat_persistence.list_patient_conversations(
+        session,
+        patient_id=patient_id,
+        doctor_id=doctor_id,
+    )
+    return result
+
+
+@router.get(
+    "/conversations/{conversation_id}/messages",
+    response_model=ConversationMessagesResponse,
+)
+async def get_conversation_messages(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> ConversationMessagesResponse:
+    """Retorna mensagens persistidas para hidratar a UI."""
+    doctor_id = _require_doctor_id()
+    return await chat_persistence.get_conversation_messages(
+        session,
+        conversation_id=conversation_id,
+        doctor_id=doctor_id,
+    )
+
+
+@router.patch(
+    "/conversations/{conversation_id}/archive",
+    response_model=ConversationArchiveResponse,
+)
+async def archive_conversation(
+    conversation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> ConversationArchiveResponse:
+    """Arquiva conversa (permanece no banco, inacessível na UI)."""
+    doctor_id = _require_doctor_id()
+    result = await chat_persistence.archive_conversation_for_doctor(
+        session,
+        conversation_id=conversation_id,
+        doctor_id=doctor_id,
+    )
+    await session.commit()
+    return result
+
+
 @router.patch(
     "/conversations/{conversation_id}/messages/{message_id}",
     response_model=MessageFeedbackPatchResponse,
@@ -369,6 +438,11 @@ async def patch_message_feedback(
         raise HTTPException(
             status_code=403,
             detail="Conversa pertence a outro medico",
+        )
+    if conversation.archived_at is not None:
+        raise HTTPException(
+            status_code=410,
+            detail="Conversa arquivada e inacessivel",
         )
 
     message = await conversation_repo.get_message_by_id(session, message_id)
