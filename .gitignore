@@ -85,8 +85,9 @@ assistente_medico.db
 *.db-shm
 *.db-wal
 
-# Logs e artefatos temporários (JSONL de auditoria clínica em `logs/` é versionado)
+# Logs e artefatos temporários
 uploads/
+logs/
 
 # Configurações de ambiente local (exemplo: streamlit, VSCode, etc.)
 .streamlit
