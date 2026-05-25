@@ -39,9 +39,6 @@ class QueryExpansionResult:
     expanded_query: str
     clinical_understanding: dict[str, Any]
     structured_terms: dict[str, Any]
-    matched_cid10_codes: list[str]
-    matched_diseases: list[str]
-    matched_medications: list[str]
     query_expansion: dict[str, Any]
 
 
@@ -146,7 +143,6 @@ def expand_query_for_retrieval(
     *,
     query: str,
     retrieval_query: str,
-    settings: Settings,
 ) -> QueryExpansionResult:
     """Aplica a expansão estruturada preservando o refinamento da branch atual.
 
@@ -174,8 +170,5 @@ def expand_query_for_retrieval(
         expanded_query=expansion.get("expanded_query") or base_query,
         clinical_understanding=expansion.get("clinical_understanding") or {},
         structured_terms=expansion.get("structured_terms") or {},
-        matched_cid10_codes=list(expansion.get("matched_cid10_codes") or []),
-        matched_diseases=list(expansion.get("matched_diseases") or []),
-        matched_medications=list(expansion.get("matched_medications") or []),
         query_expansion=expansion,
     )

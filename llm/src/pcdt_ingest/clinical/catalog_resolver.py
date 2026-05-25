@@ -103,7 +103,7 @@ class CatalogConceptResolver:
             phrase_norm = normalize_text_for_match(phrase)
             if not phrase_norm:
                 continue
-            entry_signal = self._entry_semantic_score(query_norm, phrase_norm, entry, source)
+            entry_signal = self._entry_semantic_score(phrase_norm, entry, source)
             if source == "linked_entity":
                 entry_signal = (
                     entry_signal[0] * max(0.75, min(1.0, entity_confidence or 0.9)),
@@ -157,7 +157,6 @@ class CatalogConceptResolver:
 
     def _entry_semantic_score(
         self,
-        query_norm: str,
         phrase_norm: str,
         entry: dict[str, Any],
         source: str,
@@ -233,7 +232,6 @@ class CatalogConceptResolver:
                 return 0.88, "field_in_query"
             return 0.98, "field_in_query"
         query_tokens = _tokens(query_norm)
-        field_tokens = _tokens(field_norm)
         if field == "derived_acronym" and field_norm in query_tokens:
             return 0.96, "derived_acronym"
         if len(_tokens(phrase_norm)) <= 1:

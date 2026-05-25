@@ -1,4 +1,4 @@
-"""Optional clinical entity resolver used by rewrite/query understanding."""
+"""Clinical entity resolver used by rewrite/query understanding (medSpaCy pt_core_news_sm obrigatório)."""
 
 from __future__ import annotations
 
@@ -17,29 +17,18 @@ _logger = logging.getLogger("assistente_medico.rag")
 _PT_MODEL = "pt_core_news_sm"
 
 
-@lru_cache(maxsize=2)
-def _load_spacy_pipeline(*, use_medspacy: bool) -> tuple[Any | None, str]:
-    """Load medSpaCy or spaCy with pt_core_news_sm. Never downloads models at runtime."""
-    if use_medspacy:
-        try:
-            import medspacy
-
-            _logger.info("entity_resolver: loading_medspacy model=%s", _PT_MODEL)
-            nlp = medspacy.load(_PT_MODEL, language_code="pt")
-            _logger.info("entity_resolver: loaded_medspacy model=%s", _PT_MODEL)
-            return nlp, "medspacy"
-        except Exception as exc:
-            _logger.debug("medspacy_entity_resolver_unavailable; erro=%s", exc)
-
+@lru_cache(maxsize=1)
+def _load_spacy_pipeline() -> tuple[Any | None, str]:
+    """Carrega medSpaCy com pt_core_news_sm. Nunca faz download em runtime."""
     try:
-        import spacy
+        import medspacy
 
-        _logger.info("entity_resolver: loading_spacy model=%s", _PT_MODEL)
-        nlp = spacy.load(_PT_MODEL)
-        _logger.info("entity_resolver: loaded_spacy model=%s", _PT_MODEL)
-        return nlp, "spacy"
+        _logger.info("entity_resolver: loading_medspacy model=%s", _PT_MODEL)
+        nlp = medspacy.load(_PT_MODEL, language_code="pt")
+        _logger.info("entity_resolver: loaded_medspacy model=%s", _PT_MODEL)
+        return nlp, "medspacy"
     except Exception as exc:
-        _logger.debug("spacy_entity_resolver_unavailable; erro=%s", exc)
+        _logger.error("entity_resolver: medspacy_unavailable erro=%s — verifique instalação e modelo pt_core_news_sm", exc)
     return None, "none"
 
 
@@ -49,17 +38,12 @@ def resolve_clinical_entities(
     catalog: Any | None = None,
     intent: dict[str, Any] | None = None,
     catalog_limit: int = 5,
-    enable_medical_nlp: bool = True,
-    use_medspacy: bool = False,
 ) -> dict[str, Any]:
-    """Extract clinical entities with medSpaCy/spaCy (pt_core_news_sm) and catalog fallback."""
+    """Extrai entidades clínicas com medSpaCy (pt_core_news_sm) e fallback de catálogo."""
     text = str(query or "").strip()
     entities: list[dict[str, Any]] = []
-    backend_used = "disabled" if not enable_medical_nlp else "none"
-    nlp = None
-    backend = backend_used
-    if enable_medical_nlp:
-        nlp, backend = _load_spacy_pipeline(use_medspacy=use_medspacy)
+    nlp, backend = _load_spacy_pipeline()
+    backend_used = backend
     if nlp is not None and text:
         backend_used = backend
         try:
@@ -99,7 +83,7 @@ def resolve_clinical_entities(
     return {
         "linked_entities": _dedupe_entities([*entities, *fallback_entities]),
         "catalog_candidates": catalog_candidates,
-        "spacy_used": backend_used in {"spacy", "medspacy"},
+        "spacy_used": backend_used == "medspacy",
         "entity_backend": backend_used,
     }
 

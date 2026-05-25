@@ -269,6 +269,20 @@ Conforme imagem abaixo, a busca das informações na base rag foi bem mais limpa
 ![Imagem: acidente escopiônico - parte 6](./assets/repeticao_pergunta_escorpiao_2.png)
 
 
+### Enriquecimento de metadados dos chunks e melhoria da segmentação (overlap)
+
+Como apoio ao enriquecimento semântico, o catálogo em formato XLSX da [Comissão Nacional de Incorporação de Tecnologias no Sistema Único de Saúde](https://www.gov.br/conitec/pt-br/midias/dados-em-excel/medicamentos_cid_pcdt_atual-1.xlsx) foi utilizado em duas frentes: como **catálogo de referência clínica do projeto** (detalhado posteriormente) e como **fonte de enriquecimento** durante a ingestão, agregando contexto aos chunks e melhorando a associação entre conteúdos, doenças e termos clínicos.
+
+Os chunks passaram a receber metadados estruturais do documento e do catálogo, como `disease`, `diretriz`, `cid10_codes`, `cid10_descriptions` e `medicamentos`, associados ao conteúdo por correspondência textual e proximidade semântica.
+
+Também foram realizados ajustes no mapeamento de cabeçalhos para preservar melhor a relação entre trechos e suas seções de origem, reduzindo perdas de contexto por quebras de página e inconsistências hierárquicas.
+
+Por fim, foi implementado overlap entre chunks (configurado por `CHUNK_OVERLAP_TOKENS)`, criando continuidade entre fragmentos adjacentes e reduzindo perdas de informação nas fronteiras da segmentação.
+
+Segue um exemplo de chunk após os enriquecimentos e tratamentos realizados:
+
+![Imagem: chunk_enriquecido](./assets/chunks_enriquecidos.png)
+
 ## Cálculo de memória e tamanho de contexto
 
 Tendo em vista a tendência de carregar documentos inteiros na janela de contexto de modelos LLM mais recentes, com modelos suportando janelas acima de 1 milhão de tokens, decidimos investigar o tamanho da nossa base de PCDTs, com 131 protocolos no momento da escrita desta análise.
@@ -338,3 +352,87 @@ E depois disso:
 * exportar modelo quantizado Q4 GGUF (Ollama compatible)
       * só é possível via CUDA (Colab/T4) ou a partir de modelo sem quantização no MLX (usa mais memória e tempo)
       * com MLX, tá pra fazer FT quantizado mas o resultado não pode ser executado fora de Apple Silicon
+
+
+## Resolução clínica e expansão de consultas orientada por catálogo
+
+Foi implementada uma camada de entendimento clínico orientada pelo catálogo CONITEC (mencionado acima) para melhorar a recuperação dos PCDTs. Inicialmente, as consultas passam por uma etapa de classificação de intenção clínica (como critérios de inclusão, exclusão, diagnóstico, tratamento, monitoramento e medicamentos), utilizando técnicas leves de similaridade textual, sem dependência de LLM.
+
+A resolução de entidades clínicas foi integrada ao spaCy/medSpaCy em português, com fallback para o catálogo local quando os modelos não estão disponíveis.
+
+A reescrita e expansão de consultas foram centralizadas em serviços dedicados do backend. O fluxo combina reescrita conversacional com expansão estruturada baseada no catálogo CONITEC, preservando termos clínicos relevantes (como siglas e CIDs) para evitar perda de contexto durante consultas com histórico.
+
+Como resultado, a consulta passa a gerar uma estrutura de termos clínicos (`structured_terms`) contendo sinais como doença, diretriz, CID-10, medicamentos e intenção clínica, utilizada posteriormente por filtros e reranking.
+
+Na recuperação, documentos compatíveis com a diretriz ou doença identificada recebem prioridade, enquanto documentos de contextos clínicos diferentes podem ser penalizados, reduzindo respostas baseadas em PCDTs incorretos e aumentando a precisão do RAG.
+
+Um exemplo de consulta reescrita e expandida, com termos clínicos extraídos, pode ser visto abaixo, em que fizemos a pergunta "Quais são as medicações para o tratamento da artrite reumatóide?" e o sistema extraiu a intenção clínica de "FÁRMACOS" e a doença "Artrite Reumatoide", além de reescrever a consulta para incluir termos relacionados (parte dos termos não estão visíveis na imagem, pela própria extensão do documento):
+
+![Imagem: consulta_artrite_reumatóide](./assets/retrieve-query-expandida.png)
+
+![Imagem: consulta_artrite_reumatóide_1](./assets/retrieve-query-expandida-1.png)
+
+![Imagem: consulta_artrite_reumatóide_2](./assets/retrieve-query-expandida-2.png)
+
+
+## Refatoração do fluxo LangGraph
+
+O fluxo RAG do backend foi refatorado para uma arquitetura mais clara e modular, baseada em nós conceituais do LangGraph. A orquestração passou a seguir o encadeamento principal `router → rewrite → retrieve → rerank → generate → guardrail`, separando melhor as responsabilidades de decisão, reescrita da consulta, recuperação, validação do contexto, geração e verificação final da resposta.
+
+O nó `generate` foi unificado: em vez de manter nós separados para resposta direta, resposta com contexto e contexto insuficiente, o grafo passou a utilizar um único nó de geração. A estratégia aplicada é definida pelo campo `generation_mode` no estado do grafo, com os modos `direct_answer`, `grounded_answer` e `insufficient_context`. Isso simplifica o fluxo, reduz duplicidade de arestas e mantém o `guardrail` como etapa final comum para todas as respostas.
+
+
+```
+          +-----------+       
+          | __start__ |       
+          +-----------+       
+                 *            
+                 *            
+                 *            
+            +--------+        
+            | router |        
+            +--------+        
+           ..         ..      
+         ..             ..    
+        .                 ..  
++---------+                 . 
+| rewrite |                 . 
++---------+                 . 
+      *                     . 
+      *                     . 
+      *                     . 
++----------+                . 
+| retrieve |                . 
++----------+                . 
+      *                     . 
+      *                     . 
+      *                     . 
+ +--------+                 . 
+ | rerank |               ..  
+ +--------+             ..    
+           ..         ..      
+             ..     ..        
+               .   .          
+           +----------+       
+           | generate |       
+           +----------+       
+                 *            
+                 *            
+                 *            
+          +-----------+       
+          | guardrail |       
+          +-----------+       
+                 *            
+                 *            
+                 *            
+            +---------+       
+            | __end__ |       
+            +---------+       
+
+```
+
+## Configurações avançadas do RAG
+
+Também foram expostas configurações no backend e no RAG Inspector (`llm/scripts/rag_inspector_app.py`) para facilitar testes, depuração e ajustes finos do pipeline. Entre elas estão `rag_max_retrieve_attempts`, que controla o número máximo de tentativas de recuperação; `rag_use_llm_rerank`, que habilita o reranking com LLM; e `rag_llm_rerank_top_n`, que define quantos candidatos são enviados para essa etapa.
+
+Além disso, o projeto passou a permitir configuração do timeout de geração (`llm_stream_timeout_s`), do número inicial de candidatos recuperados (`rag_retrieve_candidates_k`), do número final de documentos usados no prompt (`rag_retrieve_final_k`) e da exigência de fonte para respostas clínicas (`rag_require_source_for_clinical_answer`). Essas opções tornam o comportamento do RAG mais controlável e observável durante experimentos e validações.

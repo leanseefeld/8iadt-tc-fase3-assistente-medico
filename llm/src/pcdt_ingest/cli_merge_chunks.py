@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from pcdt_ingest.chunk import _join_semantic_chunks
-from pcdt_ingest.pipeline_config import get_config
-
 
 def _meta_eq(a: dict[str, Any], b: dict[str, Any]) -> bool:
     keys = ("header_1", "header_2", "page_start", "page_end")
@@ -149,4 +147,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

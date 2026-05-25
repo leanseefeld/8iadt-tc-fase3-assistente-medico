@@ -21,7 +21,7 @@ pip install -e "llm[semantic]"
 ollama pull nomic-embed-text
 ```
 
-Para reconhecimento biomédico no chat médico, o modelo spaCy em português (`pt_core_news_sm`) é obrigatório. O `--setup` do orquestrador baixa o modelo automaticamente se ainda não estiver instalado:
+Para reconhecimento biomédico no chat médico, o medSpaCy com modelo em português (`pt_core_news_sm`) é obrigatório. O `--setup` do orquestrador baixa o modelo automaticamente se ainda não estiver instalado:
 
 ```bash
 python run-local.py --setup
@@ -33,10 +33,7 @@ Para instalar manualmente:
 python -m spacy download pt_core_news_sm
 ```
 
-O backend usa spaCy NER em português para resolver entidades clínicas na query antes da busca; se o modelo não estiver disponível, continua com fallback pelo catálogo Conitec local.
-
-# QuickUMLS é opcional e exige base local previamente instalada
-export QUICKUMLS_FP=/caminho/quickumls
+O backend usa o resolvedor clínico próprio com medSpaCy NER em português para resolver entidades clínicas na query antes da busca; se o modelo não estiver disponível, registra erro e continua com fallback pelo catálogo Conitec local.
 
 Para usar o download Einstein com navegador (Playwright), instale também o Chromium:
 
@@ -256,7 +253,7 @@ Campos exibidos:
 - `router_result`: decisão `search_needed` e tipo da pergunta.
 - `rewrite_result`: `resolved_query`, `expanded_query`, `structured_terms`, entidades e candidatos do catálogo.
 - `rewrite_result.llm_rewrite_used`: indica se o rewrite conversacional por LLM foi usado.
-- `rewrite_result.spacy_used`: indica se spaCy (`pt_core_news_sm`) participou da resolução clínica.
+- `rewrite_result.spacy_used`: indica se medSpaCy (`pt_core_news_sm`) participou da resolução clínica.
 - `retrieve_result`: query enviada ao Chroma, filtro de metadata, tentativa, collection, persist dir e modelo de embedding.
 - `rerank_result`: `context_quality`, `failure_type`, documentos removidos/selecionados, seções esperadas/encontradas e saída do LLM rerank quando habilitado.
 - `audit_trace`: trilha append-only por etapa, exportável na aba **Exportar JSON**.

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from functools import lru_cache
 import json
 import logging
@@ -19,7 +18,6 @@ from pydantic import BaseModel, Field, ValidationError
 from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
 from assistente_medico_api.graph.clinical_entity_resolver import resolve_clinical_entities
 from assistente_medico_api.graph.clinical_query_understanding import (
-    classify_clinical_intent,
     normalize_text_for_match,
 )
 from assistente_medico_api.graph.rag_enhancement import (
@@ -74,28 +72,6 @@ def _build_llm(settings: Settings, *, temperature: float = 0.0) -> ChatOllama:
     )
 
 
-def _history_transcript(turns: list[dict[str, Any]], *, limit: int = 8) -> str:
-    lines: list[str] = []
-    for turn in turns[-limit:]:
-        role = "Usuário" if turn.get("role") == "user" else "Assistente"
-        content = str(turn.get("content") or "").strip()
-        if content:
-            lines.append(f"{role}: {content}")
-    return "\n".join(lines)
-
-
-def _last_structured_terms_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
-    candidates = [
-        state.get("structured_terms"),
-        (state.get("rewrite_result") or {}).get("structured_terms"),
-        (state.get("memory_result") or {}).get("last_structured_terms"),
-    ]
-    for item in candidates:
-        if isinstance(item, dict) and item:
-            return deepcopy(item)
-    return None
-
-
 def run_rewrite_query(
     query: str,
     memory_result: dict | str | None,
@@ -130,8 +106,6 @@ def run_rewrite_query(
         final_resolved_query,
         catalog=catalog,
         intent=understanding.get("intent_result") or {"intent": structured.get("intent"), "confidence": structured.get("confidence")},
-        enable_medical_nlp=bool(getattr(settings, "enable_medical_nlp", True)),
-        use_medspacy=bool(getattr(settings, "use_medspacy", False)),
     )
     _logger.info(
         "rewrite: after_entity_resolver backend=%s spacy=%s linked_entities=%s",
@@ -310,17 +284,6 @@ def _section_match(doc: Document, structured_terms: dict[str, Any]) -> bool:
     meta = dict(doc.metadata or {})
     section = normalize_text_for_match(" ".join(_as_list(meta.get("section")) + _as_list(meta.get("header_1")) + _as_list(meta.get("header_2"))))
     return any(item and item in section for item in preferred)
-
-
-def _doc_signature(doc: Document) -> tuple[Any, ...]:
-    meta = doc.metadata or {}
-    return (
-        getattr(doc, "id", None),
-        meta.get("source_stem"),
-        meta.get("page_start"),
-        meta.get("page_end"),
-        meta.get("section"),
-    )
 
 
 def _extract_first_json_object(raw: str) -> dict[str, Any]:

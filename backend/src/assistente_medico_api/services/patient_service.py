@@ -13,7 +13,7 @@ from assistente_medico_api.models.patient import Patient, VitalSigns
 from assistente_medico_api.models.suggested_item import SuggestedItem
 from assistente_medico_api.repositories import exam_repo, patient_repo, suggested_item_repo, attachment_repo
 from assistente_medico_api.schemas.cids import Cid
-from assistente_medico_api.schemas.exams import Exam as ExamSchema, ExamAttachment as ExamAttachmentSchema
+from assistente_medico_api.schemas.exams import Exam as ExamSchema
 from assistente_medico_api.schemas.patients import (
 	AgentLogEntry as AgentLogEntrySchema,
 	Patient as PatientSchema,
@@ -252,21 +252,6 @@ async def readmit_patient(session: AsyncSession, patient: Patient) -> Patient:
 		await apply_protocol(session, patient, "readmission")
 	await session.flush()
 	return patient
-
-
-def exam_to_schema(exam: Exam) -> ExamSchema:
-	return ExamSchema.model_validate({
-		"id": exam.id,
-		"name": exam.name,
-		"requestedAt": exam.requested_at,
-		"completedAt": exam.completed_at,
-		"status": exam.status,
-		"result": exam.result,
-		"interpretation": exam.interpretation,
-		"source": exam.source,
-		"protocolRef": exam.protocol_ref,
-		"attachments": [],
-	})
 
 
 async def exam_to_schema_with_attachments(

@@ -86,12 +86,6 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `MEDICO_RAG_LLM_RERANK_TOP_N` | `12` | Número de candidatos enviados ao LLM reranker quando habilitado |
 | `MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER` | `true` | Impede geração clínica grounded sem contexto validado suficiente |
 | `MEDICO_RAG_DEBUG` | `false` | Habilita diagnóstico adicional em rotas/ferramentas de debug |
-| `MEDICO_ENABLE_MEDICAL_NLP` | `true` | Ativa resolvedores NLP médicos opcionais no rewrite; catálogo Conitec continua ativo quando `false` |
-| `MEDICO_USE_MEDSPACY` | `false` | Ativa medSpaCy/PyRuSH. Desligado por padrão para evitar travamentos locais |
-| `MEDICO_MEDSPACY_MODEL` | `pt_core_news_sm` | Modelo spaCy em português usado pelo medSpaCy quando habilitado |
-| `MEDICO_MEDSPACY_LANGUAGE_CODE` | `pt` | Código de idioma passado ao medSpaCy |
-| `MEDICO_USE_SPACY` | `true` | Ativa spaCy NER leve quando modelo local existir |
-| `MEDICO_SPACY_MODEL` | `pt_core_news_sm` | Modelo spaCy local usado no fallback leve |
 | `MEDICO_DATABASE_URL`       | `sqlite+aiosqlite:///./assistente_medico.db` | URL do banco (SQLite assíncrono por padrão)                              |
 | `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para ficheiros JSONL de **auditoria clínica** diários (`audit_clinical_YYYY-MM-DD.jsonl`) |
 | `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível dos loggers `assistente_medico.*` na consola |
@@ -153,24 +147,19 @@ O rewrite combina três fontes:
 2. `last_structured_terms` da memória para resolver follow-ups sem regex de doenças.
 3. Catálogo Conitec e `clinical_entity_resolver` para `linked_entities`, `catalog_candidates`, `structured_terms` e `expanded_query`.
 
-O `clinical_entity_resolver` usa o catálogo Conitec como fallback permanente. Por padrão, ele tenta spaCy leve quando houver modelo local e não carrega medSpaCy/PyRuSH. Para usar medSpaCy com modelo em português, instale o modelo spaCy localmente e configure:
+O `clinical_entity_resolver` usa medSpaCy com `pt_core_news_sm` obrigatoriamente para extração de entidades clínicas, com catálogo Conitec como fallback permanente. O modelo deve estar instalado antes de iniciar o backend — o `--setup` do orquestrador garante isso automaticamente:
+
+```bash
+python run-local.py --setup
+```
+
+Para instalar manualmente:
 
 ```bash
 python -m spacy download pt_core_news_sm
-export MEDICO_ENABLE_MEDICAL_NLP=true
-export MEDICO_USE_MEDSPACY=true
-export MEDICO_MEDSPACY_MODEL=pt_core_news_sm
-export MEDICO_MEDSPACY_LANGUAGE_CODE=pt
 ```
 
-Com o orquestrador local:
-
-```bash
-python run-local.py --setup-medical-nlp
-python run-local.py --use-medspacy-pt
-```
-
-Nenhum modelo é baixado em runtime; se medSpaCy/spaCy não estiver instalado ou configurado, o backend continua funcionando pelo catálogo.
+Nenhum modelo é baixado em runtime; se medSpaCy ou o modelo `pt_core_news_sm` não estiver disponível, o backend registra erro e continua pelo catálogo Conitec.
 
 ## Recuperação RAG
 
@@ -179,9 +168,9 @@ O fluxo de recuperação do chat agora é:
 ```text
 pergunta
 -> ClinicalIntentClassifier
--> BiomedicalEntityResolver
+-> Catálogo Conitec + resolvedor clínico (medSpaCy pt_core_news_sm)
 -> CatalogConceptResolver
--> QueryExpansionFromCatalog
+-> expansão estruturada por termos do catálogo
 -> Chroma k=30
 -> reranking consciente de catálogo
 -> top final
@@ -189,20 +178,20 @@ pergunta
 -> auditoria
 ```
 
-A expansão usa apenas o catálogo local `llm/data/processed/conitec/pcdt_catalog.jsonl`; a planilha da Conitec não é baixada em tempo de requisição. O chat interpreta a pergunta médica antes da busca, detectando intenção clínica, entidades biomédicas linkadas quando houver backend disponível, CID-10 explícito e candidatos de diretriz/doença do catálogo quando houver match forte.
+A expansão usa apenas o catálogo local `llm/data/processed/conitec/pcdt_catalog.jsonl`; a planilha da Conitec não é baixada em tempo de requisição. O chat interpreta a pergunta médica antes da busca, detectando intenção clínica, entidades clínicas extraídas por medSpaCy (pt_core_news_sm), CID-10 explícito e candidatos de diretriz/doença do catálogo quando houver match forte.
 
 A saída da expansão tem dois canais:
 
 - `expanded_query`: texto limpo enviado ao Chroma, com pergunta original, diretriz/doença canônica, um CID-10 quando houver um único código relevante, e seção preferencial. Não contém JSON, nomes de campos ou listas serializadas.
-- `structured_terms`: dados serializáveis usados por filtro, rerank e auditoria, incluindo doença, diretriz, CID-10, intenção, seções preferenciais, candidatos do catálogo, entidades linkadas e confiança. O mesmo objeto alimenta `clinical_understanding` no estado do grafo; esse entendimento **não** entra no prompt do LLM na geração atual.
+- `structured_terms`: dados serializáveis usados por filtro, rerank e auditoria, incluindo doença, diretriz, CID-10, intenção, seções preferenciais, candidatos do catálogo, entidades clínicas e confiança. O mesmo objeto alimenta `clinical_understanding` no estado do grafo; esse entendimento **não** entra no prompt do LLM na geração atual.
 
 Medicamentos e CIDs múltiplos ficam em `structured_terms`; eles não entram automaticamente no texto vetorial quando isso poluiria a busca.
 
-O resolvedor biomédico tenta, nessa ordem, scispaCy com EntityLinker, QuickUMLS apontado por `QUICKUMLS_FP`/`QUICKUMLS_PATH`, e spaCy apenas como NER. Se nada estiver instalado ou configurado, ele retorna lista vazia; o fallback continua pelo matching semântico contra o catálogo, nunca pela primeira palavra da pergunta ou por sigla extraída isoladamente. Modelos não são baixados em runtime.
+O resolvedor clínico do backend usa medSpaCy (`pt_core_news_sm`) obrigatoriamente. Se o modelo não estiver disponível, o fluxo continua pelo matching semântico contra o catálogo, nunca pela primeira palavra da pergunta ou por sigla extraída isoladamente. Modelos não são baixados em runtime.
 
 O reranking é heurístico e explicável. Ele usa `structured_terms`, não parseia a string expandida, para decidir doença/diretriz, CIDs, intenção e seções preferenciais. Quando há candidato de catálogo confiável, documentos da mesma diretriz/doença têm prioridade e documentos de outra doença não sobem apenas por seção; se o filtro por catálogo não encontra documentos compatíveis, o fluxo registra baixa confiança e evita completar o top final com documentos errados. A posição original do Chroma continua como base, mas `catalog_candidate_match` pesa mais que `section_intent_match`. CIDs explícitos na pergunta geram `cid_explicit_match`; CIDs vindos do catálogo entram como reforço leve (`cid_catalog_hint`) e não dominam critérios de inclusão.
 
-Depois do rerank heurístico, é possível habilitar reranking por `sentence-transformers` CrossEncoder para reordenar os candidatos já recuperados. As dependências biomédicas (`spacy`, `medspacy`, `scispacy`) fazem parte da instalação padrão do backend. O reranking por CrossEncoder continua opcional:
+Depois do rerank heurístico, é possível habilitar reranking por `sentence-transformers` CrossEncoder para reordenar os candidatos já recuperados. A dependência clínica (`medspacy`) faz parte da instalação padrão do backend. O reranking por CrossEncoder continua opcional:
 
 ```bash
 pip install -e "backend[rerank]"

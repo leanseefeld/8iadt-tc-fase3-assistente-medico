@@ -11,7 +11,6 @@ from assistente_medico_api.schemas.prescriptions import (
     PrescriptionArchiveRequest,
     PrescriptionCreateRequest,
     PrescriptionListResponse,
-    PrescriptionResponse,
     SinglePrescriptionResponse,
 )
 from assistente_medico_api.services import prescription_service

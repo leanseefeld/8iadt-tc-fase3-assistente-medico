@@ -9,7 +9,6 @@ from langchain_core.documents import Document
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph import cross_encoder_reranker as ce_mod
-from assistente_medico_api.graph import clinical_query_understanding as cqu_mod
 from assistente_medico_api.graph.nodes.generate import _build_messages, generate_node
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
 from assistente_medico_api.services import rag_pipeline_service as rag_service
@@ -18,16 +17,11 @@ from assistente_medico_api.services.rag_pipeline_service import (
     run_rewrite_query,
 )
 from assistente_medico_api.graph.clinical_query_understanding import (
-    CatalogCandidateRetriever,
-    detect_clinical_intent,
-    expand_query_for_medical_chat,
-    match_disease_from_catalog,
     understand_clinical_query,
 )
 from assistente_medico_api.graph.cross_encoder_reranker import apply_cross_encoder_rerank
 from assistente_medico_api.graph.rag_enhancement import (
     append_audit_jsonl,
-    build_audit_payload,
     expand_query_with_conitec_catalog,
     extract_query_entities,
     filter_documents_by_detected_disease,
@@ -162,30 +156,6 @@ class _FakeStore:
         return []
 
 
-def test_detect_clinical_intent_minimum_cases() -> None:
-    assert detect_clinical_intent("Quais são os critérios de inclusão para artrite reumatoide?") == "criterios_inclusao"
-    assert detect_clinical_intent("Qual tratamento para asma?") == "tratamento"
-    assert detect_clinical_intent("Como monitorar insuficiência adrenal?") == "monitoramento"
-
-
-def test_match_disease_from_catalog_is_restrictive() -> None:
-    assert match_disease_from_catalog("artrite reumatoide", _catalog())["name"] == "Artrite Reumatoide"
-    assert match_disease_from_catalog("artrite idiopática juvenil", _catalog())["name"] == "Artrite Idiopática Juvenil"
-    assert match_disease_from_catalog("artrite", _catalog()) is None
-    assert match_disease_from_catalog("asma", _catalog())["name"] == "Asma"
-
-
-def test_catalog_candidate_retriever_uses_full_catalog_fields_for_hiv_pediatric_query() -> None:
-    candidates = CatalogCandidateRetriever(_catalog()).search("Como tratar HIV em crianças?", limit=5)
-
-    assert candidates
-    assert candidates[0].disease == "Infecção pelo HIV em Crianças e Adolescentes"
-    assert "diretriz" in candidates[0].matched_fields or "source_stem" in candidates[0].matched_fields
-    weak_names = {candidate.disease for candidate in candidates[1:]}
-    assert "Artrite Idiopática Juvenil" not in weak_names
-    assert "Mucopolissacaridose" not in weak_names
-
-
 def test_medical_chat_pipeline_expands_hiv_pediatric_query_and_filters_wrong_docs() -> None:
     expanded = expand_query_with_conitec_catalog("Como tratar HIV em crianças?", _catalog())
     docs = [
@@ -258,17 +228,7 @@ def test_no_catalog_candidate_marks_low_confidence_and_keeps_section_match_weak(
     ]
 
     ranked = rerank_documents("Como reconhecer uma criança?", expanded, docs, final_k=2)
-    payload = build_audit_payload(
-        question="Como reconhecer uma criança?",
-        expansion=expanded,
-        documents=ranked,
-        retrieval_candidates_k=2,
-        retrieval_final_k=2,
-    )
-
     assert expanded["structured_terms"]["catalog_candidates"] == []
-    assert payload["catalog_candidate_missing"] is True
-    assert payload["low_confidence_retrieval"] is True
     assert all(
         not reason.startswith("section_intent_match:")
         for doc in ranked
@@ -281,14 +241,6 @@ def test_no_catalog_candidate_marks_low_confidence_and_keeps_section_match_weak(
     )
 
 
-def test_match_disease_from_catalog_detects_cid_from_catalog() -> None:
-    match = match_disease_from_catalog("O que o PCDT diz sobre E27.1?", _catalog())
-
-    assert match is not None
-    assert match["name"] == "Insuficiência Adrenal"
-    assert "cid10_codes" in match["catalog_candidate"]["matched_fields"]
-
-
 def test_understand_clinical_query_fallback_without_catalog() -> None:
     understanding = understand_clinical_query("O que o PCDT diz sobre E27.1?", None)
 
@@ -297,14 +249,11 @@ def test_understand_clinical_query_fallback_without_catalog() -> None:
     assert understanding["detected_disease"] is None
 
 
-def test_catalog_fallback_works_when_biomedical_linkers_are_absent(monkeypatch) -> None:
-    monkeypatch.setattr(cqu_mod, "_entity_resolver", lambda: None)
-
+def test_catalog_fallback_works_without_linked_biomedical_entities() -> None:
     understanding = understand_clinical_query("Quais são os critérios de inclusão para sgb?", _catalog())
 
-    assert understanding["linked_entities"] == []
+    assert "linked_entities" not in understanding
     assert understanding["detected_disease"]["name"] == "Síndrome de Guillain-Barré"
-    assert understanding["clinical_terms"] == []
     assert understanding["catalog_candidates"][0]["source"] == "catalog_semantic"
 
 
@@ -325,23 +274,23 @@ def test_extract_query_entities_detects_treatment_and_empty_query() -> None:
 def test_expand_query_with_conitec_catalog_expands_disease_without_cid_or_medication_for_inclusion() -> None:
     expanded = expand_query_with_conitec_catalog("critérios para insuficiência adrenal", _catalog(), max_terms=10)
 
-    assert "Insuficiência Adrenal" in expanded["matched_diseases"]
-    assert "E27.1" in expanded["matched_cid10_codes"]
-    assert expanded["matched_medications"] == []
+    assert expanded["structured_terms"]["disease"] == "Insuficiência Adrenal"
+    assert "E27.1" in expanded["structured_terms"]["cid10_codes"]
+    assert expanded["structured_terms"]["medications"] == []
     assert "E23.0" not in expanded["expanded_query"]
 
 
 def test_expand_query_with_conitec_catalog_includes_medications_for_treatment_intent() -> None:
     expanded = expand_query_with_conitec_catalog("tratamento para insuficiência adrenal", _catalog(), max_terms=10)
 
-    assert "Insuficiência Adrenal" in expanded["matched_diseases"]
-    assert any("Prednisona" in med for med in expanded["matched_medications"])
+    assert expanded["structured_terms"]["disease"] == "Insuficiência Adrenal"
+    assert any("Prednisona" in med for med in expanded["structured_terms"]["medications"])
 
 
 def test_expand_query_with_conitec_catalog_expands_cid_to_diretriz() -> None:
     expanded = expand_query_with_conitec_catalog("Paciente com E75.4", _catalog(), max_terms=8)
 
-    assert expanded["matched_diseases"] == ["Lipofuscinose Ceroide Neuronal tipo 2"]
+    assert expanded["structured_terms"]["disease"] == "Lipofuscinose Ceroide Neuronal tipo 2"
     assert "Lipofuscinose Ceroide Neuronal tipo 2" in expanded["expanded_query"]
 
 
@@ -349,10 +298,10 @@ def test_expand_query_with_conitec_catalog_fallback_and_max_terms() -> None:
     expanded = expand_query_with_conitec_catalog("doença desconhecida", _catalog(), max_terms=2)
 
     assert expanded["expanded_query"] == "doença desconhecida"
-    assert expanded["matched_terms"] == []
+    assert "matched_terms" not in expanded
 
     expanded_known = expand_query_with_conitec_catalog("insuficiência adrenal", _catalog(), max_terms=2)
-    assert len(expanded_known["matched_terms"]) <= 2
+    assert expanded_known["expanded_query"].startswith("insuficiência adrenal")
 
 
 def test_expand_query_with_conitec_catalog_is_restrictive_for_rheumatoid_arthritis() -> None:
@@ -362,9 +311,8 @@ def test_expand_query_with_conitec_catalog_is_restrictive_for_rheumatoid_arthrit
         max_terms=20,
     )
 
-    assert expanded["matched_diseases"] == ["Artrite Reumatoide"]
-    assert expanded["matched_medications"] == []
     assert expanded["structured_terms"]["disease"] == "Artrite Reumatoide"
+    assert expanded["structured_terms"]["medications"] == []
     assert expanded["structured_terms"]["intent"] == "criterios_inclusao"
     assert "Artrite Reumatoide" in expanded["expanded_query"]
     assert "CRITÉRIOS DE INCLUSÃO" in expanded["expanded_query"]
@@ -374,18 +322,6 @@ def test_expand_query_with_conitec_catalog_is_restrictive_for_rheumatoid_arthrit
     assert "Metotrexato" not in expanded["expanded_query"]
     assert "Artrite Idiopática Juvenil" not in expanded["expanded_query"]
     assert "Asma" not in expanded["expanded_query"]
-
-
-def test_expand_query_for_medical_chat_respects_max_terms_and_fallback() -> None:
-    understanding = understand_clinical_query("Quais são os critérios de inclusão para artrite reumatoide?", _catalog())
-    expanded = expand_query_for_medical_chat(understanding, _catalog(), max_terms=3)
-
-    assert len(expanded["added_terms"]) <= 3
-    assert expanded["expanded_query"].startswith("Quais são os critérios")
-
-    fallback = expand_query_for_medical_chat(understand_clinical_query("doença desconhecida", None), None)
-    assert fallback["expanded_query"] == "doença desconhecida"
-    assert fallback["added_terms"] == []
 
 
 def test_rerank_documents_boosts_exact_cid_and_preserves_scores() -> None:
@@ -463,7 +399,6 @@ def test_rerank_documents_does_not_complete_sgb_with_wrong_diseases() -> None:
     assert [doc.metadata["disease"] for doc in ranked] == ["Síndrome de Guillain-Barré"]
     assert expansion["_catalog_filter_info"]["candidate_count_after_filter"] == 1
     assert expansion["_catalog_filter_info"]["final_documents_count"] == 1
-    assert expansion["_catalog_filter_info"]["documents_removed_by_catalog_filter"]
 
 
 def test_rerank_documents_prefers_sgb_inclusion_section_over_cid10() -> None:
@@ -840,26 +775,14 @@ def test_format_context_document_handles_missing_metadata() -> None:
     assert "Trecho:\nTexto." in formatted
 
 
-def test_build_audit_payload_and_jsonl_write(tmp_path: Path) -> None:
-    expansion = expand_query_with_conitec_catalog("Paciente com E27.1", _catalog())
-    doc = _doc("texto", source_stem="s", source_pdf="raw/s.pdf", cid10_codes='["E27.1"]')
-
-    payload = build_audit_payload(
-        question="Paciente com E27.1",
-        expansion=expansion,
-        documents=[doc],
-        retrieval_candidates_k=30,
-        retrieval_final_k=6,
-        answer="resposta",
-    )
+def test_append_audit_jsonl_write(tmp_path: Path) -> None:
+    payload = {"question": "Paciente com E27.1", "structured_terms": {"cid10_codes": ["E27.1"]}}
     append_audit_jsonl(payload, tmp_path / "audit.jsonl")
 
     line = (tmp_path / "audit.jsonl").read_text(encoding="utf-8").strip()
     parsed = json.loads(line)
     assert parsed["question"] == "Paciente com E27.1"
     assert "structured_terms" in parsed
-    assert parsed["documents"][0]["source_stem"] == "s"
-    assert parsed["documents"][0]["cid10_codes"] == ["E27.1"]
 
 
 def test_expansion_is_json_serializable_and_keeps_structured_terms_out_of_chroma_text() -> None:

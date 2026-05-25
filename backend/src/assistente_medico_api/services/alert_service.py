@@ -7,10 +7,8 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistente_medico_api.models.alert import Alert
-from assistente_medico_api.models.exam import Exam
-from assistente_medico_api.models.patient import Patient
 from assistente_medico_api.repositories import alert_repo, patient_repo
-from assistente_medico_api.schemas.alerts import Alert as AlertSchema, AlertCreateRequest
+from assistente_medico_api.schemas.alerts import Alert as AlertSchema
 from assistente_medico_api.observability.audit import truncate
 from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 
@@ -56,65 +54,6 @@ async def create_alert(
         },
     )
     return created
-
-async def generate_alerts_for_patient(
-    session: AsyncSession,
-    patient: Patient,
-    exams: list[Exam],
-) -> list[Alert]:
-    """
-    Generate alerts based on patient status and exams.
-
-    Rules:
-    - If patient has critical exams pending (status='pending') → critical exam alert
-    - If patient has multiple pending exams → moderate alert
-    - If oxygen saturation is low (detected from vitals) → critical alert
-    """
-    alerts: list[Alert] = []
-
-    # Check for pending exams
-    pending_exams = [e for e in exams if e.status == "pending"]
-
-    if len(pending_exams) > 3:
-        # Multiple pending exams → moderate alert
-        alert = await create_alert(
-            session,
-            patient.id,
-            severity="critical",
-            category="exam",
-            message=f"Paciente {patient.name} possui {len(pending_exams)} exames pendentes que requerem atenção imediata.",
-            team="doctors",
-        )
-        alerts.append(alert)
-    elif len(pending_exams) > 0:
-        # Some pending exams → moderate alert
-        exam_names = ", ".join(e.name for e in pending_exams[:3])
-        alert = await create_alert(
-            session,
-            patient.id,
-            severity="moderate",
-            category="exam",
-            message=f"Exames aguardando revisão: {exam_names}.",
-            team="doctors",
-        )
-        alerts.append(alert)
-
-    # Check for certain critical exam types
-    critical_exam_types = ["PCR", "Hemograma", "Lactato"]
-    critical_exams = [e for e in exams if any(t in e.name for t in critical_exam_types) and e.status == "pending"]
-    if critical_exams:
-        alert = await create_alert(
-            session,
-            patient.id,
-            severity="critical",
-            category="exam",
-            message=f"Exame crítico pendente: {critical_exams[0].name}. Revisão urgente solicitada.",
-            team="doctors",
-        )
-        alerts.append(alert)
-
-    return alerts
-
 
 async def build_alert_schema(alert: Alert) -> AlertSchema:
     """Convert Alert model to schema with camelCase."""

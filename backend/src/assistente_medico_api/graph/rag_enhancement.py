@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -13,7 +11,6 @@ from langchain_core.documents import Document
 from assistente_medico_api.graph.cross_encoder_reranker import apply_cross_encoder_rerank
 from assistente_medico_api.graph.clinical_query_understanding import (
     INTENT_SECTION_LABELS,
-    expand_query_for_medical_chat,
     normalize_text_for_match,
     understand_clinical_query,
 )
@@ -121,7 +118,7 @@ def _build_structured_terms(
         for candidate in understanding.get("catalog_candidates") or []
     ]
     confidence = max(candidate_confidences or [float(disease.get("confidence") or 0.0)])
-    return {
+    structured_terms = {
         "disease": best_entry.get("disease") or disease.get("name"),
         "disease_normalized": normalize_text_for_match(
             best_entry.get("disease_normalized") or disease.get("normalized") or disease.get("name") or ""
@@ -137,19 +134,17 @@ def _build_structured_terms(
             _public_catalog_candidate(candidate)
             for candidate in understanding.get("catalog_candidates") or []
         ],
-        "linked_entities": [
-            dict(entity)
-            for entity in understanding.get("linked_entities") or []
-            if isinstance(entity, dict)
-        ],
         "confidence": round(float(confidence or 0.0), 4),
     }
+    linked_entities = [dict(entity) for entity in understanding.get("linked_entities") or [] if isinstance(entity, dict)]
+    if linked_entities:
+        structured_terms["linked_entities"] = linked_entities
+    return structured_terms
 
 
 def _expanded_query_terms(
     *,
     structured_terms: dict[str, Any],
-    original_added_terms: list[str],
     max_terms: int,
 ) -> list[str]:
     terms: list[str] = []
@@ -168,9 +163,6 @@ def _expanded_query_terms(
     if has_catalog_candidate:
         terms.extend(_as_list(structured_terms.get("preferred_sections")))
 
-    # Preserve any existing conservative catalog-derived terms that are not
-    # field labels or serialized structures.
-    terms.extend(term for term in original_added_terms if not _looks_structured(term))
     return _dedupe(terms, limit=max_terms)
 
 
@@ -193,123 +185,13 @@ def _section_text_norm(metadata: dict[str, Any]) -> str:
     )
 
 
-def _document_has_preferred_section(item: Any, preferred_sections: list[str]) -> bool:
-    if not preferred_sections:
-        return False
-    doc, _score = _doc_from_pair(item)
-    section_norm = _section_text_norm(dict(getattr(doc, "metadata", {}) or {}))
-    return any(section and section in section_norm for section in preferred_sections)
-
-
-def _document_pair_key(item: Any) -> tuple[str, str, str, str]:
-    doc, _score = _doc_from_pair(item)
-    metadata = dict(getattr(doc, "metadata", {}) or {})
-    return (
-        str(getattr(doc, "id", "") or ""),
-        str(metadata.get("source_stem") or metadata.get("source_pdf") or ""),
-        str(metadata.get("page_start") or ""),
-        normalize_text_for_match(str(getattr(doc, "page_content", "") or "")[:500]),
-    )
-
-
-def merge_retrieval_pairs(primary: list[Any], complementary: list[Any]) -> list[Any]:
-    """Merge Chroma result pairs preserving order and removing duplicate chunks."""
-    merged: list[Any] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    for item in [*primary, *complementary]:
-        key = _document_pair_key(item)
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(item)
-    return merged
-
-
-def build_complementary_retrieve_plan(
-    *,
-    query: str,
-    expansion: dict[str, Any],
-    documents: list[Any],
-    final_k: int,
-) -> dict[str, Any]:
-    """Decide whether a disease/section-focused second retrieval is needed."""
-    understanding = expansion.get("clinical_understanding") or {}
-    structured = expansion.get("structured_terms") or {}
-    intent = structured.get("intent") or understanding.get("intent")
-    preferred_sections = _preferred_section_norms(intent, structured)
-    filtered_docs, filter_info = filter_documents_by_detected_disease(
-        documents,
-        understanding,
-        structured_terms=structured,
-    )
-    preferred_section_found = any(_document_has_preferred_section(item, preferred_sections) for item in filtered_docs)
-    has_confident_catalog_candidate = bool(filter_info.get("has_confident_catalog_candidate"))
-    should_run = bool(
-        has_confident_catalog_candidate
-        and preferred_sections
-        and (len(filtered_docs) < max(2, min(final_k, 4)) or not preferred_section_found)
-    )
-    disease = structured.get("diretriz") or structured.get("disease") or ""
-    section_terms = _as_list(structured.get("preferred_sections"))
-    if str(intent) == "tratamento":
-        section_terms.extend(["Tratamento medicamentoso", "Fármacos", "Esquemas"])
-    complementary_query = _compose_expanded_query(
-        "",
-        _dedupe([disease, *section_terms, query], limit=8),
-    )
-    disease_norm = _structured_disease_norm(structured, understanding)
-    return {
-        "should_run": should_run,
-        "query": complementary_query,
-        "metadata_filter": {"disease_normalized": disease_norm} if disease_norm else None,
-        "preferred_sections": preferred_sections,
-        "preferred_section_found_before": preferred_section_found,
-        "documents_after_catalog_filter_before": len(filtered_docs),
-        "initial_filter_info": filter_info,
-    }
-
-
-def apply_complementary_retrieve_info(
-    expansion: dict[str, Any],
-    *,
-    plan: dict[str, Any],
-    complementary_pairs: list[Any],
-    merged_pairs: list[Any],
-) -> None:
-    understanding = expansion.get("clinical_understanding") or {}
-    structured = expansion.get("structured_terms") or {}
-    filtered_docs, filter_info = filter_documents_by_detected_disease(
-        merged_pairs,
-        understanding,
-        structured_terms=structured,
-    )
-    preferred_sections = _as_list(plan.get("preferred_sections"))
-    preferred_section_found = any(_document_has_preferred_section(item, preferred_sections) for item in filtered_docs)
-    expansion["_complementary_retrieve_info"] = {
-        "used": bool(plan.get("should_run")),
-        "query": plan.get("query") or "",
-        "metadata_filter": plan.get("metadata_filter"),
-        "documents_from_complementary_search": len(complementary_pairs),
-        "documents_after_complementary_merge": len(merged_pairs),
-        "documents_after_catalog_filter": len(filtered_docs),
-        "preferred_section_found": preferred_section_found,
-        "preferred_section_not_found": bool(preferred_sections and not preferred_section_found),
-        "preferred_section_found_before": bool(plan.get("preferred_section_found_before", False)),
-    }
-    expansion["_catalog_filter_info"] = {
-        **filter_info,
-        "preferred_section_found": preferred_section_found,
-        "preferred_section_not_found": bool(preferred_sections and not preferred_section_found),
-    }
-
-
 def _looks_structured(value: Any) -> bool:
     text = str(value or "").strip()
     return any(marker in text for marker in ("{", "}", "[", "]", ":", '"'))
 
 
-def _compose_expanded_query(original: str, added_terms: list[str]) -> str:
-    clean_terms = [term for term in added_terms if not _looks_structured(term)]
+def _compose_expanded_query(original: str, expansion_terms: list[str]) -> str:
+    clean_terms = [term for term in expansion_terms if not _looks_structured(term)]
     return f"{original} {' '.join(clean_terms)}".strip() if clean_terms else original
 
 
@@ -338,12 +220,11 @@ def extract_query_entities(query: str, catalog: Any | None = None) -> dict[str, 
     """Extrai entidades simples da pergunta sem depender de LLM."""
     understanding = understand_clinical_query(query, catalog)
     disease = understanding.get("detected_disease") or {}
-    medication_terms = [str(item.get("name") or "") for item in understanding.get("detected_medications") or []]
 
     return {
         "cid10_codes": _dedupe(understanding.get("detected_cid10_codes") or []),
         "disease_terms": _dedupe([disease.get("name")] if disease else []),
-        "medication_terms": _dedupe(medication_terms),
+        "medication_terms": [],
         "section_intent": None if not query.strip() else understanding.get("intent"),
     }
 
@@ -364,22 +245,14 @@ def expand_query_with_conitec_catalog(query: str, catalog: Any, max_terms: int =
             "original_query": original,
             "expanded_query": original,
             "structured_terms": structured_terms,
-            "added_terms": [],
             "source": "catalog_candidates",
-            "expansion_reason": [],
             "intent": understanding.get("intent_result") or {},
-            "linked_entities": understanding.get("linked_entities") or [],
             "catalog_candidates": understanding.get("catalog_candidates") or [],
-            "matched_diseases": [],
-            "matched_cid10_codes": [],
-            "matched_medications": [],
-            "matched_terms": [],
             "entities": extract_query_entities(original, catalog),
             "clinical_understanding": understanding,
         }
 
     understanding = understand_clinical_query(original, catalog)
-    expansion = expand_query_for_medical_chat(understanding, catalog, max_terms=max_terms)
     disease = understanding.get("detected_disease") or {}
     disease_norm = normalize_text_for_match(disease.get("normalized") or disease.get("name") or "")
     matched_entries = [
@@ -390,7 +263,6 @@ def expand_query_with_conitec_catalog(query: str, catalog: Any, max_terms: int =
         == disease_norm
     ]
 
-    matched_diseases = _dedupe(entry.get("disease") or entry.get("diretriz") for entry in matched_entries)
     matched_cids = _dedupe(code for entry in matched_entries for code in _as_list(entry.get("cid10_codes")))
     descriptions = _dedupe(desc for entry in matched_entries for desc in _as_list(entry.get("cid10_descriptions")))
     entities = extract_query_entities(original, catalog)
@@ -409,26 +281,18 @@ def expand_query_with_conitec_catalog(query: str, catalog: Any, max_terms: int =
         cid_descriptions=descriptions,
         matched_meds=matched_meds,
     )
-    added_terms = _expanded_query_terms(
+    expansion_terms = _expanded_query_terms(
         structured_terms=structured_terms,
-        original_added_terms=expansion["added_terms"],
         max_terms=max_terms,
     )
 
     return {
         "original_query": original,
-        "expanded_query": _compose_expanded_query(original, added_terms),
+        "expanded_query": _compose_expanded_query(original, expansion_terms),
         "structured_terms": structured_terms,
-        "added_terms": added_terms,
         "source": "catalog_candidates",
-        "expansion_reason": expansion["expansion_reason"],
         "intent": understanding.get("intent_result") or {},
-        "linked_entities": understanding.get("linked_entities") or [],
         "catalog_candidates": understanding.get("catalog_candidates") or [],
-        "matched_diseases": matched_diseases,
-        "matched_cid10_codes": matched_cids,
-        "matched_medications": matched_meds,
-        "matched_terms": added_terms,
         "matched_cid10_descriptions": descriptions,
         "entities": entities,
         "clinical_understanding": understanding,
@@ -452,13 +316,6 @@ def _metadata_text(metadata: dict[str, Any]) -> str:
     ):
         value = metadata.get(key)
         parts.extend(_as_list(value))
-    return normalize_text_for_match(" ".join(parts))
-
-
-def _document_disease_text(metadata: dict[str, Any]) -> str:
-    parts = []
-    for key in ("disease", "disease_normalized", "diretriz", "diretriz_normalized", "source_stem"):
-        parts.extend(_as_list(metadata.get(key)))
     return normalize_text_for_match(" ".join(parts))
 
 
@@ -552,7 +409,6 @@ def filter_documents_by_detected_disease(
         "candidate_count_after_filter": before,
         "disease_filter_fallback": False,
         "has_confident_catalog_candidate": bool(disease_norm and confidence >= min_confidence),
-        "documents_removed_by_catalog_filter": [],
     }
     if not disease_norm or confidence < min_confidence:
         return documents, info
@@ -571,7 +427,6 @@ def filter_documents_by_detected_disease(
             "disease_filter_applied": True,
             "candidate_count_after_filter": len(kept),
             "disease_filter_fallback": not bool(kept),
-            "documents_removed_by_catalog_filter": removed if kept else [],
         }
     )
     if kept:
@@ -616,21 +471,21 @@ def rerank_documents(
     }
     catalog_cids = {
         code.upper()
-        for code in _as_list(structured.get("cid10_codes") or expanded_query.get("matched_cid10_codes") or [])
+        for code in _as_list(structured.get("cid10_codes") or [])
         if code.upper() not in explicit_cids
     }
     disease_norm = _structured_disease_norm(structured, clinical_understanding)
     disease_terms = [disease_norm] if disease_norm else []
     explicit_medication_terms = [
         normalize_text_for_match(item.get("name") if isinstance(item, dict) else item)
-        for item in (clinical_understanding.get("detected_medications") or entities.get("medication_terms") or [])
+        for item in (entities.get("medication_terms") or [])
     ]
     related_medication_terms = []
     intent = structured.get("intent") or clinical_understanding.get("intent") or entities.get("section_intent")
     if intent in _TREATMENT_INTENTS:
         related_medication_terms = [
             normalize_text_for_match(t)
-            for t in _as_list(structured.get("medications") or expanded_query.get("matched_medications") or [])
+            for t in _as_list(structured.get("medications") or [])
         ]
     query_norm = normalize_text_for_match(query)
     preferred_sections = _preferred_section_norms(intent, structured)
@@ -652,7 +507,6 @@ def rerank_documents(
         text_norm = normalize_text_for_match(text)
         meta_norm = _metadata_text(metadata)
         section_norm = _section_text_norm(metadata)
-        source_norm = normalize_text_for_match(metadata.get("source_stem") or "")
 
         base = 1.0 - (idx / total)
         boost = 0.0
@@ -876,73 +730,6 @@ def document_audit_record(doc: Document, rank: int) -> dict[str, Any]:
         "cross_encoder_score": meta.get("cross_encoder_score"),
         "final_score": meta.get("final_score"),
         "ranking_reasons": _as_list(meta.get("ranking_reasons")),
-    }
-
-
-def build_audit_payload(
-    *,
-    question: str,
-    expansion: dict[str, Any],
-    documents: list[Document],
-    retrieval_candidates_k: int,
-    retrieval_final_k: int,
-    answer: str = "",
-    audit_id: str | None = None,
-) -> dict[str, Any]:
-    first_meta = dict(documents[0].metadata or {}) if documents else {}
-    filter_info = expansion.get("_catalog_filter_info") or {}
-    complementary_info = expansion.get("_complementary_retrieve_info") or {}
-    structured_terms = expansion.get("structured_terms") or {}
-    catalog_candidates = (structured_terms.get("catalog_candidates") or (expansion.get("clinical_understanding") or {}).get("catalog_candidates") or [])
-    has_confident_catalog_candidate = bool(filter_info.get("has_confident_catalog_candidate", False))
-    return {
-        "audit_id": audit_id or str(uuid.uuid4()),
-        "question": question,
-        "original_query": expansion.get("original_query") or question,
-        "clinical_understanding": expansion.get("clinical_understanding") or {},
-        "intent": (expansion.get("clinical_understanding") or {}).get("intent_result") or {},
-        "linked_entities": (expansion.get("clinical_understanding") or {}).get("linked_entities") or [],
-        "catalog_candidates": catalog_candidates,
-        "expanded_query": expansion.get("expanded_query") or question,
-        "structured_terms": structured_terms,
-        "added_terms": expansion.get("added_terms") or expansion.get("matched_terms") or [],
-        "expansion_reason": expansion.get("expansion_reason") or [],
-        "matched_diseases": expansion.get("matched_diseases") or [],
-        "matched_cid10_codes": expansion.get("matched_cid10_codes") or [],
-        "matched_medications": expansion.get("matched_medications") or [],
-        "matched_terms": expansion.get("matched_terms") or [],
-        "retrieval_candidates_k": retrieval_candidates_k,
-        "retrieval_final_k": retrieval_final_k,
-        "has_confident_catalog_candidate": has_confident_catalog_candidate,
-        "catalog_candidate_missing": not bool(catalog_candidates),
-        "low_confidence_retrieval": not has_confident_catalog_candidate,
-        "disease_filter_applied": bool(first_meta.get("disease_filter_applied", False)),
-        "filtered_disease": first_meta.get("filtered_disease") or "",
-        "candidate_count_before_filter": filter_info.get("candidate_count_before_filter", first_meta.get("candidate_count_before_filter")),
-        "candidate_count_after_filter": filter_info.get("candidate_count_after_filter", first_meta.get("candidate_count_after_filter")),
-        "candidate_count_before_rerank": retrieval_candidates_k,
-        "documents_before_filter": filter_info.get("candidate_count_before_filter", retrieval_candidates_k),
-        "documents_after_catalog_filter": filter_info.get("candidate_count_after_filter", first_meta.get("candidate_count_after_filter")),
-        "documents_removed_by_catalog_filter": filter_info.get("documents_removed_by_catalog_filter") or [],
-        "catalog_filter_fallback": bool(filter_info.get("disease_filter_fallback", False)),
-        "complementary_retrieve": complementary_info,
-        "complementary_retrieve_used": bool(complementary_info.get("used", False)),
-        "complementary_query": complementary_info.get("query") or "",
-        "preferred_section_found": bool(
-            complementary_info.get("preferred_section_found", filter_info.get("preferred_section_found", False))
-        ),
-        "preferred_section_not_found": bool(
-            complementary_info.get("preferred_section_not_found", filter_info.get("preferred_section_not_found", False))
-        ),
-        "candidate_count_after_catalog_filter": filter_info.get("candidate_count_after_filter", first_meta.get("candidate_count_after_filter")),
-        "final_documents_count": len(documents),
-        "returned_less_than_final_k": len(documents) < retrieval_final_k,
-        "final_documents": [document_audit_record(doc, i) for i, doc in enumerate(documents, start=1)],
-        "use_cross_encoder": bool(expansion.get("use_cross_encoder", False)),
-        "cross_encoder_model": expansion.get("cross_encoder_model"),
-        "documents": [document_audit_record(doc, i) for i, doc in enumerate(documents, start=1)],
-        "answer": answer,
-        "created_at": datetime.now(UTC).isoformat(),
     }
 
 

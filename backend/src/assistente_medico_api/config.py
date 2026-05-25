@@ -113,16 +113,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MEDICO_RAG_DEBUG", "RAG_DEBUG"),
         description="Expõe diagnóstico RAG adicional em rotas/inspector quando habilitado.",
     )
-    use_medspacy: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("MEDICO_USE_MEDSPACY", "USE_MEDSPACY"),
-        description="Ativa medSpaCy com modelo pt_core_news_sm. Desligado por padrão; requer medspacy instalado.",
-    )
-    enable_medical_nlp: bool = Field(
-        default=True,
-        validation_alias=AliasChoices("MEDICO_ENABLE_MEDICAL_NLP", "ENABLE_MEDICAL_NLP"),
-        description="Ativa resolvedores NLP médicos opcionais no rewrite; catálogo Conitec permanece ativo quando falso.",
-    )
+
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(
         default=Path("./uploads"),

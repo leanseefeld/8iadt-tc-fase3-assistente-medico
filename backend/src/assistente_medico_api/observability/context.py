@@ -41,10 +41,6 @@ def set_thread_id(value: str | None) -> Token[str | None]:
     return _thread_id_var.set(value)
 
 
-def reset_thread_id(token: Token[str | None]) -> None:
-    _thread_id_var.reset(token)
-
-
 def get_patient_id() -> str | None:
     return _patient_id_var.get()
 

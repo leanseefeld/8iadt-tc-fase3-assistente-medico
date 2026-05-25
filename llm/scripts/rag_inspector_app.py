@@ -68,49 +68,50 @@ except ModuleNotFoundError as exc:
         path = getattr(settings, "chroma_persist_dir", None)
         return Path(path) if path else vectorstore_chroma_dir()
 
-    def _build_messages(*args, **kwargs):  # type: ignore[no-redef]
+    def _build_messages(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    async def generate_node(*args, **kwargs):  # type: ignore[no-redef]
+    async def generate_node(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    async def guardrail_node(*args, **kwargs):  # type: ignore[no-redef]
+    async def guardrail_node(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    def format_context_block(docs: list[Any]) -> str:  # type: ignore[no-redef]
+    def format_context_block(_docs: list[Any]) -> str:  # type: ignore[no-redef]
         return ""
 
-    def format_source_label(doc: Any, index: int) -> str:  # type: ignore[no-redef]
+    def format_source_label(_doc: Any, index: int) -> str:  # type: ignore[no-redef]
         return f"[{index}] PCDT ? (pp. ?-?)"
 
-    def run_rewrite_query(*args, **kwargs):  # type: ignore[no-redef]
+    def run_rewrite_query(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    def run_retrieve(*args, **kwargs):  # type: ignore[no-redef]
+    def run_retrieve(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    async def run_rerank_and_validate_context(*args, **kwargs):  # type: ignore[no-redef]
+    async def run_rerank_and_validate_context(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    async def run_full_graph_debug(*args, **kwargs):  # type: ignore[no-redef]
+    async def run_full_graph_debug(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    async def rewrite_query_node(*args, **kwargs):  # type: ignore[no-redef]
+    async def rewrite_query_node(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    def format_patient_context(*args, **kwargs):  # type: ignore[no-redef]
+    def format_patient_context(*_args, **_kwargs):  # type: ignore[no-redef]
         return ""
 
     def vectorstore_chroma_dir() -> Path:
         return Path.cwd().parent / "vectorstore" / "chroma"
 
     def build_ollama_embeddings(*, model: str, base_url: str):  # type: ignore[no-redef]
+        _ = (model, base_url)
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    def ollama_single_embed_with_token_count(*args, **kwargs):  # type: ignore[no-redef]
+    def ollama_single_embed_with_token_count(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
-    def open_chroma_vectorstore(*args, **kwargs):  # type: ignore[no-redef]
+    def open_chroma_vectorstore(*_args, **_kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
 

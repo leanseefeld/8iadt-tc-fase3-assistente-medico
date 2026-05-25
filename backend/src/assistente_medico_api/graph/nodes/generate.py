@@ -74,51 +74,11 @@ def _build_llm(settings: Settings) -> ChatOllama:
     )
 
 
-def _format_items(values: list, limit: int = 5) -> str:
-    items = [str(value).strip() for value in values if str(value or "").strip()]
-    if not items:
-        return "nenhuma"
-    suffix = "..." if len(items) > limit else ""
-    return ", ".join(items[:limit]) + suffix
-
-
-def _format_clinical_understanding(
-    understanding: dict,
-    structured_terms: dict | None = None,
-    complementary_info: dict | None = None,
-) -> str:
-    structured_terms = structured_terms or {}
-    complementary_info = complementary_info or {}
-    disease = understanding.get("detected_disease") or {}
-    entities = understanding.get("linked_entities") or []
-    candidates = understanding.get("catalog_candidates") or []
-    structured_disease = structured_terms.get("diretriz") or structured_terms.get("disease")
-    structured_cids = structured_terms.get("cid10_codes") or []
-    structured_sections = structured_terms.get("preferred_sections") or []
-    return "\n".join(
-        [
-            f"- Intenção: {structured_terms.get('intent') or (understanding.get('intent_result') or {}).get('intent') or understanding.get('intent') or 'não detectada'}",
-            f"- Doença/Diretriz: {structured_disease or disease.get('name') or 'nenhuma'}",
-            f"- CID-10: {', '.join(structured_cids) or ', '.join(understanding.get('detected_cid10_codes') or []) or 'nenhum'}",
-            f"- Seções preferenciais: {_format_items(structured_sections)}",
-            f"- Entidades biomédicas linkadas: {_format_items([e.get('canonical') or e.get('text') for e in entities])}",
-            f"- Candidatos do catálogo: {_format_items([c.get('diretriz') or c.get('disease') for c in candidates])}",
-            f"- Seção preferida encontrada: {'não' if complementary_info.get('preferred_section_not_found') else 'sim' if complementary_info.get('preferred_section_found') else 'não informado'}",
-        ]
-    )
-
-
-def _build_messages(state: ChatRAGState, *, mode: str = "grounded") -> list:
+def _build_messages(state: ChatRAGState) -> list:
     """Monta as mensagens para o LLM a partir do estado atual do grafo."""
     docs = state.get("retrieved_docs") or []
     context = format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
     user_text = state.get("query") or ""
-    query_expansion = state.get("query_expansion") or {}
-    understanding = _format_clinical_understanding(
-        state.get("clinical_understanding") or {},
-        state.get("structured_terms") or query_expansion.get("structured_terms") or {},
-        query_expansion.get("_complementary_retrieve_info") or {},
-    )
     patient_context = (state.get("patient_context") or "").strip()
     patient_block = (
         f"Contexto clínico do paciente:\n{patient_context}\n\n"
@@ -201,9 +161,9 @@ def _prompt_context_preview(state: ChatRAGState, max_chars: int = 1200) -> str:
     return format_context_preview(docs, max_docs=2, max_chars=max_chars)
 
 
-async def _stream_answer(state: ChatRAGState, settings: Settings, *, mode: str) -> str:
+async def _stream_answer(state: ChatRAGState, settings: Settings) -> str:
     llm = _build_llm(settings)
-    messages = _build_messages(state, mode=mode)
+    messages = _build_messages(state)
     chunks: list[str] = []
     async for chunk in llm.astream(messages):
         piece = chunk.content if isinstance(chunk, BaseMessage) else str(chunk)
@@ -275,11 +235,10 @@ async def _generate_grounded_answer(state: ChatRAGState, settings: Settings) -> 
             "generate_llm_output": controlled_answer,
         }
 
-    llm = _build_llm(settings)
     messages = _build_messages(state)
     serialized_input = _serialize_messages(messages)
 
-    answer = await _stream_answer(state, settings, mode="grounded")
+    answer = await _stream_answer(state, settings)
     stems = sorted({d.metadata.get("source_stem", "?") for d in docs}) if docs else []
     latency_ms = round((time.perf_counter() - t0) * 1000, 2)
     audit(
@@ -333,9 +292,9 @@ async def _generate_direct_answer(state: ChatRAGState, settings: Settings) -> di
         prompt_context_preview="",
     )
     if any(term in query for term in ("ola", "oi", "bom dia", "boa tarde", "boa noite")):
-        answer = await _stream_answer(state, settings, mode="direct")
+        answer = await _stream_answer(state, settings)
     else:
-        answer = await _stream_answer(state, settings, mode="direct")
+        answer = await _stream_answer(state, settings)
     audit(
         "rag_generate_direct_answer",
         kind="rag",
@@ -360,7 +319,7 @@ async def _generate_insufficient_context(state: ChatRAGState, settings: Settings
     """Gera resposta de insuficiência de contexto com streaming."""
     pid = state.get("patient_id") or None
     t0 = time.perf_counter()
-    answer = await _stream_answer(state, settings, mode="insufficient")
+    answer = await _stream_answer(state, settings)
     structured = state.get("structured_terms") or {}
     rerank_result = state.get("rerank_result") or {}
     disease = structured.get("diretriz") or structured.get("disease") or "a condição solicitada"

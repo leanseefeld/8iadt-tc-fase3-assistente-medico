@@ -74,7 +74,7 @@ Os nós do grafo ficam em `backend/src/assistente_medico_api/graph/nodes/`:
 `fallback_retrieve.py`, `generate.py`, `guardrail.py` e `save_memory.py`.
 O rewrite preserva o comportamento da `main`: usa LLM com transcript do histórico
 para gerar uma consulta autocontida e, em seguida, aplica catálogo Conitec e
-resolução clínica com spaCy (`pt_core_news_sm`) para produzir `expanded_query` e
+resolução clínica com medSpaCy (`pt_core_news_sm`) para produzir `expanded_query` e
 `structured_terms`.
 
 Para depurar divergência entre frontend/backend e inspector, use:

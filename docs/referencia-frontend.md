@@ -173,12 +173,12 @@ Formulário centralizado, largura máxima 640px, fundo em card.
 | Medicamentos em uso | textarea | — | Campo livre, uma linha por medicamento |
 
 
-### Protocolo Mock por CID
+### Resposta Mock de Protocolo por CID
 
-Estrutura central da demo. Mapeia CID → exames e ações sugeridas recomendadas.
+A camada mock deve retornar exames e ações sugeridas recomendadas para o CID informado.
 
 ```ts
-const PROTOCOL_MAP: Record<string, ProtocolResult> = {
+const protocolResponseByCid: Record<string, ProtocolResult> = {
   "L40.5": {
     protocolRef: "PCDT Artrite Psoriásica — CONITEC 2023",
     exams: [
@@ -236,12 +236,12 @@ const PROTOCOL_MAP: Record<string, ProtocolResult> = {
 ### Comportamento ao submeter
 
 1. Cria novo `Patient` com `status: "admitted"` e `id` gerado (uuid mock)
-2. Exibe `<AgentSpinner>` por 1,5s com mensagens sequenciais:
+2. Exibe o estado de processamento do check-in por 1,5s com mensagens sequenciais:
    - *"Registrando paciente..."*
    - *"Consultando protocolo clínico..."*
    - *"Identificando exames recomendados..."*
    - *"Gerando plano inicial..."*
-3. Popula `patient.exams` e `patient.suggestedActions` a partir do `PROTOCOL_MAP[cid.code]`
+3. Popula `patient.exams` e `patient.suggestedActions` a partir da resposta mockada de protocolo para o CID selecionado
 4. Cria `AgentLogEntry[]` correspondente
 5. Seleciona o paciente na sidebar (`activePatientId = newPatient.id`)
 6. Navega automaticamente para **Página 3 — Fluxo de Decisão**
@@ -545,7 +545,7 @@ const INITIAL_ALERTS = [
                                             │
                         ┌───────────────────▼──────────────────────────────┐
                         │           Página 0 — Check-in                    │
-                        │  Formulário → submit → AgentSpinner (1.5s)       │
+                        │  Formulário → submit → processamento (1.5s)      │
                         └───────────────────┬──────────────────────────────┘
                                             │ auto-navega
                         ┌───────────────────▼──────────────────────────────┐
@@ -648,7 +648,7 @@ Os três perfis abaixo cobrem os caminhos principais do grafo. **Todos devem ser
 
 - **Não criar dados estáticos fora do store.** Toda informação de paciente deve passar pelo estado global para garantir consistência entre páginas.
 - **O seletor de paciente na sidebar deve ser reativo** — ao admitir ou dar alta, atualiza imediatamente sem refresh.
-- **Delays são intencionais.** O `AgentSpinner` e as animações sequenciais do log existem para comunicar que um processamento está ocorrendo. Use `setTimeout` ou similar; não eliminar por "otimização".
+- **Delays são intencionais.** O estado de processamento do check-in e as animações sequenciais do log existem para comunicar que um processamento está ocorrendo. Use `setTimeout` ou similar; não eliminar por "otimização".
 - **Manter o `protocolRef`** em todos os itens de ações sugeridas e exames gerados. Essa string aparece em múltiplas páginas (Ações Sugeridas, Chat, Fluxo) e deve ser consistente.
 - **Alertas críticos** devem atualizar o badge da sidebar imediatamente após criação.
 - **A página de Ações Sugeridas** deve ser inacessível (redirecionar para Check-in) se nenhum paciente estiver admitido.

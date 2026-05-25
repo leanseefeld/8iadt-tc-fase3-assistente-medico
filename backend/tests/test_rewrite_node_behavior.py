@@ -14,16 +14,13 @@ def _expansion() -> QueryExpansionResult:
         expanded_query="consulta expandida",
         clinical_understanding={"intent": "criterios_inclusao"},
         structured_terms={"intent": "criterios_inclusao", "cid10_codes": ["G61.0"]},
-        matched_cid10_codes=["G61.0"],
-        matched_diseases=["Síndrome de Guillain-Barré"],
-        matched_medications=[],
         query_expansion={"expanded_query": "consulta expandida"},
     )
 
 
 @pytest.mark.asyncio
 async def test_rewrite_without_query_returns_empty_retrieval_query(monkeypatch):
-    monkeypatch.setattr(rw_mod, "expand_query_for_retrieval", lambda **kwargs: _expansion())
+    monkeypatch.setattr(rw_mod, "expand_query_for_retrieval", lambda **_kwargs: _expansion())
 
     out = await rewrite_query_node({"query": "  ", "chat_history": [], "reasoning_steps": []}, Settings())
 
@@ -33,7 +30,7 @@ async def test_rewrite_without_query_returns_empty_retrieval_query(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rewrite_without_history_uses_literal_query(monkeypatch):
-    monkeypatch.setattr(rw_mod, "expand_query_for_retrieval", lambda **kwargs: _expansion())
+    monkeypatch.setattr(rw_mod, "expand_query_for_retrieval", lambda **_kwargs: _expansion())
 
     out = await rewrite_query_node(
         {
@@ -53,6 +50,7 @@ async def test_rewrite_without_history_uses_literal_query(monkeypatch):
 @pytest.mark.asyncio
 async def test_rewrite_with_history_uses_llm_output(monkeypatch):
     async def _resolve(*, state, query, settings):
+        _ = (state, query, settings)
         return RetrievalQueryResolution(
             retrieval_query="consulta reescrita autocontida",
             reasoning_steps=["Busca: pergunta reescrita com o histórico para recuperação."],
@@ -61,7 +59,7 @@ async def test_rewrite_with_history_uses_llm_output(monkeypatch):
         )
 
     monkeypatch.setattr(rw_mod, "resolve_retrieval_query", _resolve)
-    monkeypatch.setattr(rw_mod, "expand_query_for_retrieval", lambda **kwargs: _expansion())
+    monkeypatch.setattr(rw_mod, "expand_query_for_retrieval", lambda **_kwargs: _expansion())
 
     out = await rewrite_query_node(
         {

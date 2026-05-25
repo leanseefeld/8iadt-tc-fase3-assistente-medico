@@ -29,7 +29,6 @@ dependencies = [
     "rapidfuzz>=3.6",
     "spacy>=3.7",
     "medspacy>=1.2",
-    "scispacy>=0.6.2",
 ]
 
 [project.optional-dependencies]

@@ -7,28 +7,6 @@ import time
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
-from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
-
-_REWRITE_SYSTEM = """\
-Você reformula a última pergunta do médico como uma única consulta autocontida para busca \
-por similaridade em documentos dos Protocolos Clínicos e Diretrizes Terapêuticas (PCDT) do Brasil.
-Preserve termos clínicos e CID/procedimentos quando citados no histórico.
-Responda apenas com a consulta reformulada, sem prefixos nem explicações.\
-"""
-
-
-def _history_transcript(state: ChatRAGState) -> str:
-    lines: list[str] = []
-    for turn in state.get("chat_history") or []:
-        text = (turn.get("content") or "").strip()
-        if not text:
-            continue
-        role = turn.get("role")
-        if role == "user":
-            lines.append(f"Médico: {text}")
-        elif role == "assistant":
-            lines.append(f"Assistente: {text}")
-    return "\n".join(lines)
 from assistente_medico_api.services.rag_query_expansion_service import (
     expand_query_for_retrieval,
     resolve_retrieval_query,
@@ -44,7 +22,6 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
     expansion = expand_query_for_retrieval(
         query=query,
         retrieval_query=resolution.retrieval_query,
-        settings=settings,
     )
 
     steps = list(resolution.reasoning_steps)
@@ -66,9 +43,6 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
         "expanded_query": expansion.expanded_query,
         "clinical_understanding": expansion.clinical_understanding,
         "structured_terms": expansion.structured_terms,
-        "matched_cid10_codes": expansion.matched_cid10_codes,
-        "matched_diseases": expansion.matched_diseases,
-        "matched_medications": expansion.matched_medications,
         "query_expansion": expansion.query_expansion,
         "reasoning_steps": steps,
     }

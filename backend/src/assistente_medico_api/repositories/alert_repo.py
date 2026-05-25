@@ -57,10 +57,3 @@ async def update_alert(session: AsyncSession, alert: Alert) -> Alert:
     session.add(alert)
     await session.flush()
     return alert
-
-
-async def get_unresolved_count(session: AsyncSession) -> int:
-    result = await session.execute(
-        select(Alert).where(Alert.resolved == False)
-    )
-    return len(result.scalars().all())
