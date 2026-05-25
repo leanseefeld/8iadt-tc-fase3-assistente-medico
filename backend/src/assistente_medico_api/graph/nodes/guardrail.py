@@ -10,7 +10,7 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from assistente_medico_api.config import Settings, resolve_runtime_path
-from assistente_medico_api.graph.nodes.generate import _build_llm
+from assistente_medico_api.graph.llm_client import AuxLlmTraceEntry, build_llm, tracked_ainvoke
 from assistente_medico_api.graph.rag_enhancement import append_audit_jsonl
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate as audit_truncate
@@ -73,14 +73,27 @@ def _check_with_keywords(answer: str) -> tuple[bool, str]:
     return False, ""
 
 
-async def _classify_with_llm(answer: str, settings: Settings) -> tuple[GuardrailVerdict, str]:
+async def _classify_with_llm(
+    answer: str,
+    settings: Settings,
+    *,
+    trace: list[AuxLlmTraceEntry],
+) -> tuple[GuardrailVerdict, str]:
     """
     Chama o LLM auditor para classificar a resposta.
     Lança exceção em falha — o chamador deve recorrer ao fallback por keywords.
     """
-    llm = _build_llm(settings)
-    result = await llm.ainvoke(
-        [SystemMessage(content=_CLASSIFIER_SYSTEM), HumanMessage(content=answer[:2000])]
+    llm = build_llm(settings)
+    classify_messages = [
+        SystemMessage(content=_CLASSIFIER_SYSTEM),
+        HumanMessage(content=answer[:2000]),
+    ]
+    result = await tracked_ainvoke(
+        llm,
+        classify_messages,
+        call_type="guardrail_classify",
+        trace=trace,
+        settings=settings,
     )
 
     raw = (getattr(result, "content", None) or "").strip()
@@ -99,14 +112,19 @@ async def _classify_with_llm(answer: str, settings: Settings) -> tuple[Guardrail
     return verdict, reason
 
 
-async def _regenerate_strict(state: ChatRAGState, settings: Settings) -> str:
+async def _regenerate_strict(
+    state: ChatRAGState,
+    settings: Settings,
+    *,
+    trace: list[AuxLlmTraceEntry],
+) -> str:
     """
     Regenera a resposta com system prompt endurecido usando ainvoke — não emite tokens
     para o cliente (evita vazar conteúdo bloqueado via on_chat_model_stream).
     """
     from assistente_medico_api.graph.nodes.retrieve import format_context_block
 
-    llm = _build_llm(settings)
+    llm = build_llm(settings)
     docs = state.get("retrieved_docs") or []
     context = format_context_block(docs) if docs else "(Nenhum trecho recuperado.)"
     query = state.get("query") or ""
@@ -116,8 +134,16 @@ async def _regenerate_strict(state: ChatRAGState, settings: Settings) -> str:
         f"Contexto (trechos PCDT):\n{context}\n\n"
         "Responda sem mencionar doses, posologias ou esquemas terapêuticos específicos."
     )
-    result = await llm.ainvoke(
-        [SystemMessage(content=_STRICT_SYSTEM_PROMPT), HumanMessage(content=human)]
+    regen_messages = [
+        SystemMessage(content=_STRICT_SYSTEM_PROMPT),
+        HumanMessage(content=human),
+    ]
+    result = await tracked_ainvoke(
+        llm,
+        regen_messages,
+        call_type="guardrail_regenerate",
+        trace=trace,
+        settings=settings,
     )
     content = getattr(result, "content", None) or ""
     if isinstance(content, list):
@@ -142,10 +168,11 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
     query = state.get("query") or ""
     steps = list(state.get("reasoning_steps") or [])
     hist = list(state.get("chat_history") or [])
+    trace: list[AuxLlmTraceEntry] = list(state.get("aux_llm_trace") or [])
     reason = ""
 
     try:
-        verdict, reason = await _classify_with_llm(original_answer, settings)
+        verdict, reason = await _classify_with_llm(original_answer, settings, trace=trace)
     except Exception as exc:
         patient_note = patient_id or "?"
         _LOG.warning("guardrail_classifier_failed paciente=%s erro=%s", patient_note, exc)
@@ -169,10 +196,10 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
         steps.append(f"Guardrail: resposta bloqueada ({reason}). Tentando regenerar.")
 
         try:
-            regen = await _regenerate_strict(state, settings)
+            regen = await _regenerate_strict(state, settings, trace=trace)
 
             try:
-                regen_verdict, regen_reason = await _classify_with_llm(regen, settings)
+                regen_verdict, regen_reason = await _classify_with_llm(regen, settings, trace=trace)
             except Exception:
                 blocked_kw, kw_r = _check_with_keywords(regen)
                 regen_verdict = "BLOQUEAR" if blocked_kw else "SEGURO"
@@ -249,4 +276,5 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
         "guardrail_status": guardrail_status,
         "guardrail_reason": reason,
         "reasoning_steps": steps,
+        "aux_llm_trace": trace,
     }

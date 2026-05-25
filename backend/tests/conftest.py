@@ -17,6 +17,7 @@ from assistente_medico_api.models import (
     Alert,
     Conversation,
     ConversationMessage,
+    ConversationMessageLlmCall,
     Exam,
     Patient,
     Prescription,

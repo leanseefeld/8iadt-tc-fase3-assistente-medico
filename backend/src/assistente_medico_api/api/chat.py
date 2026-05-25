@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
+from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
 from assistente_medico_api.deps import get_session
 from assistente_medico_api.services import chat_persistence
@@ -200,11 +201,13 @@ async def post_chat(
                 status_code=503,
                 detail=f"Falha ao executar o assistente: {exc!s}",
             ) from exc
+        settings = getattr(request.app.state, "settings", None) or Settings()
         assistant_message_id = await chat_persistence.append_turn(
             session,
             conversation=conversation,
             doctor_message=body.message,
             final_state=final,
+            settings=settings,
         )
         await session.commit()
 
@@ -342,11 +345,13 @@ async def post_chat(
                 "guardrailReason": final_state.get("guardrail_reason"),
             }
 
+            settings = getattr(request.app.state, "settings", None) or Settings()
             assistant_message_id = await chat_persistence.append_turn(
                 session,
                 conversation=conversation,
                 doctor_message=body.message,
                 final_state=final_state,
+                settings=settings,
             )
             await session.commit()
 

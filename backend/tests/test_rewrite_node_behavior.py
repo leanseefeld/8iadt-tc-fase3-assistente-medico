@@ -49,8 +49,8 @@ async def test_rewrite_without_history_uses_literal_query(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rewrite_with_history_uses_llm_output(monkeypatch):
-    async def _resolve(*, state, query, settings):
-        _ = (state, query, settings)
+    async def _resolve(*, state, query, settings, trace=None):
+        _ = (state, query, settings, trace)
         return RetrievalQueryResolution(
             retrieval_query="consulta reescrita autocontida",
             reasoning_steps=["Busca: pergunta reescrita com o histórico para recuperação."],

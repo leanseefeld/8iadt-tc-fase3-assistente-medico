@@ -139,6 +139,17 @@ class Settings(BaseSettings):
             "Durante pytest, o `conftest` define `MEDICO_CLINICAL_AUDIT_ENABLED=false` para não poluir logs."
         ),
     )
+    llm_interaction_log_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "MEDICO_LLM_INTERACTION_LOG_ENABLED",
+            "LLM_INTERACTION_LOG_ENABLED",
+        ),
+        description=(
+            "Persiste chamadas auxiliares ao modelo de chat (router, rewrite, rerank, guardrail) "
+            "em conversation_message_llm_calls, correlacionadas por assistant_message_id."
+        ),
+    )
 
 
 def resolve_runtime_path(path: Path) -> Path:

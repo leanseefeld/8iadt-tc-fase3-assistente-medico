@@ -13,6 +13,7 @@ from assistente_medico_api.services.rag_pipeline_service import run_rerank_and_v
 async def rerank_and_validate_context_node(state: ChatRAGState, *, settings: Settings) -> dict:
     """Valida a qualidade do contexto e define o próximo passo do fluxo."""
     t0 = time.perf_counter()
+    trace = list(state.get("aux_llm_trace") or [])
     out = await run_rerank_and_validate_context(
         query=state.get("query") or "",
         expanded_query=state.get("expanded_query") or state.get("retrieval_query") or "",
@@ -20,6 +21,7 @@ async def rerank_and_validate_context_node(state: ChatRAGState, *, settings: Set
         clinical_understanding=state.get("clinical_understanding") or {},
         candidate_docs=state.get("candidate_docs") or [],
         settings=settings,
+        trace=trace,
     )
     current_attempt = int(state.get("retrieve_attempt") or 1)
     route = context_quality_router({**dict(state), **out, "max_retrieve_attempts": settings.rag_max_retrieve_attempts})
@@ -64,6 +66,7 @@ async def rerank_and_validate_context_node(state: ChatRAGState, *, settings: Set
         ),
         "rerank_decision": {"next_step": route},
         "reasoning_steps": steps,
+        "aux_llm_trace": trace,
     }
 
 

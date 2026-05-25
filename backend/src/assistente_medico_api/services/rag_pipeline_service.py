@@ -8,14 +8,13 @@ import logging
 import uuid
 from typing import Any
 
-import httpx
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field, ValidationError
 
 from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
+from assistente_medico_api.graph.llm_client import AuxLlmTraceEntry, build_llm, tracked_ainvoke
 from assistente_medico_api.graph.clinical_entity_resolver import resolve_clinical_entities
 from assistente_medico_api.graph.clinical_query_understanding import (
     normalize_text_for_match,
@@ -59,17 +58,6 @@ def format_source_label(doc: Document, index: int | None = None) -> str:
     p1 = meta.get("page_end", "?")
     body = f"PCDT {diretriz} - {section} (pp. {p0}-{p1})" if section else f"PCDT {diretriz} (pp. {p0}-{p1})"
     return f"[{index}] {body}" if index is not None else body
-
-
-def _build_llm(settings: Settings, *, temperature: float = 0.0) -> ChatOllama:
-    timeout = httpx.Timeout(settings.llm_stream_timeout_s, connect=10.0)
-    return ChatOllama(
-        model=settings.ollama_chat_model,
-        base_url=settings.ollama_base_url,
-        temperature=temperature,
-        async_client_kwargs={"timeout": timeout},
-        client_kwargs={"timeout": timeout},
-    )
 
 
 def run_rewrite_query(
@@ -324,6 +312,7 @@ async def _llm_rerank(
     structured_terms: dict[str, Any],
     docs: list[Document],
     settings: Settings,
+    trace: list[AuxLlmTraceEntry] | None = None,
 ) -> LLMRerankResult:
     doc_items = []
     for idx, doc in enumerate(docs[: int(settings.rag_llm_rerank_top_n)], start=1):
@@ -352,7 +341,16 @@ async def _llm_rerank(
         },
         ensure_ascii=False,
     )
-    result = await _build_llm(settings, temperature=0.0).ainvoke([SystemMessage(content=system), HumanMessage(content=human)])
+    rerank_messages = [SystemMessage(content=system), HumanMessage(content=human)]
+    llm = build_llm(settings, temperature=0.0)
+    active_trace = trace if trace is not None else []
+    result = await tracked_ainvoke(
+        llm,
+        rerank_messages,
+        call_type="rerank",
+        trace=active_trace,
+        settings=settings,
+    )
     raw = getattr(result, "content", "") or ""
     if isinstance(raw, list):
         raw = "".join(str(part) for part in raw)
@@ -389,6 +387,7 @@ async def run_rerank_and_validate_context(
     clinical_understanding: dict[str, Any],
     candidate_docs: list[Document],
     settings: Settings,
+    trace: list[AuxLlmTraceEntry] | None = None,
 ) -> dict[str, Any]:
     _logger.info("rerank: start")
     disease_required = bool(structured_terms.get("disease") or structured_terms.get("diretriz"))
@@ -411,6 +410,7 @@ async def run_rerank_and_validate_context(
                 structured_terms=structured_terms,
                 docs=compatible_docs,
                 settings=settings,
+                trace=trace,
             )
             id_to_doc = {f"doc_{idx}": doc for idx, doc in enumerate(compatible_docs[: int(settings.rag_llm_rerank_top_n)], start=1)}
             selected_docs = [id_to_doc[item.doc_id] for item in llm_result.ranked_documents if item.doc_id in id_to_doc]

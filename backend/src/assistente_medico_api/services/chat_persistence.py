@@ -8,8 +8,10 @@ from datetime import UTC, datetime
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.generate import GENERATE_SYSTEM_PROMPT
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState, ChatHistoryTurnState
+from assistente_medico_api.services.llm_interaction_log import persist_aux_trace
 from assistente_medico_api.models.conversation import Conversation, ConversationMessage
 from assistente_medico_api.repositories import conversation_repo, patient_repo
 from assistente_medico_api.schemas.chat import (
@@ -83,6 +85,7 @@ async def append_turn(
     conversation: Conversation,
     doctor_message: str,
     final_state: ChatRAGState,
+    settings: Settings,
 ) -> str:
     """Grava par médico + assistente após turno bem-sucedido do grafo. Retorna id da mensagem do assistente."""
     now = datetime.now(UTC)
@@ -107,6 +110,12 @@ async def append_turn(
         created_at=now,
     )
     await conversation_repo.create_message(session, assistant_row)
+    await persist_aux_trace(
+        session,
+        assistant_message_id=assistant_row.id,
+        trace=final_state.get("aux_llm_trace"),
+        settings=settings,
+    )
     await conversation_repo.touch_conversation_updated_at(session, conversation)
     return assistant_row.id
 

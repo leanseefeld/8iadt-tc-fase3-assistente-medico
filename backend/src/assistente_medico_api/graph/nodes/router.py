@@ -7,7 +7,7 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from assistente_medico_api.config import Settings
-from assistente_medico_api.graph.nodes.generate import _build_llm
+from assistente_medico_api.graph.llm_client import AuxLlmTraceEntry, build_llm, tracked_ainvoke
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
 
@@ -43,12 +43,21 @@ async def router_search_needed_node(state: ChatRAGState, *, settings: Settings) 
     """Decide se a próxima etapa é resposta direta ou fluxo RAG."""
     query = (state.get("query") or "").strip()
     steps = list(state.get("reasoning_steps") or [])
+    trace: list[AuxLlmTraceEntry] = list(state.get("aux_llm_trace") or [])
     t0 = time.perf_counter()
 
     try:
-        llm = _build_llm(settings)
-        result = await llm.ainvoke(
-            [SystemMessage(content=_ROUTER_SYSTEM), HumanMessage(content=query or "")]
+        llm = build_llm(settings)
+        router_messages = [
+            SystemMessage(content=_ROUTER_SYSTEM),
+            HumanMessage(content=query or ""),
+        ]
+        result = await tracked_ainvoke(
+            llm,
+            router_messages,
+            call_type="router",
+            trace=trace,
+            settings=settings,
         )
         raw = (getattr(result, "content", None) or "").strip()
         if isinstance(raw, list):
@@ -92,6 +101,7 @@ async def router_search_needed_node(state: ChatRAGState, *, settings: Settings) 
         "generation_mode": "direct_answer" if not search_needed else state.get("generation_mode"),
         "router_decision": decision,
         "reasoning_steps": steps,
+        "aux_llm_trace": trace,
     }
 
 

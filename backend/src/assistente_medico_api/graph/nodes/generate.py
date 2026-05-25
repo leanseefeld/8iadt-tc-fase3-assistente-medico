@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import time
 
-import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 
 from assistente_medico_api.config import Settings
+from assistente_medico_api.graph.llm_client import build_llm, serialize_messages
 from assistente_medico_api.graph.context_formatting import format_context_block, format_context_preview
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.graph.clinical_query_understanding import normalize_text_for_match
@@ -58,35 +57,8 @@ Tipos válidos: [Exame], [Prescrição], [Observação], [Reavaliação].\
 """
 
 
-def _serialize_messages(messages: list[BaseMessage]) -> list[dict]:
-    """Serializa mensagens LangChain para persistência JSON (SFT/auditoria)."""
-    out: list[dict] = []
-    for msg in messages:
-        if isinstance(msg, SystemMessage):
-            role = "system"
-        elif isinstance(msg, HumanMessage):
-            role = "user"
-        elif isinstance(msg, AIMessage):
-            role = "assistant"
-        else:
-            role = getattr(msg, "type", "unknown")
-        content = msg.content
-        if isinstance(content, list):
-            content = "".join(str(p) for p in content)
-        out.append({"role": role, "content": str(content or "")})
-    return out
-
-
-def _build_llm(settings: Settings) -> ChatOllama:
-    """Cria o cliente Ollama usado pelos nós finais e pelo guardrail."""
-    timeout = httpx.Timeout(settings.llm_stream_timeout_s, connect=10.0)
-    return ChatOllama(
-        model=settings.ollama_chat_model,
-        base_url=settings.ollama_base_url,
-        temperature=0.2,
-        async_client_kwargs={"timeout": timeout},
-        client_kwargs={"timeout": timeout},
-    )
+# Compatibilidade com testes que fazem monkeypatch em generate._build_llm.
+_build_llm = build_llm
 
 
 def _build_messages(state: ChatRAGState) -> list:
@@ -176,17 +148,24 @@ def _prompt_context_preview(state: ChatRAGState, max_chars: int = 1200) -> str:
     return format_context_preview(docs, max_docs=2, max_chars=max_chars)
 
 
-async def _stream_answer(state: ChatRAGState, settings: Settings) -> str:
+async def _stream_answer(
+    state: ChatRAGState,
+    settings: Settings,
+) -> tuple[str, list[BaseMessage]]:
+    """Gera resposta via streaming; retorna texto e mensagens enviadas ao LLM."""
     llm = _build_llm(settings)
     messages = _build_messages(state)
     chunks: list[str] = []
     async for chunk in llm.astream(messages):
-        piece = chunk.content if isinstance(chunk, BaseMessage) else str(chunk)
+        if isinstance(chunk, BaseMessage):
+            piece = chunk.content
+        else:
+            piece = getattr(chunk, "content", None) or str(chunk)
         if isinstance(piece, list):
             piece = "".join(str(p) for p in piece)
         if piece:
             chunks.append(str(piece))
-    return "".join(chunks)
+    return "".join(chunks), messages
 
 
 async def _generate_grounded_answer(state: ChatRAGState, settings: Settings) -> dict:
@@ -250,10 +229,8 @@ async def _generate_grounded_answer(state: ChatRAGState, settings: Settings) -> 
             "generate_llm_output": controlled_answer,
         }
 
-    messages = _build_messages(state)
-    serialized_input = _serialize_messages(messages)
-
-    answer = await _stream_answer(state, settings)
+    answer, messages = await _stream_answer(state, settings)
+    serialized_input = serialize_messages(messages)
     stems = sorted({d.metadata.get("source_stem", "?") for d in docs}) if docs else []
     latency_ms = round((time.perf_counter() - t0) * 1000, 2)
     audit(
@@ -306,10 +283,8 @@ async def _generate_direct_answer(state: ChatRAGState, settings: Settings) -> di
         top_sections=[],
         prompt_context_preview="",
     )
-    if any(term in query for term in ("ola", "oi", "bom dia", "boa tarde", "boa noite")):
-        answer = await _stream_answer(state, settings)
-    else:
-        answer = await _stream_answer(state, settings)
+    answer, messages = await _stream_answer(state, settings)
+    serialized_input = serialize_messages(messages)
     audit(
         "rag_generate_direct_answer",
         kind="rag",
@@ -327,14 +302,20 @@ async def _generate_direct_answer(state: ChatRAGState, settings: Settings) -> di
         source_stems=[],
         controlled_response=False,
     )
-    return {"answer": answer, "generation_mode": "direct_answer"}
+    return {
+        "answer": answer,
+        "generation_mode": "direct_answer",
+        "generate_llm_input": serialized_input,
+        "generate_llm_output": answer,
+    }
 
 
 async def _generate_insufficient_context(state: ChatRAGState, settings: Settings) -> dict:
     """Gera resposta de insuficiência de contexto com streaming."""
     pid = state.get("patient_id") or None
     t0 = time.perf_counter()
-    answer = await _stream_answer(state, settings)
+    answer, messages = await _stream_answer(state, settings)
+    serialized_input = serialize_messages(messages)
     structured = state.get("structured_terms") or {}
     rerank_result = state.get("rerank_result") or {}
     disease = structured.get("diretriz") or structured.get("disease") or "a condição solicitada"
@@ -358,7 +339,12 @@ async def _generate_insufficient_context(state: ChatRAGState, settings: Settings
         source_stems=[],
         controlled_response=False,
     )
-    return {"answer": answer, "generation_mode": "insufficient_context"}
+    return {
+        "answer": answer,
+        "generation_mode": "insufficient_context",
+        "generate_llm_input": serialized_input,
+        "generate_llm_output": answer,
+    }
 
 
 async def generate_node(state: ChatRAGState, settings: Settings) -> dict:

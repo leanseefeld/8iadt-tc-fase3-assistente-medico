@@ -12,6 +12,10 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ## Marcos
 
+### 2026-05-25
+
+- **aux-llm-interaction-log** — agent:cursor — Tabela `conversation_message_llm_calls` + `MEDICO_LLM_INTERACTION_LOG_ENABLED`; `llm_client.tracked_ainvoke` (router/rewrite/rerank/guardrail); extração por `messageId` via repo. — Revisão: `c7af82e` Merge branch 'feature/conversations-persistence'
+
 ### 2026-05-24
 
 - **chat-conversations-sidebar** — agent:cursor — Chat: lista/retomada/arquivamento no sidebar; GET conversas/mensagens; PATCH archive (`archived_at`/`archived_by`); hidratação do grafo a partir do DB. — Revisão: `231d8f0` feat(chat): feedback de mensagens

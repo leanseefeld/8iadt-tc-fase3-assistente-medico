@@ -56,3 +56,4 @@ class ChatRAGState(TypedDict, total=False):
     _cached_patient_id: str  # Rastreia qual paciente o contexto foi carregado (para detectar mudança)
     generate_llm_input: list[dict]
     generate_llm_output: str
+    aux_llm_trace: list[dict]

@@ -90,6 +90,7 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para ficheiros JSONL de **auditoria clínica** diários (`audit_clinical_YYYY-MM-DD.jsonl`) |
 | `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível dos loggers `assistente_medico.*` na consola |
 | `CLINICAL_AUDIT_ENABLED` ou `MEDICO_CLINICAL_AUDIT_ENABLED` | `true` | Liga a escrita de `audit_clinical_YYYY-MM-DD.jsonl` sob `MEDICO_LOG_DIR`. Durante `pytest`, fica automaticamente em `false` no `conftest` |
+| `LLM_INTERACTION_LOG_ENABLED` ou `MEDICO_LLM_INTERACTION_LOG_ENABLED` | `false` | Persiste chamadas auxiliares ao modelo de chat (router, rewrite, rerank, guardrail) em `conversation_message_llm_calls`, correlacionadas por `messageId` da resposta do assistente |
 
 ## Logging e auditoria
 

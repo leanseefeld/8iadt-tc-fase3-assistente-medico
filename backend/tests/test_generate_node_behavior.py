@@ -45,6 +45,20 @@ async def test_generate_node_propagates_stream_exception(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_direct_answer_sets_generate_llm_fields(monkeypatch):
+    class _StreamLLM:
+        async def astream(self, _messages):
+            yield _Chunk("resposta-direta")
+
+    monkeypatch.setattr(gen_mod, "_build_llm", lambda _settings: _StreamLLM())
+    state = {**_STATE, "generation_mode": "direct_answer"}
+    out = await gen_mod.generate_node(state, Settings())
+    assert out["generate_llm_output"] == "resposta-direta"
+    assert out["generate_llm_input"]
+    assert out["generate_llm_input"][-1]["role"] == "user"
+
+
+@pytest.mark.asyncio
 async def test_generate_node_propagates_httpx_timeout(monkeypatch):
     """Timeout do cliente httpx (ReadTimeout) deve propagar sem ser silenciado."""
     monkeypatch.setattr(gen_mod, "_build_llm", lambda _settings: _TimeoutLLM())

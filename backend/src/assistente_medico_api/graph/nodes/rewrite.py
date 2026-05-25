@@ -18,7 +18,13 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
     query = (state.get("query") or "").strip()
     t0 = time.perf_counter()
 
-    resolution = await resolve_retrieval_query(state=dict(state), query=query, settings=settings)
+    trace = list(state.get("aux_llm_trace") or [])
+    resolution = await resolve_retrieval_query(
+        state=dict(state),
+        query=query,
+        settings=settings,
+        trace=trace,
+    )
     expansion = expand_query_for_retrieval(
         query=query,
         retrieval_query=resolution.retrieval_query,
@@ -45,4 +51,5 @@ async def rewrite_query_node(state: ChatRAGState, settings: Settings) -> dict:
         "structured_terms": expansion.structured_terms,
         "query_expansion": expansion.query_expansion,
         "reasoning_steps": steps,
+        "aux_llm_trace": trace,
     }

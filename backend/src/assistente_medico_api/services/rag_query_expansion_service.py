@@ -8,7 +8,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from assistente_medico_api.config import Settings
-from assistente_medico_api.graph.nodes.generate import _build_llm
+from assistente_medico_api.graph.llm_client import AuxLlmTraceEntry, build_llm, tracked_ainvoke
 from assistente_medico_api.graph.rag_enhancement import expand_query_with_conitec_catalog
 
 try:
@@ -61,6 +61,7 @@ async def resolve_retrieval_query(
     state: dict[str, Any],
     query: str,
     settings: Settings,
+    trace: list[AuxLlmTraceEntry] | None = None,
 ) -> RetrievalQueryResolution:
     """Resolve a consulta de busca preservando o comportamento da main."""
     steps = list(state.get("reasoning_steps") or [])
@@ -84,15 +85,24 @@ async def resolve_retrieval_query(
             llm_used=False,
         )
 
-    llm = _build_llm(settings)
+    llm = build_llm(settings)
     human = (
         f"Histórico da conversa:\n{transcript}\n\n"
         f"Última pergunta do médico:\n{query}\n\n"
         "Reformule em uma consulta única para busca nos PCDTs."
     )
+    rewrite_messages = [
+        SystemMessage(content=_REWRITE_SYSTEM),
+        HumanMessage(content=human),
+    ]
+    active_trace = trace if trace is not None else []
     try:
-        result = await llm.ainvoke(
-            [SystemMessage(content=_REWRITE_SYSTEM), HumanMessage(content=human)]
+        result = await tracked_ainvoke(
+            llm,
+            rewrite_messages,
+            call_type="rewrite",
+            trace=active_trace,
+            settings=settings,
         )
         raw = (getattr(result, "content", None) or "").strip()
         if isinstance(raw, list):
