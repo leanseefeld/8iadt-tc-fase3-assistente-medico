@@ -7,7 +7,6 @@ import type {
   ConversationArchiveResponse,
   ConversationListResponse,
   ConversationMessagesResponse,
-  DecisionFlowResponse,
   MessageFeedbackPatchResponse,
   MessageFeedbackRating,
 } from '@/types/domain';
@@ -149,21 +148,4 @@ export async function archiveAssistantConversation(
     throw new Error(await parseHttpErrorDetail(res));
   }
   return (await res.json()) as ConversationArchiveResponse;
-}
-
-export async function postAssistantDecisionFlowMock(
-  patientId: string,
-): Promise<DecisionFlowResponse> {
-  const res = await apiFetch(`${API_BASE_URL}/assistant/decision-flow`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({ patientId }),
-  });
-  if (!res.ok) {
-    throw new Error(await parseHttpErrorDetail(res));
-  }
-  return (await res.json()) as DecisionFlowResponse;
 }

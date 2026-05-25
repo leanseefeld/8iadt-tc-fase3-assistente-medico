@@ -1,6 +1,5 @@
 import { Search } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { getCidListMock, patchPatientMock } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
@@ -26,11 +25,9 @@ export function CIDEditModal({
   onClose,
   onSaved,
 }: CIDEditModalProps) {
-  const navigate = useNavigate();
   const { showToast } = useToast();
   const {
     refreshAdmittedPatients,
-    setPendingFlowReview,
   } = useAppSession();
   const dialogId = useId();
   const [cids, setCids] = useState<Cid[]>([]);
@@ -91,9 +88,7 @@ export function CIDEditModal({
     if (removingCid) {
       showToast('CID removido.');
     } else {
-      showToast('CID atualizado. Fluxo de decisão re-executado.');
-      setPendingFlowReview(true);
-      navigate('/flow');
+      showToast('CID atualizado.');
     }
 
     onSaved?.();

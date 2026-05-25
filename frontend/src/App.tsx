@@ -6,11 +6,9 @@ import { AlertsPage } from '@/pages/AlertsPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { CheckInPage } from '@/pages/CheckInPage';
 import { DashboardPage } from '@/pages/DashboardPage';
-import { DecisionFlowPage } from '@/pages/DecisionFlowPage';
 import { ExamsPage } from '@/pages/ExamsPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { PrescriptionsPage } from '@/pages/PrescriptionsPage';
-import { SuggestedActionsPage } from '@/pages/SuggestedActionsPage';
 
 export function App() {
   return (
@@ -27,21 +25,12 @@ export function App() {
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/checkin" element={<CheckInPage />} />
               <Route path="/chat" element={<ChatPage />} />
-              <Route path="/flow" element={<DecisionFlowPage />} />
               <Route path="/exams" element={<ExamsPage />} />
               <Route
                 path="/prescriptions"
                 element={<PrescriptionsPage />}
               />
-              <Route
-                path="/suggested-actions"
-                element={<SuggestedActionsPage />}
-              />
               <Route path="/alerts" element={<AlertsPage />} />
-              <Route
-                path="/decision-flow"
-                element={<Navigate to="/flow" replace />}
-              />
               <Route
                 path="/exams-pendencies"
                 element={<Navigate to="/exams" replace />}

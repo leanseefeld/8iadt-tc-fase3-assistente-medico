@@ -57,26 +57,6 @@ export interface Exam {
   attachments?: ExamAttachment[];
 }
 
-export type SuggestedActionType =
-  | 'exam'
-  | 'prescription'
-  | 'observation'
-  | 'review';
-
-export type SuggestedActionStatus =
-  | 'suggested'
-  | 'accepted'
-  | 'modified'
-  | 'rejected';
-
-export interface SuggestedActionItem {
-  id: string;
-  type: SuggestedActionType;
-  description: string;
-  status: SuggestedActionStatus;
-  protocolRef?: string;
-}
-
 export type AgentLogStatus = 'done' | 'running' | 'alert' | 'error';
 
 export interface AgentLogEntry {
@@ -101,7 +81,6 @@ export interface Patient {
   currentMedications: string[];
   vitalSigns: VitalSigns;
   exams: Exam[];
-  suggestedItems: SuggestedActionItem[];
   agentLog: AgentLogEntry[];
 }
 
@@ -158,14 +137,6 @@ export interface ConversationArchiveResponse {
   id: string;
   archivedAt: string;
   archivedBy: string;
-}
-
-export interface DecisionFlowResponse {
-  lines: string[];
-  meta: {
-    sepsisCritical: boolean;
-    pharmacyInteraction: boolean;
-  };
 }
 
 export interface CreatePatientRequestBody {

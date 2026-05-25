@@ -10,7 +10,6 @@ import * as cidsHttp from '@/api/clinicalApi.cids.http';
 import * as medicationsHttp from '@/api/clinicalApi.medications.http';
 import * as patientsHttp from '@/api/clinicalApi.patients.http';
 import * as examsHttp from '@/api/clinicalApi.exams.http';
-import * as suggestedItemsHttp from '@/api/clinicalApi.suggestedItems.http';
 import * as alertsHttp from '@/api/clinicalApi.alerts.http';
 import * as prescriptionsHttp from '@/api/clinicalApi.prescriptions.http';
 import type {
@@ -104,7 +103,7 @@ export async function patchPatientMock(
   patch: PatchPatientBody,
   options?: PatchPatientOptions,
 ) {
-  const { exams, suggestedItems, vitalSigns, ...corePatch } = patch;
+  const { exams, vitalSigns, ...corePatch } = patch;
   let patient = await patientsHttp.patchPatientHttp(id, corePatch);
   if (!patient) {
     return null;
@@ -135,18 +134,6 @@ export async function patchPatientMock(
         },
         options?.examResultAuditDemo ? { auditContextDemo: true } : undefined,
       );
-    }
-  }
-
-  if (suggestedItems?.length) {
-    for (const itemPatch of suggestedItems) {
-      if (!itemPatch.id) {
-        continue;
-      }
-      await suggestedItemsHttp.patchSuggestedItemHttp(id, itemPatch.id, {
-        status: itemPatch.status,
-        description: itemPatch.description,
-      });
     }
   }
 
@@ -200,8 +187,6 @@ export async function addAlertMock(
 ) {
   return alertsHttp.createAlertHttp(alert);
 }
-
-export const postAssistantDecisionFlowMock = http.postAssistantDecisionFlowMock;
 
 export async function postAssistantChatMock(
   patientId: string,

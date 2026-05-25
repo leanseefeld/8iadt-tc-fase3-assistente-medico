@@ -1,4 +1,4 @@
-import type { Exam, Patient, SuggestedActionItem } from '@/types/domain';
+import type { Exam, Patient } from '@/types/domain';
 
 export type ReAdmitOverrides = {
   observations?: string;
@@ -20,5 +20,4 @@ export type PatchPatientBody = Partial<
 > & {
   currentMedications?: string[];
   exams?: Partial<Exam>[];
-  suggestedItems?: Partial<SuggestedActionItem>[];
 };
