@@ -138,6 +138,33 @@ async def list_messages_by_conversation(
     return list(result.scalars().all())
 
 
+async def list_active_messages_by_conversation(
+    session: AsyncSession,
+    conversation_id: str,
+) -> list[ConversationMessage]:
+    """Mensagens visíveis na UI e usadas no histórico do grafo (não substituídas)."""
+    statement = (
+        select(ConversationMessage)
+        .where(ConversationMessage.conversation_id == conversation_id)
+        .where(col(ConversationMessage.superseded_by_message_id).is_(None))
+        .order_by(col(ConversationMessage.created_at).asc())
+    )
+    result = await session.execute(statement)
+    return list(result.scalars().all())
+
+
+async def mark_message_superseded(
+    session: AsyncSession,
+    message: ConversationMessage,
+    *,
+    replacement_message_id: str,
+) -> ConversationMessage:
+    message.superseded_by_message_id = replacement_message_id
+    session.add(message)
+    await session.flush()
+    return message
+
+
 async def archive_conversation(
     session: AsyncSession,
     conversation: Conversation,

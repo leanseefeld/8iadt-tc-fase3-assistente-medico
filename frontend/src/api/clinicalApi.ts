@@ -197,6 +197,7 @@ export async function postAssistantChatMock(
 }
 
 export const patchAssistantMessageFeedback = http.patchAssistantMessageFeedback;
+export const postRegenerateAssistantMessage = http.postRegenerateAssistantMessage;
 export const listAssistantConversations = http.listAssistantConversations;
 export const getAssistantConversationMessages =
   http.getAssistantConversationMessages;

@@ -14,6 +14,7 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ### 2026-05-25
 
+- **chat-regenerate-last-answer** — agent:cursor — Regenerar só a última resposta: `superseded_by_message_id` em `conversation_messages`; POST `.../messages/{id}/regenerate` (SSE/JSON); UI 🔄 antes do 👍/👎; histórico/GET só mensagens ativas. — Revisão: `c7af82e` Merge branch 'feature/conversations-persistence'
 - **aux-llm-interaction-log** — agent:cursor — Tabela `conversation_message_llm_calls` + `MEDICO_LLM_INTERACTION_LOG_ENABLED`; `llm_client.tracked_ainvoke` (router/rewrite/rerank/guardrail); extração por `messageId` via repo. — Revisão: `c7af82e` Merge branch 'feature/conversations-persistence'
 
 ### 2026-05-24

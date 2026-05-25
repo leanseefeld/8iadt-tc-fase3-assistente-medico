@@ -134,6 +134,43 @@ export async function getAssistantConversationMessages(
   return (await res.json()) as ConversationMessagesResponse;
 }
 
+export async function postRegenerateAssistantMessage(
+  conversationId: string,
+  messageId: string,
+  options?: AssistantChatRequestOptions,
+): Promise<ChatResponse> {
+  const url = `${API_BASE_URL}/assistant/conversations/${conversationId}/messages/${messageId}/regenerate`;
+  const useSse = Boolean(
+    options && (options.onToken != null || options.onMeta != null),
+  );
+
+  if (useSse) {
+    const res = await apiFetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'text/event-stream',
+      },
+    });
+    if (!res.ok) {
+      const detail = await parseHttpErrorDetail(res);
+      options?.onError?.(detail);
+      throw new Error(detail);
+    }
+    return consumeAssistantChatSse(res, options);
+  }
+
+  const res = await apiFetch(url, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+  if (!res.ok) {
+    throw new Error(await parseHttpErrorDetail(res));
+  }
+  return (await res.json()) as ChatResponse;
+}
+
 export async function archiveAssistantConversation(
   conversationId: string,
 ): Promise<ConversationArchiveResponse> {

@@ -48,4 +48,10 @@ class ConversationMessage(SQLModel, table=True):
     llm_output: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     feedback_rating: str | None = Field(default=None, index=True)  # positive | negative
     guardrail_status: str | None = Field(default=None)
+    superseded_by_message_id: str | None = Field(
+        default=None,
+        foreign_key="conversation_messages.id",
+        index=True,
+        description="Id da mensagem que substituiu esta; null = ativa na UI/histórico.",
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)

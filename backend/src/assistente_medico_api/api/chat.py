@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-import json
 import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.state import CHAT_HISTORY_MAX_ITEMS, ChatRAGState
 from assistente_medico_api.deps import get_session
 from assistente_medico_api.services import chat_persistence
+from assistente_medico_api.services.assistant_graph_delivery import (
+    GraphStreamContext,
+    assistant_graph_sse_response,
+    assistant_response_json,
+    invoke_assistant_graph,
+)
 from assistente_medico_api.repositories import conversation_repo, patient_repo
 from assistente_medico_api.schemas.chat import (
     ChatHistoryTurnModel,
     ChatRequest,
-    ChatResponseJson,
     ConversationArchiveResponse,
     ConversationListResponse,
     ConversationMessagesResponse,
@@ -122,6 +125,14 @@ def _get_graph(request: Request):
     return graph
 
 
+def _app_settings(request: Request) -> Settings:
+    return getattr(request.app.state, "settings", None) or Settings()
+
+
+def _wants_sse(accept: str | None) -> bool:
+    return bool(accept and "text/event-stream" in accept.lower())
+
+
 def _flow_ts(base: datetime, offset_seconds: int) -> str:
     return (base + timedelta(seconds=offset_seconds)).strftime("%H:%M:%S")
 
@@ -135,6 +146,40 @@ def _require_doctor_id() -> str:
             detail="Header X-User-Id obrigatorio para o chat.",
         )
     return doctor_id
+
+
+async def _persist_chat_turn(
+    session: AsyncSession,
+    request: Request,
+    *,
+    conversation,
+    doctor_message: str,
+    final_state: ChatRAGState | dict,
+) -> str:
+    return await chat_persistence.append_turn(
+        session,
+        conversation=conversation,
+        doctor_message=doctor_message,
+        final_state=final_state,
+        settings=_app_settings(request),
+    )
+
+
+async def _persist_regenerated_assistant(
+    session: AsyncSession,
+    request: Request,
+    *,
+    conversation,
+    superseded_message,
+    final_state: dict,
+) -> str:
+    return await chat_persistence.regenerate_assistant_message(
+        session,
+        conversation=conversation,
+        superseded_message=superseded_message,
+        final_state=final_state,
+        settings=_app_settings(request),
+    )
 
 
 @router.post("/chat")
@@ -163,9 +208,8 @@ async def post_chat(
         is_resumed_thread=is_resumed_thread,
     )
     if body.patient_id:
-        # Avoid stale patient context when exam/vitals updates happen mid-thread.
         await invalidate_patient_context(request.app.state, body.patient_id)
-    wants_stream = bool(accept and "text/event-stream" in accept.lower())
+    wants_stream = _wants_sse(accept)
 
     set_thread_id(thread_id)
     set_patient_id(body.patient_id or None)
@@ -192,22 +236,14 @@ async def post_chat(
         },
     )
 
-    # --- Caminho JSON: usa API async (grafo contém nós async) ---
     if not wants_stream:
-        try:
-            final: ChatRAGState = await graph.ainvoke(initial, config)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Falha ao executar o assistente: {exc!s}",
-            ) from exc
-        settings = getattr(request.app.state, "settings", None) or Settings()
-        assistant_message_id = await chat_persistence.append_turn(
+        final = await invoke_assistant_graph(graph, initial, config)
+        assistant_message_id = await _persist_chat_turn(
             session,
+            request,
             conversation=conversation,
             doctor_message=body.message,
             final_state=final,
-            settings=settings,
         )
         await session.commit()
 
@@ -234,147 +270,52 @@ async def post_chat(
                 "guardrail_status": final.get("guardrail_status"),
             },
         )
-        return ChatResponseJson(
-            text=final.get("answer") or "",
-            sources=list(final.get("sources") or []),
-            reasoning=list(final.get("reasoning_steps") or []),
+        return assistant_response_json(
+            final,
             thread_id=thread_id,
             message_id=assistant_message_id,
-            audit_id=final.get("audit_id") or None,
-            guardrail_status=final.get("guardrail_status") or None,
-            guardrail_reason=final.get("guardrail_reason") or None,
         )
 
-    # --- Caminho SSE: astream_events emite on_chat_model_stream por token ---
-    async def event_gen():
-        tokens_streamed = 0
-        guard_status: str | None = None
-        final_state: dict = {}
+    def finalize_sse(ctx: GraphStreamContext) -> None:
+        lat = round((time.perf_counter() - t_started) * 1000, 2)
+        audit(
+            "chat_response_done",
+            kind="chat",
+            latency_ms=lat,
+            thread_id=thread_id,
+            patient_id=(body.patient_id or None),
+            mode="sse",
+            guardrail_status=ctx.guardrail_status,
+            tokens_streamed=ctx.tokens_streamed,
+        )
+        clinical_audit(
+            ClinicalAuditAction.CONVERSA_ASSISTENTE_FINALIZADA,
+            patient_id=body.patient_id,
+            descricao="Resposta do assistente entregue (modo SSE).",
+            detalhes={
+                "thread_id": thread_id,
+                "modo": "sse",
+                "latency_ms": lat,
+                "tokens_streamed": ctx.tokens_streamed,
+                "guardrail_status": ctx.guardrail_status,
+            },
+        )
 
-        def finalize_audit() -> None:
-            lat = round((time.perf_counter() - t_started) * 1000, 2)
-            audit(
-                "chat_response_done",
-                kind="chat",
-                latency_ms=lat,
-                thread_id=thread_id,
-                patient_id=(body.patient_id or None),
-                mode="sse",
-                guardrail_status=guard_status,
-                tokens_streamed=tokens_streamed,
-            )
-            clinical_audit(
-                ClinicalAuditAction.CONVERSA_ASSISTENTE_FINALIZADA,
-                patient_id=body.patient_id,
-                descricao="Resposta do assistente entregue (modo SSE).",
-                detalhes={
-                    "thread_id": thread_id,
-                    "modo": "sse",
-                    "latency_ms": lat,
-                    "tokens_streamed": tokens_streamed,
-                    "guardrail_status": guard_status,
-                },
-            )
-
-        try:
-            async for event in graph.astream_events(initial, config, version="v2"):
-                kind = event["event"]
-
-                # Accumulate outputs from every chain-end so final_state has the full picture.
-                if kind == "on_chain_end":
-                    output = event["data"].get("output") or {}
-                    if isinstance(output, dict):
-                        final_state.update(output)
-
-                # Rerank terminou → envia metadados antes dos tokens.
-                if kind == "on_chain_end" and event.get("name") == "rerank":
-                    output = event["data"].get("output") or {}
-                    yield {
-                        "event": "sources",
-                        "data": json.dumps(
-                            {"sources": list(final_state.get("sources") or output.get("sources") or [])}
-                        ),
-                    }
-                    yield {
-                        "event": "reasoning",
-                        "data": json.dumps(
-                            {"steps": list(final_state.get("reasoning_steps") or output.get("reasoning_steps") or [])}
-                        ),
-                    }
-
-                # Guardrail terminou → envia status e resposta final.
-                # Se o status não for "safe", o frontend substitui o texto
-                # acumulado pelos tokens já exibidos (AVISO appenda disclaimer;
-                # BLOQUEAR/regenerated substitui por mensagem segura).
-                elif kind == "on_chain_end" and event.get("name") == "guardrail":
-                    output = event["data"].get("output") or {}
-                    guard_status = final_state.get("guardrail_status") or output.get("guardrail_status")
-                    yield {
-                        "event": "guardrail",
-                        "data": json.dumps(
-                            {
-                                "status": final_state.get("guardrail_status"),
-                                "reason": final_state.get("guardrail_reason"),
-                                "answer": final_state.get("answer"),
-                                "auditId": final_state.get("audit_id"),
-                            }
-                        ),
-                    }
-
-                # Token do LLM dentro do nó generate — filtra por nó para não vazar
-                # tokens internos do guardrail (classificador, regeneração).
-                elif kind == "on_chat_model_stream" and event.get("metadata", {}).get("langgraph_node") == "generate":
-                    chunk = event["data"].get("chunk")
-                    piece = getattr(chunk, "content", None) if chunk else None
-                    if isinstance(piece, list):
-                        piece = "".join(str(p) for p in piece)
-                    if piece:
-                        tokens_streamed += 1
-                        yield {
-                            "event": "token",
-                            "data": json.dumps({"content": str(piece)}),
-                        }
-
-            final_payload = {
-                "text": final_state.get("answer") or "",
-                "sources": list(final_state.get("sources") or []),
-                "reasoning": list(final_state.get("reasoning_steps") or []),
-                "threadId": thread_id,
-                "auditId": final_state.get("audit_id"),
-                "guardrailStatus": final_state.get("guardrail_status"),
-                "guardrailReason": final_state.get("guardrail_reason"),
-            }
-
-            settings = getattr(request.app.state, "settings", None) or Settings()
-            assistant_message_id = await chat_persistence.append_turn(
-                session,
-                conversation=conversation,
-                doctor_message=body.message,
-                final_state=final_state,
-                settings=settings,
-            )
-            await session.commit()
-
-            yield {
-                "event": "final",
-                "data": json.dumps(final_payload),
-            }
-            yield {
-                "event": "done",
-                "data": json.dumps({"threadId": thread_id, "messageId": assistant_message_id}),
-            }
-
-        except Exception as exc:
-            yield {
-                "event": "error",
-                "data": json.dumps({"detail": str(exc)}),
-            }
-            finalize_audit()
-            return
-
-        finalize_audit()
-
-    return EventSourceResponse(event_gen())
+    return assistant_graph_sse_response(
+        graph=graph,
+        initial=initial,
+        config=config,
+        thread_id=thread_id,
+        session=session,
+        persist=lambda final_state: _persist_chat_turn(
+            session,
+            request,
+            conversation=conversation,
+            doctor_message=body.message,
+            final_state=final_state,
+        ),
+        finalize=finalize_sse,
+    )
 
 
 @router.get("/conversations", response_model=ConversationListResponse)
@@ -428,6 +369,108 @@ async def archive_conversation(
     return result
 
 
+@router.post("/conversations/{conversation_id}/messages/{message_id}/regenerate")
+async def post_regenerate_assistant_message(
+    request: Request,
+    conversation_id: str,
+    message_id: str,
+    session: AsyncSession = Depends(get_session),
+    accept: Annotated[str | None, Header(alias="Accept")] = None,
+):
+    """Regenera a última resposta do assistente; a mensagem anterior permanece no banco."""
+    graph = _get_graph(request)
+    doctor_id = _require_doctor_id()
+    conversation = await chat_persistence.get_active_conversation_for_doctor(
+        session,
+        conversation_id=conversation_id,
+        doctor_id=doctor_id,
+    )
+    superseded, user_row, history = await chat_persistence.resolve_regeneration_target(
+        session,
+        conversation_id=conversation_id,
+        message_id=message_id,
+    )
+
+    thread_id = conversation_id
+    config: dict = {"configurable": {"thread_id": thread_id}}
+    initial = chat_persistence.build_regenerate_invoke_payload(
+        conversation=conversation,
+        user_message_content=user_row.content,
+        chat_history=history,
+    )
+
+    if conversation.patient_id:
+        await invalidate_patient_context(request.app.state, conversation.patient_id)
+
+    set_thread_id(thread_id)
+    set_patient_id(conversation.patient_id or None)
+    wants_stream = _wants_sse(accept)
+    t_started = time.perf_counter()
+
+    audit(
+        "chat_regenerate_requested",
+        kind="chat",
+        thread_id=thread_id,
+        patient_id=(conversation.patient_id or None),
+        message_id=message_id,
+        stream=wants_stream,
+    )
+
+    if not wants_stream:
+        final = await invoke_assistant_graph(graph, initial, config)
+        new_message_id = await _persist_regenerated_assistant(
+            session,
+            request,
+            conversation=conversation,
+            superseded_message=superseded,
+            final_state=final,
+        )
+        await session.commit()
+
+        lat = round((time.perf_counter() - t_started) * 1000, 2)
+        audit(
+            "chat_regenerate_done",
+            kind="chat",
+            latency_ms=lat,
+            thread_id=thread_id,
+            message_id=new_message_id,
+            mode="json",
+        )
+        return assistant_response_json(
+            final,
+            thread_id=thread_id,
+            message_id=new_message_id,
+        )
+
+    def finalize_regenerate_sse(ctx: GraphStreamContext) -> None:
+        lat = round((time.perf_counter() - t_started) * 1000, 2)
+        audit(
+            "chat_regenerate_done",
+            kind="chat",
+            latency_ms=lat,
+            thread_id=thread_id,
+            mode="sse",
+            guardrail_status=ctx.guardrail_status,
+            tokens_streamed=ctx.tokens_streamed,
+        )
+
+    return assistant_graph_sse_response(
+        graph=graph,
+        initial=initial,
+        config=config,
+        thread_id=thread_id,
+        session=session,
+        persist=lambda final_state: _persist_regenerated_assistant(
+            session,
+            request,
+            conversation=conversation,
+            superseded_message=superseded,
+            final_state=final_state,
+        ),
+        finalize=finalize_regenerate_sse,
+    )
+
+
 @router.patch(
     "/conversations/{conversation_id}/messages/{message_id}",
     response_model=MessageFeedbackPatchResponse,
@@ -440,23 +483,20 @@ async def patch_message_feedback(
 ) -> MessageFeedbackPatchResponse:
     """Avalia ou remove avaliação de uma mensagem do assistente."""
     doctor_id = _require_doctor_id()
-    conversation = await conversation_repo.get_conversation_by_id(session, conversation_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
-    if conversation.doctor_id != doctor_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Conversa pertence a outro medico",
-        )
-    if conversation.archived_at is not None:
-        raise HTTPException(
-            status_code=410,
-            detail="Conversa arquivada e inacessivel",
-        )
+    await chat_persistence.get_active_conversation_for_doctor(
+        session,
+        conversation_id=conversation_id,
+        doctor_id=doctor_id,
+    )
 
     message = await conversation_repo.get_message_by_id(session, message_id)
     if message is None or message.conversation_id != conversation_id:
         raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    if message.superseded_by_message_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Mensagem substituida e inacessivel",
+        )
     if message.author != "assistant":
         raise HTTPException(
             status_code=400,

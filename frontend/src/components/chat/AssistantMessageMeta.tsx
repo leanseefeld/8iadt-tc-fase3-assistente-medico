@@ -1,4 +1,5 @@
 import { AssistantMessageFeedback } from '@/components/chat/AssistantMessageFeedback';
+import { AssistantMessageRegenerate } from '@/components/chat/AssistantMessageRegenerate';
 import type { MessageFeedbackRating } from '@/types/domain';
 
 export type ExpandedMetaPanel = 'sources' | 'reasoning';
@@ -14,6 +15,11 @@ export interface AssistantMessageMetaProps {
   feedbackRating?: MessageFeedbackRating;
   feedbackDisabled?: boolean;
   onFeedbackSelect?: (rating: MessageFeedbackRating) => void;
+  /** Exibe 🔄 antes do feedback na última resposta persistida. */
+  showRegenerate?: boolean;
+  regenerateDisabled?: boolean;
+  regenerateBusy?: boolean;
+  onRegenerate?: () => void;
 }
 
 function metaToggleButtonClass(active: boolean): string {
@@ -36,6 +42,10 @@ export function AssistantMessageMeta({
   feedbackRating,
   feedbackDisabled = false,
   onFeedbackSelect,
+  showRegenerate = false,
+  regenerateDisabled = false,
+  regenerateBusy = false,
+  onRegenerate,
 }: AssistantMessageMetaProps) {
   const sourcesPanelId = `${messageId}-sources-panel`;
   const reasoningPanelId = `${messageId}-reasoning-panel`;
@@ -71,12 +81,23 @@ export function AssistantMessageMeta({
             </button>
           ) : null}
         </div>
-        {showFeedback && onFeedbackSelect ? (
-          <AssistantMessageFeedback
-            rating={feedbackRating}
-            disabled={feedbackDisabled}
-            onSelect={onFeedbackSelect}
-          />
+        {(showRegenerate && onRegenerate) || (showFeedback && onFeedbackSelect) ? (
+          <div className="ml-auto flex shrink-0 items-center justify-end gap-1">
+            {showRegenerate && onRegenerate ? (
+              <AssistantMessageRegenerate
+                disabled={regenerateDisabled}
+                busy={regenerateBusy}
+                onRegenerate={onRegenerate}
+              />
+            ) : null}
+            {showFeedback && onFeedbackSelect ? (
+              <AssistantMessageFeedback
+                rating={feedbackRating}
+                disabled={feedbackDisabled}
+                onSelect={onFeedbackSelect}
+              />
+            ) : null}
+          </div>
         ) : null}
       </div>
       {sourcesActive && sources.length > 0 ? (

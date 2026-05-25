@@ -11,14 +11,17 @@ import {
   getAssistantConversationMessages,
   patchAssistantMessageFeedback,
   postAssistantChatMock,
+  postRegenerateAssistantMessage,
 } from '@/api/clinicalApi';
 import { useConversationRefresh } from '@/context/ConversationRefreshContext';
 import { useToast } from '@/context/ToastContext';
 import type { ConversationMessageDto, MessageFeedbackRating } from '@/types/domain';
 import type { ChatMessage, ChatSession, OptimisticConversationEntry } from '@/types/chatSession';
 import {
+  mergeStreamMeta,
   pendingSessionKey,
   resolveSessionKey,
+  sessionHasInFlightWork,
   truncatePreview,
 } from '@/types/chatSession';
 
@@ -52,6 +55,11 @@ interface ChatSessionContextValue {
     threadId: string | null,
     localMessageId: string,
     clicked: MessageFeedbackRating,
+  ) => Promise<void>;
+  regenerateMessage: (
+    patientId: string,
+    threadId: string | null,
+    localMessageId: string,
   ) => Promise<void>;
   clearPendingSession: (patientId: string) => void;
 }
@@ -153,7 +161,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
   );
 
   const isThreadGenerating = useCallback((threadId: string): boolean => {
-    return sessionsRef.current.get(threadId)?.status === 'generating';
+    return sessionHasInFlightWork(sessionsRef.current.get(threadId));
   }, []);
 
   const getOptimisticSidebarEntries = useCallback(
@@ -176,7 +184,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
           pushEntry({
             id: pendingSessionKey(patientId),
             preview: truncatePreview(firstUser.text),
-            generating: pending.status === 'generating',
+            generating: sessionHasInFlightWork(pending),
             isPendingDraft: true,
           });
         }
@@ -196,7 +204,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         pushEntry({
           id: session.threadId,
           preview: truncatePreview(firstUser.text),
-          generating: session.status === 'generating',
+          generating: sessionHasInFlightWork(session),
           isPendingDraft: false,
         });
       }
@@ -212,7 +220,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         return;
       }
       const existing = sessionsRef.current.get(threadId);
-      if (existing?.status === 'generating') {
+      if (sessionHasInFlightWork(existing)) {
         return;
       }
 
@@ -361,11 +369,12 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
           return res.threadId ?? threadId;
         }
 
+        const prevAssistant = session.messages.find((m) => m.id === assistantId);
         const finalMessages = patchAssistantMessage(session.messages, assistantId, {
           text: res.text,
           streaming: false,
-          sources: res.sources,
-          reasoning: res.reasoning,
+          sources: mergeStreamMeta(res.sources, prevAssistant?.sources),
+          reasoning: mergeStreamMeta(res.reasoning, prevAssistant?.reasoning),
           ...(res.guardrailStatus ? { guardrailStatus: res.guardrailStatus } : {}),
           ...(res.messageId ? { persistedMessageId: res.messageId } : {}),
         });
@@ -447,6 +456,109 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     [patchMessage, showToast],
   );
 
+  const regenerateMessage = useCallback(
+    async (
+      patientId: string,
+      threadId: string | null,
+      localMessageId: string,
+    ) => {
+      const key = resolveSessionKey(patientId, threadId);
+      const session = sessionsRef.current.get(key);
+      const effectiveThreadId = session?.threadId ?? threadId;
+      const msg = session?.messages.find((m) => m.id === localMessageId);
+      if (!msg?.persistedMessageId || !effectiveThreadId) {
+        return;
+      }
+      if (msg.regenerating || session?.status === 'generating') {
+        return;
+      }
+      if (session?.messages.some((m) => m.regenerating)) {
+        return;
+      }
+
+      const previousText = msg.text;
+      const previousSources = msg.sources;
+      const previousReasoning = msg.reasoning;
+      const previousPersistedId = msg.persistedMessageId;
+      const previousFeedback = msg.feedbackRating;
+
+      patchMessage(patientId, threadId, localMessageId, {
+        regenerating: true,
+        streaming: true,
+        text: '',
+        sources: [],
+        reasoning: [],
+        expandedPanel: null,
+        feedbackRating: undefined,
+      });
+
+      try {
+        const res = await postRegenerateAssistantMessage(
+          effectiveThreadId,
+          previousPersistedId,
+          {
+            onToken: (delta) => {
+              const current = sessionsRef.current.get(key);
+              if (!current) {
+                return;
+              }
+              sessionsRef.current.set(key, {
+                ...current,
+                messages: patchAssistantMessage(current.messages, localMessageId, {
+                  text:
+                    (current.messages.find((m) => m.id === localMessageId)?.text ??
+                      '') + delta,
+                }),
+              });
+              bump();
+            },
+            onMeta: (src, steps) => {
+              const current = sessionsRef.current.get(key);
+              if (!current) {
+                return;
+              }
+              sessionsRef.current.set(key, {
+                ...current,
+                messages: patchAssistantMessage(current.messages, localMessageId, {
+                  sources: src,
+                  reasoning: steps,
+                }),
+              });
+              bump();
+            },
+            onError: (detail) => {
+              showToast(detail);
+            },
+          },
+        );
+
+        const current = sessionsRef.current.get(key);
+        const prevAssistant = current?.messages.find((m) => m.id === localMessageId);
+        patchMessage(patientId, threadId, localMessageId, {
+          text: res.text,
+          streaming: false,
+          regenerating: false,
+          sources: mergeStreamMeta(res.sources, prevAssistant?.sources),
+          reasoning: mergeStreamMeta(res.reasoning, prevAssistant?.reasoning),
+          ...(res.guardrailStatus ? { guardrailStatus: res.guardrailStatus } : {}),
+          ...(res.messageId ? { persistedMessageId: res.messageId } : {}),
+        });
+      } catch {
+        patchMessage(patientId, threadId, localMessageId, {
+          regenerating: false,
+          streaming: false,
+          text: previousText,
+          sources: previousSources,
+          reasoning: previousReasoning,
+          persistedMessageId: previousPersistedId,
+          feedbackRating: previousFeedback,
+        });
+        showToast('Não foi possível regenerar a resposta. Tente novamente.');
+      }
+    },
+    [bump, patchMessage, showToast],
+  );
+
   const clearPendingSession = useCallback(
     (patientId: string) => {
       const pk = pendingSessionKey(patientId);
@@ -471,6 +583,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       patchMessage,
       updateMessages,
       submitFeedback,
+      regenerateMessage,
       clearPendingSession,
     }),
     [
@@ -483,6 +596,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       patchMessage,
       updateMessages,
       submitFeedback,
+      regenerateMessage,
       clearPendingSession,
     ],
   );

@@ -18,6 +18,11 @@ import { useConversationRefresh } from '@/context/ConversationRefreshContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
 import type { MessageFeedbackRating } from '@/types/domain';
+import {
+  messageIsInFlight,
+  resolveRegenerateMessageId,
+  sessionHasInFlightWork,
+} from '@/types/chatSession';
 
 export function ChatPage() {
   const { activePatientId } = useAppSession();
@@ -35,6 +40,7 @@ export function ChatPage() {
     ensureSessionLoaded,
     sendMessage,
     submitFeedback,
+    regenerateMessage,
     updateMessages,
     clearPendingSession,
   } = useChatSession();
@@ -56,7 +62,8 @@ export function ChatPage() {
   const messages = session?.messages ?? [];
   const assistantThreadId = session?.threadId ?? threadFromUrl;
   const loadingThread = session?.status === 'loading';
-  const generating = session?.status === 'generating';
+  const conversationInFlight = sessionHasInFlightWork(session ?? undefined);
+  const regenerateMessageId = resolveRegenerateMessageId(session ?? undefined);
 
   useEffect(() => {
     if (!activePatientId) {
@@ -95,6 +102,13 @@ export function ChatPage() {
     navigate,
     showToast,
   ]);
+
+  async function handleRegenerate(localMessageId: string) {
+    if (!activePatientId || conversationInFlight) {
+      return;
+    }
+    await regenerateMessage(activePatientId, threadFromUrl, localMessageId);
+  }
 
   async function handleFeedbackSelect(
     localMessageId: string,
@@ -193,7 +207,7 @@ export function ChatPage() {
             <button
               type="button"
               onClick={() => setArchiveOpen(true)}
-              disabled={generating}
+              disabled={conversationInFlight}
               className="flex items-center gap-1 rounded-lg border border-amber-600 px-2 py-1 text-xs text-amber-900 hover:bg-amber-50 disabled:opacity-50"
             >
               <Archive className="h-3.5 w-3.5" aria-hidden />
@@ -249,11 +263,16 @@ export function ChatPage() {
                       onTogglePanel={(panel) =>
                         toggleMessagePanel(msg.id, panel)
                       }
+                      showRegenerate={msg.id === regenerateMessageId}
+                      regenerateBusy={Boolean(msg.regenerating)}
+                      regenerateDisabled={conversationInFlight}
+                      onRegenerate={() => void handleRegenerate(msg.id)}
                       showFeedback={Boolean(msg.persistedMessageId)}
                       feedbackRating={msg.feedbackRating}
                       feedbackDisabled={
                         feedbackBusyMessageId === msg.id ||
-                        Boolean(msg.feedbackSubmitting)
+                        Boolean(msg.feedbackSubmitting) ||
+                        messageIsInFlight(msg)
                       }
                       onFeedbackSelect={(rating) =>
                         void handleFeedbackSelect(msg.id, rating)
@@ -284,12 +303,12 @@ export function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Digite sua pergunta…"
-              disabled={loadingThread}
+              disabled={loadingThread || conversationInFlight}
               className="min-w-0 flex-1 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={loadingThread}
+              disabled={loadingThread || conversationInFlight}
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50"
               aria-label="Enviar"
             >

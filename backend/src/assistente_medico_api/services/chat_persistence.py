@@ -39,6 +39,40 @@ def _ensure_doctor_owns(conversation: Conversation, doctor_id: str) -> None:
         )
 
 
+async def get_active_conversation_for_doctor(
+    session: AsyncSession,
+    *,
+    conversation_id: str,
+    doctor_id: str,
+) -> Conversation:
+    """Carrega conversa ativa do médico ou levanta 404/403/410."""
+    conversation = await conversation_repo.get_conversation_by_id(session, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    _ensure_doctor_owns(conversation, doctor_id)
+    _ensure_not_archived(conversation)
+    return conversation
+
+
+def build_regenerate_invoke_payload(
+    *,
+    conversation: Conversation,
+    user_message_content: str,
+    chat_history: list[ChatHistoryTurnState],
+) -> dict:
+    """Estado inicial do grafo para regenerar a última resposta (sem novo turno user)."""
+    return {
+        "query": user_message_content.strip(),
+        "patient_id": conversation.patient_id,
+        "retrieved_docs": [],
+        "sources": [],
+        "reasoning_steps": [],
+        "answer": "",
+        "retrieval_query": "",
+        "chat_history": chat_history,
+    }
+
+
 async def resolve_conversation(
     session: AsyncSession,
     *,
@@ -120,6 +154,104 @@ async def append_turn(
     return assistant_row.id
 
 
+async def resolve_regeneration_target(
+    session: AsyncSession,
+    *,
+    conversation_id: str,
+    message_id: str,
+) -> tuple[ConversationMessage, ConversationMessage, list[ChatHistoryTurnState]]:
+    """
+    Valida regeneração da última resposta do assistente.
+
+    Retorna (mensagem assistente a substituir, pergunta do médico do turno, histórico anterior).
+    """
+    active = await conversation_repo.list_active_messages_by_conversation(
+        session,
+        conversation_id,
+    )
+    if not active:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+
+    try:
+        idx = next(i for i, row in enumerate(active) if row.id == message_id)
+    except StopIteration:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada") from None
+
+    assistant_row = active[idx]
+    if assistant_row.author != "assistant":
+        raise HTTPException(
+            status_code=400,
+            detail="Apenas a ultima resposta do assistente pode ser regenerada",
+        )
+    if idx != len(active) - 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Apenas a ultima resposta do assistente pode ser regenerada",
+        )
+    if idx == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Nao ha pergunta do medico associada a esta resposta",
+        )
+
+    user_row = active[idx - 1]
+    if user_row.author != "user":
+        raise HTTPException(
+            status_code=400,
+            detail="Nao ha pergunta do medico associada a esta resposta",
+        )
+
+    history: list[ChatHistoryTurnState] = []
+    for row in active[: idx - 1]:
+        if row.author not in ("user", "assistant"):
+            continue
+        content = row.content.strip()
+        if not content:
+            continue
+        history.append({"role": row.author, "content": content})  # type: ignore[typeddict-item]
+    if len(history) > CHAT_HISTORY_MAX_ITEMS:
+        history = history[-CHAT_HISTORY_MAX_ITEMS:]
+
+    return assistant_row, user_row, history
+
+
+async def regenerate_assistant_message(
+    session: AsyncSession,
+    *,
+    conversation: Conversation,
+    superseded_message: ConversationMessage,
+    final_state: ChatRAGState,
+    settings: Settings,
+) -> str:
+    """Substitui resposta do assistente: marca a antiga e grava nova com logs auxiliares."""
+    now = datetime.now(UTC)
+    assistant_row = ConversationMessage(
+        conversation_id=conversation.id,
+        author="assistant",
+        content=(final_state.get("answer") or "").strip(),
+        reasoning_steps=list(final_state.get("reasoning_steps") or []) or None,
+        sources=list(final_state.get("sources") or []) or None,
+        llm_input=final_state.get("generate_llm_input"),
+        llm_output=final_state.get("generate_llm_output"),
+        guardrail_status=final_state.get("guardrail_status"),
+        created_at=now,
+    )
+    await conversation_repo.create_message(session, assistant_row)
+    await conversation_repo.mark_message_superseded(
+        session,
+        superseded_message,
+        replacement_message_id=assistant_row.id,
+    )
+    await persist_aux_trace(
+        session,
+        assistant_message_id=assistant_row.id,
+        trace=final_state.get("aux_llm_trace"),
+        settings=settings,
+    )
+    await conversation_repo.touch_conversation_updated_at(session, conversation)
+    return assistant_row.id
+
+
 async def list_patient_conversations(
     session: AsyncSession,
     *,
@@ -166,7 +298,10 @@ async def get_conversation_messages(
     _ensure_doctor_owns(conversation, doctor_id)
     _ensure_not_archived(conversation)
 
-    rows = await conversation_repo.list_messages_by_conversation(session, conversation_id)
+    rows = await conversation_repo.list_active_messages_by_conversation(
+        session,
+        conversation_id,
+    )
     messages = [
         ConversationMessageResponse(
             id=row.id,
@@ -217,7 +352,10 @@ async def build_chat_history_from_db(
     conversation_id: str,
 ) -> list[ChatHistoryTurnState]:
     """Converte mensagens persistidas em chat_history para retomada do grafo."""
-    rows = await conversation_repo.list_messages_by_conversation(session, conversation_id)
+    rows = await conversation_repo.list_active_messages_by_conversation(
+        session,
+        conversation_id,
+    )
     history: list[ChatHistoryTurnState] = []
     for row in rows:
         if row.author not in ("user", "assistant"):

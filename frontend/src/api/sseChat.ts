@@ -118,6 +118,20 @@ export async function consumeAssistantChatSse(
           typeof payload.detail === 'string' ? payload.detail : 'Erro no assistente.';
         handlers?.onError?.(detail);
         throw new Error(detail);
+      } else if (event === 'final') {
+        const s = payload.sources;
+        if (Array.isArray(s)) {
+          sources = s as string[];
+        }
+        const steps = payload.reasoning;
+        if (Array.isArray(steps)) {
+          reasoning = steps as string[];
+        }
+        const answer = payload.text;
+        if (typeof answer === 'string' && answer) {
+          text = answer;
+        }
+        handlers?.onMeta?.(sources, reasoning);
       } else if (event === 'done') {
         const tid = payload.threadId;
         if (typeof tid === 'string' && tid) {
