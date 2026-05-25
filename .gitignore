@@ -90,3 +90,7 @@ uploads/
 
 # Configurações de ambiente local (exemplo: streamlit, VSCode, etc.)
 .streamlit
+
+.python-version
+
+logs/
