@@ -685,11 +685,10 @@ def _format_list(value: Any, *, max_items: int = 10, max_chars: int = 500) -> st
 
 
 def format_context_document(doc: Document, rank: int) -> str:
-    """Formata um documento recuperado com metadados ricos para o prompt."""
+    """Formata um documento recuperado com metadados clínicos para o prompt (sem score/ranking)."""
     meta = dict(doc.metadata or {})
     page_start = meta.get("page_start", "?")
     page_end = meta.get("page_end", "?")
-    reasons = _format_list(meta.get("ranking_reasons"), max_items=8, max_chars=240)
     return (
         f"[Documento {rank}]\n"
         f"Diretriz: {meta.get('diretriz') or '-'}\n"
@@ -698,9 +697,7 @@ def format_context_document(doc: Document, rank: int) -> str:
         f"Medicamentos relacionados: {_format_list(meta.get('medicamentos'), max_items=10, max_chars=600)}\n"
         f"Seção: {meta.get('section') or meta.get('header_1') or '-'}\n"
         f"Fonte: {meta.get('source_pdf') or meta.get('source_stem') or '-'}\n"
-        f"Páginas: {page_start}-{page_end}\n"
-        f"Score final: {meta.get('final_score', '-')}\n"
-        f"Motivos do ranking: {reasons}\n\n"
+        f"Páginas: {page_start}-{page_end}\n\n"
         f"Trecho:\n{str(doc.page_content or '').strip()}"
     )
 
