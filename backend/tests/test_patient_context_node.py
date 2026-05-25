@@ -191,13 +191,13 @@ def test_format_patient_context_with_completed_exams():
     pending_idx = next(i for i, l in enumerate(lines) if "pendentes" in l)
     completed_idx = next(i for i, l in enumerate(lines) if "concluídos" in l)
     
-    # Exame pendente deve estar entre "Exames pendentes" e "Exames concluídos"
-    pending_section = "\n".join(lines[pending_idx:completed_idx])
+    # Exame pendente deve estar a partir de "Exames pendentes" (já que é a última seção)
+    pending_section = "\n".join(lines[pending_idx:])
     assert "Creatinina" in pending_section
     assert "pendente" in pending_section
     
-    # Exame concluído deve estar após "Exames concluídos"
-    completed_section = "\n".join(lines[completed_idx:])
+    # Exame concluído deve estar entre "Exames concluídos" e "Exames pendentes"
+    completed_section = "\n".join(lines[completed_idx:pending_idx])
     assert "HbA1c" in completed_section
     assert "7.5%" in completed_section
     assert "concluído" in completed_section

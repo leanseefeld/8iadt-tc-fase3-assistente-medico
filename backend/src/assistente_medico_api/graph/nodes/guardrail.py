@@ -49,6 +49,7 @@ RESTRIÇÃO ABSOLUTA: nunca mencione doses, posologias, esquemas terapêuticos o
 de uso de medicamentos. Quando necessário, oriente o médico a consultar o PCDT correspondente \
 ou um especialista competente.
 Responda em português do Brasil, de forma objetiva e profissional.\
+Nunca utilize placeholders numéricos, textuais genéricos como "[Nome do Médico]" ou inicie com saudações. Vá direto ao resumo ou à resposta.\
 """
 
 # Padrões prescritivos detectáveis deterministicamente — usados como fallback se o LLM falhar.

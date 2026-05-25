@@ -30,6 +30,7 @@ from assistente_medico_api.schemas.chat import (
 )
 from assistente_medico_api.graph.state import ChatHistoryTurnState
 from assistente_medico_api.services.protocol_map import get_protocol_for_cid
+from assistente_medico_api.services.patient_context_cache import invalidate_patient_context
 from assistente_medico_api.observability.audit import audit, truncate
 from assistente_medico_api.observability.context import (
     get_user_id,
@@ -160,6 +161,9 @@ async def post_chat(
         session,
         is_resumed_thread=is_resumed_thread,
     )
+    if body.patient_id:
+        # Avoid stale patient context when exam/vitals updates happen mid-thread.
+        await invalidate_patient_context(request.app.state, body.patient_id)
     wants_stream = bool(accept and "text/event-stream" in accept.lower())
 
     set_thread_id(thread_id)
