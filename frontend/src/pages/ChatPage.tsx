@@ -1,5 +1,5 @@
 import { Archive, Send } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -21,6 +21,7 @@ import type { MessageFeedbackRating } from '@/types/domain';
 import {
   messageIsInFlight,
   resolveRegenerateMessageId,
+  resolveSessionKey,
   sessionHasInFlightWork,
 } from '@/types/chatSession';
 
@@ -46,6 +47,9 @@ export function ChatPage() {
   } = useChatSession();
 
   const [input, setInput] = useState('');
+  /** Rascunho não enviado por conversa (chave = resolveSessionKey). */
+  const draftsRef = useRef<Record<string, string>>({});
+  const prevDraftKeyRef = useRef<string | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [feedbackBusyMessageId, setFeedbackBusyMessageId] = useState<string | null>(
@@ -64,6 +68,43 @@ export function ChatPage() {
   const loadingThread = session?.status === 'loading';
   const conversationInFlight = sessionHasInFlightWork(session ?? undefined);
   const regenerateMessageId = resolveRegenerateMessageId(session ?? undefined);
+  const sessionDraftKey = activePatientId
+    ? resolveSessionKey(activePatientId, threadFromUrl)
+    : null;
+  const sendDisabled = loadingThread || conversationInFlight;
+
+  // Restaura o rascunho da conversa ativa; migra pending → thread após 1ª mensagem.
+  useEffect(() => {
+    if (!sessionDraftKey) {
+      setInput('');
+      prevDraftKeyRef.current = null;
+      return;
+    }
+
+    const prevKey = prevDraftKeyRef.current;
+    if (
+      prevKey &&
+      prevKey !== sessionDraftKey &&
+      prevKey.startsWith('pending:') &&
+      !sessionDraftKey.startsWith('pending:')
+    ) {
+      const pendingDraft = draftsRef.current[prevKey] ?? '';
+      if (pendingDraft && !draftsRef.current[sessionDraftKey]) {
+        draftsRef.current[sessionDraftKey] = pendingDraft;
+      }
+      delete draftsRef.current[prevKey];
+    }
+
+    prevDraftKeyRef.current = sessionDraftKey;
+    setInput(draftsRef.current[sessionDraftKey] ?? '');
+  }, [sessionDraftKey]);
+
+  function setDraftForSession(key: string | null, value: string) {
+    setInput(value);
+    if (key) {
+      draftsRef.current[key] = value;
+    }
+  }
 
   useEffect(() => {
     if (!activePatientId) {
@@ -174,12 +215,12 @@ export function ChatPage() {
 
   async function send(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || loadingThread) {
+    if (!trimmed || sendDisabled) {
       return;
     }
-    setInput('');
+    setDraftForSession(sessionDraftKey, '');
 
-  // Stream roda no context — sobrevive troca de rota/conversa.
+    // Stream roda no context — sobrevive troca de rota/conversa.
     const newThreadId = await sendMessage(activePatientId!, threadFromUrl, trimmed);
     if (
       newThreadId &&
@@ -291,7 +332,7 @@ export function ChatPage() {
                 key={q}
                 type="button"
                 onClick={() => void send(q)}
-                disabled={loadingThread}
+                disabled={sendDisabled}
                 className="rounded-full border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-900 hover:bg-teal-100 disabled:opacity-50"
               >
                 {q.length > 42 ? `${q.slice(0, 40)}…` : q}
@@ -301,14 +342,14 @@ export function ChatPage() {
           <form onSubmit={onSubmit} className="flex gap-2">
             <input
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => setDraftForSession(sessionDraftKey, e.target.value)}
               placeholder="Digite sua pergunta…"
-              disabled={loadingThread || conversationInFlight}
+              disabled={loadingThread}
               className="min-w-0 flex-1 rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={loadingThread || conversationInFlight}
+              disabled={sendDisabled}
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50"
               aria-label="Enviar"
             >
