@@ -9,6 +9,7 @@ from assistente_medico_api.db.session import AsyncSessionLocal
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.models.exam import Exam
 from assistente_medico_api.models.patient import Patient
+from assistente_medico_api.models.suggested_item import SuggestedItem
 from assistente_medico_api.repositories import patient_repo
 
 # Rótulos de identidade de gênero (códigos canônicos do check-in).
@@ -119,6 +120,26 @@ def format_relative_time(dt: datetime, reference: datetime) -> str:
     return "há menos de 1 minuto"
 
 
+_SUGGESTED_TYPE_LABELS: dict[str, str] = {
+    "exam": "Exame",
+    "prescription": "Prescrição",
+    "observation": "Observação",
+    "review": "Reavaliação",
+}
+
+
+def format_suggested_actions_block(items: list[SuggestedItem]) -> str:
+    """Formata ações sugeridas com status 'suggested' para o prompt do LLM."""
+    active = [i for i in items if i.status == "suggested"]
+    if not active:
+        return ""
+    lines: list[str] = []
+    for item in active:
+        label = _SUGGESTED_TYPE_LABELS.get(item.type, item.type.capitalize())
+        lines.append(f"  - [{label}] {item.description}")
+    return "\n".join(lines)
+
+
 def _exam_requested_at(exam: Exam) -> datetime:
     return exam.requested_at if exam.requested_at.tzinfo else exam.requested_at.replace(tzinfo=UTC)
 
@@ -177,6 +198,7 @@ def format_patient_context(
     exams: list[Exam],
     *,
     reference: datetime | None = None,
+    suggested_items: list[SuggestedItem] | None = None,
 ) -> str:
     """Monta bloco de contexto clínico do paciente para o prompt."""
     ref = reference or datetime.now(UTC)
@@ -187,6 +209,7 @@ def format_patient_context(
     comorbidity_labels = resolve_comorbidity_labels(patient.comorbidities or [])
     medications = ", ".join(patient.current_medications or []) or "Nenhum"
     pending_exams, completed_exams = format_exam_sections(exams, cutoff=cutoff, reference=ref)
+    suggested_block = format_suggested_actions_block(suggested_items or [])
 
     lines = [
         f"- Nome: {patient.name}",
@@ -205,6 +228,8 @@ def format_patient_context(
             completed_exams or "  Nenhum",
             "- Exames pendentes (últimos 6 meses):",
             pending_exams or "  Nenhum",
+            "- Ações sugeridas pelo protocolo:",
+            suggested_block or "  Nenhuma",
         ]
     )
     return "\n".join(lines)
@@ -238,7 +263,8 @@ async def load_patient_context_node(state: ChatRAGState, settings: Settings) -> 
             }
 
         exams = await patient_repo.list_exams(session, pid)
-        formatted = format_patient_context(patient, exams)
+        suggested_items = await patient_repo.list_suggested_items(session, pid)
+        formatted = format_patient_context(patient, exams, suggested_items=suggested_items)
 
     step = f"Contexto clínico mais recente carregado: {patient.name}, {patient.age}a, CID {patient.cid_code}"
     return {

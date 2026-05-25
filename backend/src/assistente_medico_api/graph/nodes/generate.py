@@ -40,7 +40,21 @@ Quando não houver resultados (pergunta conversacional ou de acompanhamento):
 - Responda com base no histórico da conversa e no seu conhecimento geral.
 
 ## Foco da resposta
-Responda diretamente à "Mensagem do médico:", usando o restante do contexto apenas como subsídio.\
+Responda diretamente à "Mensagem do médico:", usando o restante do contexto apenas como subsídio.
+
+## Formatação de exames e ações clínicas
+Quando apresentar exames pendentes do paciente, use lista markdown:
+**Exames pendentes:**
+- **[nome do exame]** — solicitado [tempo relativo]
+
+Quando listar ações clínicas sugeridas ou recomendações de protocolo, use lista numerada com tipo entre colchetes:
+**Ações sugeridas:**
+1. [Exame] descrição
+2. [Prescrição] descrição
+3. [Observação] descrição
+4. [Reavaliação] descrição
+
+Tipos válidos: [Exame], [Prescrição], [Observação], [Reavaliação].\
 """
 
 
