@@ -81,6 +81,17 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 | `RAG_USE_CROSS_ENCODER_RERANK` ou `MEDICO_RAG_USE_CROSS_ENCODER_RERANK` | `false` | Liga reranking opcional por CrossEncoder após o rerank heurístico |
 | `RAG_CROSS_ENCODER_MODEL` ou `MEDICO_RAG_CROSS_ENCODER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Modelo `sentence-transformers` usado quando CrossEncoder está ativo |
 | `RAG_CROSS_ENCODER_TOP_N` ou `MEDICO_RAG_CROSS_ENCODER_TOP_N` | `15` | Quantos documentos heurísticos são enviados ao CrossEncoder |
+| `MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS` | `2` | Máximo de buscas por pergunta: tentativa inicial + um fallback |
+| `MEDICO_RAG_USE_LLM_RERANK` | `false` | Liga rerank/validação por LLM com fallback heurístico validado |
+| `MEDICO_RAG_LLM_RERANK_TOP_N` | `12` | Número de candidatos enviados ao LLM reranker quando habilitado |
+| `MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER` | `true` | Impede geração clínica grounded sem contexto validado suficiente |
+| `MEDICO_RAG_DEBUG` | `false` | Habilita diagnóstico adicional em rotas/ferramentas de debug |
+| `MEDICO_ENABLE_MEDICAL_NLP` | `true` | Ativa resolvedores NLP médicos opcionais no rewrite; catálogo Conitec continua ativo quando `false` |
+| `MEDICO_USE_MEDSPACY` | `false` | Ativa medSpaCy/PyRuSH. Desligado por padrão para evitar travamentos locais |
+| `MEDICO_MEDSPACY_MODEL` | `pt_core_news_sm` | Modelo spaCy em português usado pelo medSpaCy quando habilitado |
+| `MEDICO_MEDSPACY_LANGUAGE_CODE` | `pt` | Código de idioma passado ao medSpaCy |
+| `MEDICO_USE_SPACY` | `true` | Ativa spaCy NER leve quando modelo local existir |
+| `MEDICO_SPACY_MODEL` | `pt_core_news_sm` | Modelo spaCy local usado no fallback leve |
 | `MEDICO_DATABASE_URL`       | `sqlite+aiosqlite:///./assistente_medico.db` | URL do banco (SQLite assíncrono por padrão)                              |
 | `MEDICO_LOG_DIR`            | `./logs`                  | Diretório (relativo à raiz do repositório se não absoluto) para ficheiros JSONL de **auditoria clínica** diários (`audit_clinical_YYYY-MM-DD.jsonl`) |
 | `MEDICO_LOG_LEVEL`          | `INFO`                   | Nível dos loggers `assistente_medico.*` na consola |
@@ -104,6 +115,62 @@ Exemplo de leitura rápida da auditoria clínica:
 ```bash
 tail -n 5 logs/audit_clinical_$(date +%Y-%m-%d).jsonl | jq .
 ```
+
+## Grafo RAG do chat
+
+O chat real (`POST /api/assistant/chat`, tanto JSON quanto SSE) passa pelo mesmo grafo:
+
+```text
+router
+-> generate (direct_answer) -> guardrail
+-> rewrite -> retrieve -> rerank
+   -> generate (grounded_answer | insufficient_context) -> guardrail
+```
+
+Contratos principais no estado:
+
+- `router_result`: decisão conservadora sobre necessidade de RAG. Perguntas clínicas e follow-ups clínicos seguem para busca.
+- `rewrite_result`: `retrieval_query`, `expanded_query`, `structured_terms`, candidatos de catálogo e entendimento clínico.
+- `retrieve_result`: tentativa, query enviada ao Chroma, filtro de metadata, candidatos e configuração efetiva.
+- `rerank_result`: documentos finais, `context_quality` (`sufficient`, `partial`, `insufficient`), `failure_type`, seções esperadas/encontradas e debug do rerank.
+- `generation_mode`, `guardrail_status` e `guardrail_reason`: estratégia de geração e avaliação final de segurança.
+- `reasoning_steps`, `router_decision`, `query_expansion`, `retrieve_result`, `rerank_result`, `generation_mode`, `guardrail_status` e `guardrail_reason`: trilha funcional do fluxo RAG.
+
+`retrieve` é executado inicialmente e pode ser repetido como retry interno até `MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS`. Se uma pergunta pede seção específica, por exemplo `CRITÉRIOS DE INCLUSÃO`, e só há chunk de `CID-10`, o contexto fica `partial`, `context_sufficient=false` e o retry é acionado. Depois da última tentativa, contexto ainda parcial/insuficiente gera resposta controlada, sem LLM inventar conteúdo clínico.
+
+Localização dos nós:
+
+- `graph/nodes/router.py`: decide `search_needed` de forma conservadora.
+- `graph/nodes/rewrite.py`: restaura o LLM rewrite da `main`; usa `chat_history` para produzir `retrieval_query` e depois aplica expansão estruturada.
+- `graph/nodes/retrieve.py`: busca apenas candidatos no Chroma.
+- `graph/nodes/rerank.py`: filtra, reranqueia e valida suficiência.
+- `graph/nodes/generate.py`: único nó público de geração; escolhe `grounded_answer`, `direct_answer` ou `insufficient_context` por `generation_mode`.
+- `graph/nodes/guardrail.py`: avalia segurança da resposta final.
+
+O rewrite combina três fontes:
+
+1. LLM rewrite conversacional com transcript do histórico, preservado da `main`.
+2. `last_structured_terms` da memória para resolver follow-ups sem regex de doenças.
+3. Catálogo Conitec e `clinical_entity_resolver` para `linked_entities`, `catalog_candidates`, `structured_terms` e `expanded_query`.
+
+O `clinical_entity_resolver` usa o catálogo Conitec como fallback permanente. Por padrão, ele tenta spaCy leve quando houver modelo local e não carrega medSpaCy/PyRuSH. Para usar medSpaCy com modelo em português, instale o modelo spaCy localmente e configure:
+
+```bash
+python -m spacy download pt_core_news_sm
+export MEDICO_ENABLE_MEDICAL_NLP=true
+export MEDICO_USE_MEDSPACY=true
+export MEDICO_MEDSPACY_MODEL=pt_core_news_sm
+export MEDICO_MEDSPACY_LANGUAGE_CODE=pt
+```
+
+Com o orquestrador local:
+
+```bash
+python run-local.py --setup-medical-nlp
+python run-local.py --use-medspacy-pt
+```
+
+Nenhum modelo é baixado em runtime; se medSpaCy/spaCy não estiver instalado ou configurado, o backend continua funcionando pelo catálogo.
 
 ## Recuperação RAG
 

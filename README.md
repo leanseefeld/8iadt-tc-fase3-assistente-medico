@@ -51,3 +51,39 @@ python run-local.py --backend-port 8001 --frontend-port 5174
 # não executar migrations
 python run-local.py --skip-migrations
 ```
+
+## Fluxo RAG do chat
+
+O chat médico usa um grafo LangGraph com nós separados e auditáveis:
+
+```text
+load_memory
+-> router_search_needed
+   -> generate_direct_answer -> guardrail -> save_memory
+   -> rewrite_query -> retrieve_attempt_1 -> rerank_and_validate_context
+      -> generate_grounded_answer -> guardrail -> save_memory
+      -> fallback_retrieve_attempt_2 -> rerank_and_validate_context
+         -> generate_grounded_answer | generate_insufficient_context
+         -> guardrail -> save_memory
+```
+
+O limite é `MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS=2`: uma busca normal e uma busca de fallback no máximo. O `retrieve` só busca candidatos no Chroma; o `rerank_and_validate_context` filtra doença/diretriz, ordena e classifica o contexto como `sufficient`, `partial` ou `insufficient`; a geração clínica grounded só roda quando o contexto é suficiente.
+
+Os nós do grafo ficam em `backend/src/assistente_medico_api/graph/nodes/`:
+`load_memory.py`, `router.py`, `rewrite.py`, `retrieve.py`, `rerank.py`,
+`fallback_retrieve.py`, `generate.py`, `guardrail.py` e `save_memory.py`.
+O rewrite preserva o comportamento da `main`: usa LLM com transcript do histórico
+para gerar uma consulta autocontida e, em seguida, aplica catálogo Conitec e
+resolução clínica com spaCy (`pt_core_news_sm`) para produzir `expanded_query` e
+`structured_terms`.
+
+Para depurar divergência entre frontend/backend e inspector, use:
+
+```bash
+cd llm
+streamlit run scripts/rag_inspector_app.py
+# opcional, quando executado via Streamlit com argumentos:
+streamlit run scripts/rag_inspector_app.py -- --export-audit /tmp/rag-audit.json
+```
+
+O inspector chama o mesmo serviço central de debug do backend (`run_full_graph_debug`) e mostra `memory_result`, `router_result`, `rewrite_result`, `retrieve_result`, `rerank_result`, fontes e `audit_trace` exportável.

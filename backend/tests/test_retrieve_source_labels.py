@@ -2,10 +2,8 @@
 
 from langchain_core.documents import Document
 
-from assistente_medico_api.graph.nodes.retrieve import (
-    format_context_block,
-    format_source_label,
-)
+from assistente_medico_api.graph.context_formatting import format_context_block
+from assistente_medico_api.services.rag_pipeline_service import format_source_label
 
 
 def test_format_source_label_uses_same_index_as_context_block() -> None:

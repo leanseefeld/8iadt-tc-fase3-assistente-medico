@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_embed_model: str = "nomic-embed-text"
-    ollama_chat_model: str = "gemma4:e4b-it-q4_K_M"
+    ollama_chat_model: str = "llama3.2:3b"
     chroma_persist_dir: Path | None = Field(
         default=None,
         description="Se None, usa vectorstore/chroma na raiz do repositório (via pcdt_ingest.paths).",
@@ -85,13 +85,51 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MEDICO_RAG_MIN_FINAL_SCORE_WITH_CATALOG", "RAG_MIN_FINAL_SCORE_WITH_CATALOG"),
         description="Score mínimo aplicado quando há candidato de catálogo confiável.",
     )
+    rag_use_llm_rerank: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MEDICO_RAG_USE_LLM_RERANK", "RAG_USE_LLM_RERANK"),
+        description="Ativa reranking/validação por LLM com fallback heurístico determinístico.",
+    )
+    rag_llm_rerank_top_n: int = Field(
+        default=12,
+        validation_alias=AliasChoices("MEDICO_RAG_LLM_RERANK_TOP_N", "RAG_LLM_RERANK_TOP_N"),
+        description="Número máximo de candidatos enviados ao LLM reranker.",
+    )
+    rag_max_retrieve_attempts: int = Field(
+        default=2,
+        validation_alias=AliasChoices("MEDICO_RAG_MAX_RETRIEVE_ATTEMPTS", "RAG_MAX_RETRIEVE_ATTEMPTS"),
+        description="Máximo de buscas Chroma por pergunta (busca inicial + fallback).",
+    )
+    rag_require_source_for_clinical_answer: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "MEDICO_RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER",
+            "RAG_REQUIRE_SOURCE_FOR_CLINICAL_ANSWER",
+        ),
+        description="Exige contexto/fonte validada para resposta clínica grounded.",
+    )
+    rag_debug: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MEDICO_RAG_DEBUG", "RAG_DEBUG"),
+        description="Expõe diagnóstico RAG adicional em rotas/inspector quando habilitado.",
+    )
+    use_medspacy: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MEDICO_USE_MEDSPACY", "USE_MEDSPACY"),
+        description="Ativa medSpaCy com modelo pt_core_news_sm. Desligado por padrão; requer medspacy instalado.",
+    )
+    enable_medical_nlp: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MEDICO_ENABLE_MEDICAL_NLP", "ENABLE_MEDICAL_NLP"),
+        description="Ativa resolvedores NLP médicos opcionais no rewrite; catálogo Conitec permanece ativo quando falso.",
+    )
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(
         default=Path("./uploads"),
         description="Diretório para uploads manuais de exames.",
     )
     llm_stream_timeout_s: float = Field(
-        default=120.0,
+        default=240.0,
         description="Timeout (segundos) para o streaming do nó de geração via Ollama.",
     )
     log_dir: Path = Field(

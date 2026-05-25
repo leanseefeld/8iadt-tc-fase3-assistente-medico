@@ -22,16 +22,34 @@ class ChatRAGState(TypedDict, total=False):
 
     query: str
     patient_id: str
+    conversation_id: str | None
     chat_history: list[ChatHistoryTurnState]
+    search_needed: bool
+    router_decision: dict
+    generation_mode: Literal["grounded_answer", "direct_answer", "insufficient_context"]
     retrieval_query: str
+    expanded_query: str
+    structured_terms: dict
+    clinical_understanding: dict
+    linked_entities: list
+    catalog_candidates: list
+    query_expansion: dict
+    candidate_docs: list[Document]
     retrieved_docs: list[Document]
+    retrieve_result: dict
+    retrieve_attempt: int
+    max_retrieve_attempts: int
+    retrieve_debug: dict
+    rerank_decision: dict
+    rerank_result: dict
+    rerank_debug: dict
+    context_sufficient: bool
+    insufficiency_reason: str | None
     sources: list[str]
     reasoning_steps: list[str]
-    query_expansion: dict
-    clinical_understanding: dict
-    rag_audit_payload: dict
-    audit_id: str
+    generation_result: dict
     answer: str
+    guardrail_result: dict
     guardrail_status: str  # "safe" | "warned" | "blocked" | "regenerated"
     guardrail_reason: str
     patient_context: str

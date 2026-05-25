@@ -949,4 +949,23 @@ def build_audit_payload(
 def append_audit_jsonl(payload: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+        f.write(json.dumps(_json_safe(payload), ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Document):
+        return {
+            "page_content_preview": str(value.page_content or "")[:800],
+            "metadata": _json_safe(dict(value.metadata or {})),
+        }
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, set):
+        return [_json_safe(item) for item in sorted(value, key=str)]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)

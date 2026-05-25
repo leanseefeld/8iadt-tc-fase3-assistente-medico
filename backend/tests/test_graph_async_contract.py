@@ -12,6 +12,7 @@ class FakeStore:
 @pytest.mark.asyncio
 async def test_graph_invoke_fails_when_async_node_present():
     graph = build_compiled_chat_graph(FakeStore(), Settings())
+    diagram = graph.get_graph().draw_ascii()
     initial = {
         "query": "teste",
         "patient_id": "p1",
@@ -21,6 +22,9 @@ async def test_graph_invoke_fails_when_async_node_present():
         "reasoning_steps": [],
         "answer": "",
     }
+    assert "generate_grounded_answer" not in diagram
+    assert "generate_direct_answer" not in diagram
+    assert "generate_insufficient_context" not in diagram
+    assert "generate" in diagram
     with pytest.raises(TypeError):
         graph.invoke(initial)
-

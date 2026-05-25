@@ -19,20 +19,18 @@ from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAud
 _LOG = logging.getLogger(__name__)
 
 GuardrailVerdict = Literal["SEGURO", "AVISO", "BLOQUEAR"]
+_logger = logging.getLogger(__name__)
 
-# Mensagem padrão exibida quando o guardrail bloqueia mesmo após regeneração.
 _SAFE_BLOCKED_MESSAGE = (
     "Não consigo fornecer essa informação de forma segura neste contexto. "
     "Consulte o protocolo clínico aplicável ou o médico responsável."
 )
 
-# Aviso anexado a respostas com veredicto AVISO.
 _DISCLAIMER = (
     "\n\n⚠️ *Nota: Esta resposta contém recomendações que devem ser avaliadas "
     "pelo médico responsável antes de qualquer aplicação clínica.*"
 )
 
-# Prompt do LLM auditor — resposta esperada: JSON puro sem markdown.
 _CLASSIFIER_SYSTEM = """\
 Você é um auditor de segurança clínica. Analise a resposta do assistente médico e retorne \
 SOMENTE um objeto JSON no formato exato (sem markdown, sem texto adicional):

@@ -12,8 +12,11 @@ from assistente_medico_api.graph import cross_encoder_reranker as ce_mod
 from assistente_medico_api.graph import clinical_query_understanding as cqu_mod
 from assistente_medico_api.graph.nodes.generate import _build_messages, generate_node
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
-from assistente_medico_api.services import rag_retrieval_service as rag_service
-from assistente_medico_api.services.rag_retrieval_service import run_rag_retrieval
+from assistente_medico_api.services import rag_pipeline_service as rag_service
+from assistente_medico_api.services.rag_pipeline_service import (
+    run_rerank_and_validate_context,
+    run_rewrite_query,
+)
 from assistente_medico_api.graph.clinical_query_understanding import (
     CatalogCandidateRetriever,
     detect_clinical_intent,
@@ -508,15 +511,25 @@ def test_retrieve_node_runs_complementary_search_for_sgb_missing_preferred_secti
     store = _FakeStore(first, second)
     settings = Settings(rag_retrieve_candidates_k=10, rag_retrieve_final_k=6)
 
-    out = retrieve_node({"query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
-    docs = out["retrieved_docs"]
-    audit = out["rag_audit_payload"]
+    rewrite = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, settings)
+    out = retrieve_node({**rewrite, "query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
+    assert "candidate_docs" in out
+    assert "retrieved_docs" not in out
+    rerank = asyncio.run(
+        run_rerank_and_validate_context(
+            query="Quais são os critérios de inclusão para sgb?",
+            expanded_query=rewrite["expanded_query"],
+            structured_terms=rewrite["structured_terms"],
+            clinical_understanding=rewrite["clinical_understanding"],
+            candidate_docs=out["candidate_docs"],
+            settings=settings,
+        )
+    )
 
-    assert len(store.calls) == 2
-    assert "CRITÉRIOS DE INCLUSÃO" in store.calls[1]["query"]
-    assert docs[0].metadata["section"] == "CRITÉRIOS DE INCLUSÃO"
-    assert audit["complementary_retrieve_used"] is True
-    assert audit["preferred_section_found"] is True
+    docs = rerank["retrieved_docs"]
+    assert len(store.calls) == 1
+    assert docs[0].metadata["section"] == "CID-10"
+    assert rerank["insufficiency_reason"] == "seção preferencial não encontrada; contexto parcialmente suficiente"
 
 
 def test_retrieve_node_marks_preferred_section_not_found_after_complementary_search(monkeypatch) -> None:
@@ -537,14 +550,22 @@ def test_retrieve_node_marks_preferred_section_not_found_after_complementary_sea
     store = _FakeStore(first, [])
     settings = Settings(rag_retrieve_candidates_k=10, rag_retrieve_final_k=6)
 
-    out = retrieve_node({"query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
-    docs = out["retrieved_docs"]
-    audit = out["rag_audit_payload"]
+    rewrite = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, settings)
+    out = retrieve_node({**rewrite, "query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
+    rerank = asyncio.run(
+        run_rerank_and_validate_context(
+            query="Quais são os critérios de inclusão para sgb?",
+            expanded_query=rewrite["expanded_query"],
+            structured_terms=rewrite["structured_terms"],
+            clinical_understanding=rewrite["clinical_understanding"],
+            candidate_docs=out["candidate_docs"],
+            settings=settings,
+        )
+    )
 
-    assert len(store.calls) == 2
-    assert [doc.metadata["section"] for doc in docs] == ["CID-10"]
-    assert audit["preferred_section_not_found"] is True
-    assert audit["final_documents_count"] == 1
+    assert len(store.calls) == 1
+    assert [doc.metadata["section"] for doc in rerank["retrieved_docs"]] == ["CID-10"]
+    assert rerank["insufficiency_reason"] == "seção preferencial não encontrada; contexto parcialmente suficiente"
 
 
 def test_rerank_documents_boosts_inclusion_section_over_incompatible_sections() -> None:
@@ -882,14 +903,24 @@ def test_chat_retrieve_sgb_uses_catalog_expansion(monkeypatch) -> None:
     store = _FakeStore([(wrong_doc, 0.1), (sgb_doc, 0.2)])
     settings = Settings(rag_retrieve_candidates_k=10, rag_retrieve_final_k=6)
 
-    out = retrieve_node({"query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
+    rewrite = run_rewrite_query("Quais são os critérios de inclusão para sgb?", {}, settings)
+    out = retrieve_node({**rewrite, "query": "Quais são os critérios de inclusão para sgb?"}, store=store, settings=settings)
+    rerank = asyncio.run(
+        run_rerank_and_validate_context(
+            query="Quais são os critérios de inclusão para sgb?",
+            expanded_query=rewrite["expanded_query"],
+            structured_terms=rewrite["structured_terms"],
+            clinical_understanding=rewrite["clinical_understanding"],
+            candidate_docs=out["candidate_docs"],
+            settings=settings,
+        )
+    )
 
-    expansion = out["query_expansion"]
-    docs = out["retrieved_docs"]
-    assert "Síndrome de Guillain-Barré" in expansion["expanded_query"]
-    assert expansion["structured_terms"]["disease"] == "Síndrome de Guillain-Barré"
-    assert "G61.0" in expansion["structured_terms"]["cid10_codes"]
-    assert expansion["structured_terms"]["intent"] == "criterios_inclusao"
+    docs = rerank["retrieved_docs"]
+    assert "Síndrome de Guillain-Barré" in rewrite["expanded_query"]
+    assert rewrite["structured_terms"]["disease"] == "Síndrome de Guillain-Barré"
+    assert "G61.0" in rewrite["structured_terms"]["cid10_codes"]
+    assert rewrite["structured_terms"]["intent"] == "criterios_inclusao"
     assert [doc.metadata["disease"] for doc in docs] == ["Síndrome de Guillain-Barré"]
 
 
@@ -899,9 +930,10 @@ def test_chat_and_inspector_use_same_retrieval_service() -> None:
         encoding="utf-8"
     )
 
-    assert "run_rag_retrieval" in retrieve_source
-    assert "run_rag_retrieval" in inspector_source
+    assert "run_retrieve" in retrieve_source
+    assert "run_full_graph_debug" in inspector_source
     assert "retrieve_node(" not in inspector_source
+    assert "--export-audit" in inspector_source
 
 
 def test_generate_does_not_reinterpret_detected_abbreviation() -> None:
@@ -960,7 +992,6 @@ def test_no_context_mismatch_goes_to_llm() -> None:
             },
         },
         "clinical_understanding": {},
-        "rag_audit_payload": {},
     }
 
     out = asyncio.run(generate_node(state, Settings()))

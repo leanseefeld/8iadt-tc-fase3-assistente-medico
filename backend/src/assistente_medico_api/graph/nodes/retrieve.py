@@ -1,26 +1,27 @@
-"""Nó de recuperação: similaridade no Chroma PCDT."""
+"""Nó de recuperação: busca candidatos no Chroma."""
 
 from __future__ import annotations
 
 import time
 
 from langchain_chroma import Chroma
-from langchain_core.documents import Document
 
 from assistente_medico_api.config import Settings
-from assistente_medico_api.graph.rag_enhancement import format_rich_context_block
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
 from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
-from assistente_medico_api.services.rag_retrieval_service import (
-    format_source_label,
-    run_rag_retrieval,
-)
+from assistente_medico_api.services.rag_pipeline_service import run_retrieve
 
 
-def format_context_block(docs: list[Document]) -> str:
-    """Monta bloco de contexto para o prompt."""
-    return format_rich_context_block(docs)
+def _fallback_query(query: str, state: ChatRAGState) -> str:
+    structured = state.get("structured_terms") or {}
+    terms = [
+        structured.get("diretriz") or structured.get("disease"),
+        *(structured.get("preferred_sections") or []),
+        *(structured.get("cid10_codes") or []),
+        query,
+    ]
+    return " ".join(str(term).strip() for term in terms if str(term or "").strip())
 
 
 def retrieve_node(
@@ -29,71 +30,72 @@ def retrieve_node(
     store: Chroma,
     settings: Settings,
 ) -> dict:
-    """
-    Executa busca por similaridade usando retrieval_query (reescrita) quando existir.
-
-    Síncrono para poder ser executado em asyncio.to_thread no endpoint.
-    """
-    pid = state.get("patient_id") or None
+    """Executa a busca inicial ou a tentativa de fallback interna."""
     t0 = time.perf_counter()
-    query = (state.get("retrieval_query") or state.get("query") or "").strip()
-    result = run_rag_retrieval(
-        query,
-        store,
-        settings,
-        existing_reasoning_steps=list(state.get("reasoning_steps") or []),
+    retrieve_attempt = int(state.get("retrieve_attempt") or 1)
+    structured_terms = state.get("structured_terms") or {}
+    query = (state.get("expanded_query") or state.get("retrieval_query") or state.get("query") or "").strip()
+    fallback_query = _fallback_query(state.get("query") or "", state) if retrieve_attempt > 1 else None
+
+    out = run_retrieve(
+        expanded_query=query,
+        structured_terms=structured_terms,
+        store=store,
+        settings=settings,
+        retrieve_attempt=retrieve_attempt,
+        fallback_query=fallback_query,
+    )
+
+    steps = list(state.get("reasoning_steps") or [])
+    debug = out.get("retrieve_debug") or {}
+    steps.append(
+        "Retrieve: buscou candidatos no Chroma "
+        f"(attempt={out.get('retrieve_attempt')}, k={debug.get('k')}, candidatos={debug.get('candidate_count')})."
     )
 
     latency_ms = round((time.perf_counter() - t0) * 1000, 2)
-    stems_list = sorted({d.metadata.get("source_stem", "?") for d in result.retrieved_docs}) if result.retrieved_docs else []
+    pid = state.get("patient_id") or None
+    candidate_docs = out.get("candidate_docs") or []
+    stems_list = [d.metadata.get("source_stem") for d in candidate_docs if d.metadata.get("source_stem")]
+    stems_resumo = stems_list[:15]
+
     audit(
         "rag_retrieve_done",
         kind="rag",
         latency_ms=latency_ms,
         patient_id=pid,
-        retrieval_query_snippet=truncate(query),
-        expanded_query_snippet=truncate(result.expanded_query),
-        structured_terms=result.structured_terms,
-        catalog_candidates=result.catalog_candidates,
-        retrieved_count=len(result.retrieved_docs),
-        source_stems=stems_list,
-        documents_before_filter=result.audit_payload.get("documents_before_filter"),
-        documents_after_filter=result.audit_payload.get("documents_after_catalog_filter"),
-        complementary_retrieve_info=result.audit_payload.get("complementary_retrieve"),
-        final_documents=result.audit_payload.get("final_documents"),
-        top_k=result.audit_payload.get("retrieval_final_k"),
+        retrieval_query_snippet=truncate(debug.get("query_sent_to_chroma") or ""),
+        retrieve_attempt=out.get("retrieve_attempt"),
+        candidate_count=debug.get("candidate_count"),
+        metadata_filter=debug.get("metadata_filter"),
     )
 
-    stems_resumo = stems_list[:15]
-    structured = result.structured_terms if isinstance(result.structured_terms, dict) else {}
+    structured = structured_terms if isinstance(structured_terms, dict) else {}
+    catalog_candidates = structured.get("catalog_candidates")
     clinical_audit(
         ClinicalAuditAction.RECUPERACAO_CONTEXTO_RAG,
         patient_id=pid,
-        descricao=f"Recuperação RAG PCDT: {len(result.retrieved_docs)} documento(s), {latency_ms} ms.",
+        descricao=f"Recuperação RAG PCDT: {len(candidate_docs)} documento(s), {latency_ms} ms.",
         detalhes={
             "latency_ms": latency_ms,
-            "documentos_recuperados": len(result.retrieved_docs),
+            "documentos_recuperados": len(candidate_docs),
             "consulta_truncada": truncate(query, n=280),
-            "consulta_expandida_truncada": truncate(result.expanded_query, n=280),
-            "top_k": result.audit_payload.get("retrieval_final_k"),
+            "consulta_expandida_truncada": truncate(query, n=280),
+            "top_k": debug.get("k"),
             "stems_fonte_resumo": stems_resumo,
             "intencao_extracao": structured.get("intent"),
             "doenca_ou_diretriz_extracao": structured.get("diretriz") or structured.get("disease"),
             "candidatos_catalogo_quantidade": (
-                len(result.catalog_candidates)
-                if isinstance(result.catalog_candidates, list)
-                else None
+                len(catalog_candidates) if isinstance(catalog_candidates, list) else None
             ),
         },
         settings=settings,
     )
 
     return {
-        "retrieval_query": result.expanded_query,
-        "retrieved_docs": result.retrieved_docs,
-        "sources": result.sources,
-        "reasoning_steps": result.reasoning_steps,
-        "query_expansion": result.query_expansion,
-        "clinical_understanding": result.clinical_understanding,
-        "rag_audit_payload": result.audit_payload,
+        "candidate_docs": out.get("candidate_docs") or [],
+        "retrieve_result": out.get("retrieve_result") or {},
+        "retrieve_debug": out.get("retrieve_debug") or {},
+        "retrieve_attempt": out.get("retrieve_attempt") or retrieve_attempt,
+        "reasoning_steps": steps,
     }

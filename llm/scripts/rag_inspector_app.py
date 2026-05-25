@@ -40,12 +40,15 @@ try:
     from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
     from assistente_medico_api.graph.nodes.generate import _build_messages, generate_node
     from assistente_medico_api.graph.nodes.guardrail import guardrail_node
-    from assistente_medico_api.graph.nodes.retrieve import (
-        format_context_block,
-        format_source_label,
-    )
+    from assistente_medico_api.graph.context_formatting import format_context_block
+    from assistente_medico_api.services.rag_pipeline_service import format_source_label
     from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
-    from assistente_medico_api.services.rag_retrieval_service import run_rag_retrieval
+    from assistente_medico_api.services.rag_pipeline_service import (
+        run_full_graph_debug,
+        run_rerank_and_validate_context,
+        run_retrieve,
+        run_rewrite_query,
+    )
     from pcdt_ingest.embed import (
         CHROMA_COLLECTION_PCDT,
         build_ollama_embeddings,
@@ -80,7 +83,16 @@ except ModuleNotFoundError as exc:
     def format_source_label(doc: Any, index: int) -> str:  # type: ignore[no-redef]
         return f"[{index}] PCDT ? (pp. ?-?)"
 
-    def run_rag_retrieval(*args, **kwargs):  # type: ignore[no-redef]
+    def run_rewrite_query(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    def run_retrieve(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    async def run_rerank_and_validate_context(*args, **kwargs):  # type: ignore[no-redef]
+        raise RuntimeError("Dependências do RAG Inspector não instaladas.")
+
+    async def run_full_graph_debug(*args, **kwargs):  # type: ignore[no-redef]
         raise RuntimeError("Dependências do RAG Inspector não instaladas.")
 
     async def rewrite_query_node(*args, **kwargs):  # type: ignore[no-redef]
@@ -116,6 +128,11 @@ class InspectorSettings:
     rag_min_final_score_with_catalog: float
     rag_audit_enabled: bool
     rag_audit_jsonl: str
+    rag_max_retrieve_attempts: int
+    rag_use_llm_rerank: bool
+    rag_llm_rerank_top_n: int
+    rag_require_source_for_clinical_answer: bool
+    rag_debug: bool
     llm_stream_timeout_s: float
 
 
@@ -149,6 +166,11 @@ def _default_settings() -> InspectorSettings:
         rag_min_final_score_with_catalog=backend_cfg.rag_min_final_score_with_catalog,
         rag_audit_enabled=backend_cfg.rag_audit_enabled,
         rag_audit_jsonl=str(backend_cfg.rag_audit_jsonl),
+        rag_max_retrieve_attempts=backend_cfg.rag_max_retrieve_attempts,
+        rag_use_llm_rerank=backend_cfg.rag_use_llm_rerank,
+        rag_llm_rerank_top_n=backend_cfg.rag_llm_rerank_top_n,
+        rag_require_source_for_clinical_answer=backend_cfg.rag_require_source_for_clinical_answer,
+        rag_debug=backend_cfg.rag_debug,
         llm_stream_timeout_s=backend_cfg.llm_stream_timeout_s,
     )
 
@@ -204,6 +226,11 @@ def _backend_settings(cfg: InspectorSettings) -> Settings:
         rag_min_final_score_with_catalog=float(cfg.rag_min_final_score_with_catalog),
         rag_audit_enabled=bool(cfg.rag_audit_enabled),
         rag_audit_jsonl=Path(cfg.rag_audit_jsonl),
+        rag_max_retrieve_attempts=int(cfg.rag_max_retrieve_attempts),
+        rag_use_llm_rerank=bool(cfg.rag_use_llm_rerank),
+        rag_llm_rerank_top_n=int(cfg.rag_llm_rerank_top_n),
+        rag_require_source_for_clinical_answer=bool(cfg.rag_require_source_for_clinical_answer),
+        rag_debug=bool(cfg.rag_debug),
         llm_stream_timeout_s=float(cfg.llm_stream_timeout_s),
     )
 
@@ -258,6 +285,16 @@ def _message_to_payload(message: Any) -> dict[str, str]:
 
 def _run_async(coro):
     return asyncio.run(coro)
+
+
+def _export_audit_path_from_argv() -> Path | None:
+    args = list(sys.argv)
+    for idx, value in enumerate(args):
+        if value == "--export-audit" and idx + 1 < len(args):
+            return Path(args[idx + 1]).expanduser()
+        if value.startswith("--export-audit="):
+            return Path(value.split("=", 1)[1]).expanduser()
+    return None
 
 
 def _fmt_ms(value: Any) -> str:
@@ -315,7 +352,7 @@ def _render_educational_tips(*, query: str, has_docs: bool, scores: list[float])
         tips.append("Confirme se o modelo de embedding do retrieve é o mesmo da ingestão (`nomic-embed-text` por padrão).")
     if has_docs and scores:
         tips.append("Compare os scores entre execuções apenas dentro do mesmo setup (modelo/coleção).")
-        tips.append("Se os top chunks parecem “perto, mas não exatamente”, teste aumentar `k` e melhorar chunking (títulos/seções).")
+        tips.append("Se os top chunks parecem 'perto, mas não exatamente', teste aumentar `k` e melhorar chunking (títulos/seções).")
     tips.append("Uma melhoria comum é adicionar uma etapa de *query rewriting* antes do retrieve (sinônimos médicos, CID, termos do PCDT).")
     tips.append("Outra melhoria comum é hibridizar (BM25 + denso) para normas longas; hoje você está só no denso (Chroma).")
     for t in tips:
@@ -337,6 +374,127 @@ _DEFAULT_PATIENT_CONTEXT = """Contexto do paciente admitido:
   - Glicemia em jejum: 145 mg/dL (concluído em 10/05/2026, há 13 dias)
 - Exames pendentes (últimos 6 meses):
   - Creatinina: pendente (solicitado em 20/05/2026, há 3 dias)"""
+
+
+def _render_flow_nodes(backend_state: dict[str, Any]) -> None:
+    """Exibe o fluxo executado nó a nó com os dados relevantes de cada etapa."""
+    router_dec = cast(dict[str, Any], backend_state.get("router_decision") or {})
+    route = router_dec.get("route") or "-"
+    search_needed = route == "rag"
+
+    steps = cast(list[str], backend_state.get("reasoning_steps") or [])
+    if steps:
+        st.caption("  ·  ".join(steps))
+
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("Rota", route.upper())
+    metric_cols[1].metric("Confiança router", f"{float(router_dec.get('confidence') or 0):.0%}")
+    metric_cols[2].metric("Guardrail", backend_state.get("guardrail_status") or "-")
+
+    with st.expander("🔀 Router", expanded=True):
+        st.json(
+            {
+                "route": router_dec.get("route"),
+                "reason": router_dec.get("reason"),
+                "confidence": router_dec.get("confidence"),
+            },
+            expanded=True,
+        )
+
+    if search_needed:
+        rw = cast(dict[str, Any], backend_state.get("rewrite_result") or {})
+        st_rw = cast(dict[str, Any], rw.get("structured_terms") or {})
+        with st.expander("✏️ Rewrite", expanded=True):
+            st.caption(f"Consulta resolvida: `{rw.get('resolved_query') or ''}`")
+            st.caption(f"Expandida (Chroma): `{rw.get('expanded_query') or ''}`")
+            st.json(
+                {
+                    "disease": st_rw.get("disease"),
+                    "intent": st_rw.get("intent"),
+                    "cid10_codes": st_rw.get("cid10_codes"),
+                    "preferred_sections": st_rw.get("preferred_sections"),
+                    "spacy_used": rw.get("spacy_used"),
+                    "llm_rewrite_used": rw.get("llm_rewrite_used"),
+                },
+                expanded=True,
+            )
+
+        rv = cast(dict[str, Any], backend_state.get("retrieve_result") or {})
+        rd = cast(dict[str, Any], rv.get("retrieve_debug") or {})
+        rk = cast(dict[str, Any], backend_state.get("rerank_result") or {})
+        with st.expander("🔍 Retrieve", expanded=True):
+            r_cols = st.columns(3)
+            r_cols[0].metric("Tentativa", rv.get("retrieve_attempt") or "-")
+            r_cols[1].metric("Candidatos Chroma", rd.get("candidate_count") or "-")
+            r_cols[2].metric("k final", rd.get("k") or "-")
+            st.json(
+                {
+                    "query_enviada_chroma": rd.get("query_sent_to_chroma"),
+                    "metadata_filter": rd.get("metadata_filter"),
+                    "collection": rd.get("collection"),
+                },
+                expanded=False,
+            )
+
+        with st.expander("📊 Rerank", expanded=True):
+            quality = rk.get("context_quality") or "-"
+            quality_icon = "✅" if quality == "sufficient" else ("⚠️" if quality == "partial" else "❌")
+            st.markdown(f"{quality_icon} **context_quality**: `{quality}`")
+            if rk.get("insufficiency_reason"):
+                st.warning(rk["insufficiency_reason"])
+            st.json(
+                {
+                    "failure_type": rk.get("failure_type"),
+                    "expected_disease": rk.get("expected_disease"),
+                    "expected_sections": rk.get("expected_sections"),
+                    "found_diseases": rk.get("found_diseases"),
+                    "found_sections": rk.get("found_sections"),
+                    "llm_rerank_used": rk.get("llm_rerank_used"),
+                    "docs_selecionados": len(backend_state.get("retrieved_docs") or []),
+                },
+                expanded=False,
+            )
+    else:
+        st.info("Rota direta: nós de rewrite / retrieve / rerank não foram executados.")
+
+    g_status = backend_state.get("guardrail_status") or "-"
+    g_icon = "✅" if g_status == "safe" else ("⚠️" if g_status in {"warned", "regenerated"} else ("🚫" if g_status == "blocked" else "—"))
+    with st.expander(f"🛡️ Guardrail — {g_icon} {g_status}", expanded=False):
+        st.json(
+            {
+                "status": backend_state.get("guardrail_status") or "-",
+                "reason": backend_state.get("guardrail_reason") or "-",
+            },
+            expanded=True,
+        )
+
+    with st.expander("📋 Sources + reasoning_steps", expanded=False):
+        st.json(
+            {
+                "sources": backend_state.get("sources") or [],
+                "reasoning_steps": backend_state.get("reasoning_steps") or [],
+            },
+            expanded=True,
+        )
+
+    with st.expander("Estado completo do grafo (JSON)", expanded=False):
+        st.json(
+            {
+                "retrieval_query": backend_state.get("retrieval_query") or "",
+                "router_decision": backend_state.get("router_decision") or {},
+                "rewrite_result": backend_state.get("rewrite_result") or {},
+                "retrieve_result": backend_state.get("retrieve_result") or {},
+                "rerank_result": backend_state.get("rerank_result") or {},
+                "audit_trace": backend_state.get("audit_trace") or {},
+                "sources": backend_state.get("sources") or [],
+                "reasoning_steps": backend_state.get("reasoning_steps") or [],
+                "audit_id": backend_state.get("audit_id") or "",
+                "guardrail_status": backend_state.get("guardrail_status") or "",
+                "guardrail_reason": backend_state.get("guardrail_reason") or "",
+                "patient_context_preview": backend_state.get("patient_context_preview") or "",
+            },
+            expanded=False,
+        )
 
 
 def main() -> None:
@@ -366,6 +524,7 @@ def main() -> None:
 
     if "last_run" not in st.session_state:
         st.session_state["last_run"] = None
+    export_audit_path = _export_audit_path_from_argv()
 
     cfg0 = _default_settings()
     with st.sidebar:
@@ -418,6 +577,26 @@ def main() -> None:
             ),
             rag_audit_enabled=st.checkbox("Registrar auditoria RAG", value=bool(cfg0.rag_audit_enabled)),
             rag_audit_jsonl=st.text_input("Arquivo auditoria RAG", value=cfg0.rag_audit_jsonl),
+            rag_max_retrieve_attempts=st.number_input(
+                "Máximo de buscas RAG",
+                min_value=1,
+                max_value=2,
+                value=int(cfg0.rag_max_retrieve_attempts),
+                step=1,
+            ),
+            rag_use_llm_rerank=st.checkbox("Usar LLM rerank", value=bool(cfg0.rag_use_llm_rerank)),
+            rag_llm_rerank_top_n=st.number_input(
+                "Top N para LLM rerank",
+                min_value=1,
+                max_value=50,
+                value=int(cfg0.rag_llm_rerank_top_n),
+                step=1,
+            ),
+            rag_require_source_for_clinical_answer=st.checkbox(
+                "Exigir fonte para resposta clínica",
+                value=bool(cfg0.rag_require_source_for_clinical_answer),
+            ),
+            rag_debug=st.checkbox("Debug RAG", value=bool(cfg0.rag_debug)),
             llm_stream_timeout_s=st.number_input("Timeout LLM (s)", min_value=5.0, max_value=600.0, value=float(cfg0.llm_stream_timeout_s), step=5.0),
         )
         st.caption(
@@ -468,13 +647,20 @@ def main() -> None:
             run_btn = st.button("Rodar pipeline", type="primary")
 
         with col_r:
-            st.subheader("Flow diagram (atual)")
-            flow_text = "backend.load_patient_context(sim)  →  backend.rewrite  →  backend.retrieve(expand + chroma + rerank)  →  backend.prompt_preview"
-            if run_generate:
-                flow_text = f"{flow_text}  →  backend.generate"
-            if run_guardrail:
-                flow_text = f"{flow_text}  →  backend.guardrail"
-            st.code(flow_text, language="text")
+            st.subheader("Grafo do backend (chat_rag.py)")
+            st.code(
+                "START\n"
+                "  └─▶ load_patient_context\n"
+                "             └─▶ router\n"
+                "                   ├─ direct ──▶ generate ──▶ guardrail ──▶ END\n"
+                "                   └─ rag ────▶ rewrite\n"
+                "                                   └─▶ retrieve\n"
+                "                                          └─▶ rerank\n"
+                "                                                ├─ retry_retrieve ──▶ retrieve\n"
+                "                                                └─ generate ───────▶ generate\n"
+                "                                                                         └─▶ guardrail ──▶ END",
+                language="text",
+            )
             st.subheader("Performance (última execução)")
             last = st.session_state.get("last_run")
             if last and isinstance(last, dict):
@@ -491,11 +677,9 @@ def main() -> None:
                             {"etapa": "abrir Chroma", "ms": t.get("store_ms")},
                             {"etapa": "contexto paciente (simulado)", "ms": t.get("patient_context_ms")},
                             {"etapa": "embedding debug", "ms": t.get("embed_ms")},
-                            {"etapa": "rewrite", "ms": t.get("rewrite_ms")},
-                            {"etapa": "retrieve", "ms": t.get("retrieve_ms")},
+                            {"etapa": "pipeline completo (router→guardrail)", "ms": t.get("retrieve_ms")},
                             {"etapa": "contexto + prompt", "ms": t.get("assemble_ms")},
-                            {"etapa": "generate", "ms": t.get("generate_ms")},
-                            {"etapa": "guardrail", "ms": t.get("guardrail_ms")},
+                            {"etapa": "total", "ms": t.get("total_ms")},
                         ],
                         use_container_width=True,
                         hide_index=True,
@@ -580,39 +764,33 @@ def main() -> None:
                 except Exception as exc:
                     errors.append(f"Falha ao analisar embedding via Ollama: {_format_exception(exc)}")
 
-            # --- Backend rewrite + retrieve ---
+            # --- Fluxo completo do backend (router → rewrite → retrieve → rerank → generate → guardrail) ---
+            debug_route: str = "unknown"
             if store is not None and query.strip():
                 try:
-                    t0 = time.perf_counter()
-                    rewrite_out = cast(dict[str, Any], _run_async(rewrite_query_node(cast(Any, final_state), backend_settings)))
-                    timing = replace(timing, rewrite_ms=(time.perf_counter() - t0) * 1000.0)
-                    final_state.update(rewrite_out)
-
                     inspectable_store = InspectableStore(store)
                     t0 = time.perf_counter()
-                    retrieval_result = run_rag_retrieval(
-                        str(final_state.get("retrieval_query") or final_state.get("query") or ""),
-                        cast(Any, inspectable_store),
-                        backend_settings,
-                        existing_reasoning_steps=list(final_state.get("reasoning_steps") or []),
-                    )
+                    with st.status("Executando pipeline...", expanded=False):
+                        debug_result = cast(
+                            dict[str, Any],
+                            _run_async(
+                                run_full_graph_debug(
+                                    query=query,
+                                    settings=backend_settings,
+                                    store=cast(Any, inspectable_store),
+                                    conversation_id="rag-inspector",
+                                    chat_history=cast(list[dict[str, str]], final_state.get("chat_history") or []),
+                                )
+                            ),
+                        )
+                    final_state.update(cast(dict[str, Any], debug_result.get("state") or {}))
+                    debug_route = str(debug_result.get("route") or "unknown")
                     timing = replace(timing, retrieve_ms=(time.perf_counter() - t0) * 1000.0)
-                    final_state.update(
-                        {
-                            "retrieval_query": retrieval_result.expanded_query,
-                            "retrieved_docs": retrieval_result.retrieved_docs,
-                            "sources": retrieval_result.sources,
-                            "reasoning_steps": retrieval_result.reasoning_steps,
-                            "query_expansion": retrieval_result.query_expansion,
-                            "clinical_understanding": retrieval_result.clinical_understanding,
-                            "rag_audit_payload": retrieval_result.audit_payload,
-                            "_rag_retrieval_debug": retrieval_result.debug,
-                        }
-                    )
+                    timing = replace(timing, rewrite_ms=timing.retrieve_ms)
                     raw_candidates = inspectable_store.merged_pairs or inspectable_store.last_pairs
                     final_state["_inspector_retrieve_calls"] = inspectable_store.calls
                 except Exception as exc:
-                    errors.append(f"Falha no retrieve do backend: {_format_exception(exc)}")
+                    errors.append(f"Falha no fluxo RAG de debug do backend: {_format_exception(exc)}")
 
             docs = cast(list[Document], final_state.get("retrieved_docs") or [d for d, _ in raw_candidates])
 
@@ -626,28 +804,10 @@ def main() -> None:
             except Exception as exc:
                 errors.append(f"Falha ao montar contexto/prompt: {_format_exception(exc)}")
 
-            # --- Backend generate (optional) ---
-            if run_generate and query.strip():
-                try:
-                    t0 = time.perf_counter()
-                    with st.status("Gerando resposta (streaming)...", expanded=False):
-                        generate_out = cast(dict[str, Any], _run_async(generate_node(cast(Any, final_state), backend_settings)))
-                    final_state.update(generate_out)
-                    answer_text = str(final_state.get("answer") or "")
-                    generation_model_used = cfg.ollama_chat_model
-                    timing = replace(timing, generate_ms=(time.perf_counter() - t0) * 1000.0)
-                except Exception as exc:
-                    errors.append(f"Falha na geração do backend com `{cfg.ollama_chat_model}`: {_format_exception(exc)}")
-
-            if run_guardrail and answer_text:
-                try:
-                    t0 = time.perf_counter()
-                    guardrail_out = cast(dict[str, Any], _run_async(guardrail_node(cast(Any, final_state), backend_settings)))
-                    final_state.update(guardrail_out)
-                    answer_text = str(final_state.get("answer") or "")
-                    timing = replace(timing, guardrail_ms=(time.perf_counter() - t0) * 1000.0)
-                except Exception as exc:
-                    errors.append(f"Falha no guardrail do backend: {_format_exception(exc)}")
+            # --- Extrai resposta gerada pelo run_full_graph_debug (sem double call) ---
+            if run_generate:
+                answer_text = str(final_state.get("answer") or "") or None
+                generation_model_used = cfg.ollama_chat_model
 
             timing = replace(timing, total_ms=(time.perf_counter() - run_started) * 1000.0)
             candidate_scores = [float(s) for _, s in raw_candidates]
@@ -660,7 +820,10 @@ def main() -> None:
             final_score_summary = _score_summary(final_scores)
             query_expansion = cast(dict[str, Any], final_state.get("query_expansion") or {})
             audit_payload = cast(dict[str, Any], final_state.get("rag_audit_payload") or {})
-            structured_terms = cast(dict[str, Any], query_expansion.get("structured_terms") or {})
+            rewrite_result = cast(dict[str, Any], final_state.get("rewrite_result") or {})
+            rerank_result = cast(dict[str, Any], final_state.get("rerank_result") or {})
+            retrieve_result = cast(dict[str, Any], final_state.get("retrieve_result") or {})
+            structured_terms = cast(dict[str, Any], final_state.get("structured_terms") or rewrite_result.get("structured_terms") or query_expansion.get("structured_terms") or {})
             catalog_filter = cast(dict[str, Any], audit_payload or query_expansion.get("_catalog_filter_info") or {})
             retrieve_calls = cast(list[dict[str, Any]], final_state.get("_inspector_retrieve_calls") or [])
             first_retrieve_count = len(cast(list[Any], retrieve_calls[0].get("pairs") or [])) if retrieve_calls else len(raw_candidates)
@@ -672,17 +835,22 @@ def main() -> None:
                 "input": {"query": query, "chat_history": final_state.get("chat_history") or []},
                 "mode": {
                     "name": run_mode,
+                    "route": debug_route,
                     "rag_focus_mode": rag_focus_mode,
                     "generation_enabled": bool(run_generate),
                     "guardrail_enabled": bool(run_guardrail),
                     "uses_backend_nodes": True,
                     "uses_compiled_langgraph": False,
+                    "uses_shared_debug_pipeline": True,
                 },
                 "embedding": embed_info,
                 "backend_state": {
                     "retrieval_query": final_state.get("retrieval_query") or "",
-                    "clinical_understanding": final_state.get("clinical_understanding") or {},
-                    "query_expansion": query_expansion,
+                    "router_decision": final_state.get("router_decision") or {},
+                    "rewrite_result": rewrite_result,
+                    "retrieve_result": retrieve_result,
+                    "rerank_result": rerank_result,
+                    "audit_trace": final_state.get("audit_trace") or {},
                     "sources": final_state.get("sources") or [],
                     "reasoning_steps": final_state.get("reasoning_steps") or [],
                     "rag_audit_payload": audit_payload,
@@ -690,15 +858,19 @@ def main() -> None:
                     "guardrail_status": final_state.get("guardrail_status") or "",
                     "guardrail_reason": final_state.get("guardrail_reason") or "",
                     "patient_context_preview": (final_state.get("patient_context") or "")[:300],
+                    "retrieved_docs": final_state.get("retrieved_docs") or [],
                 },
                 "retrieve": {
                     "legacy_k": int(cfg.retrieval_k),
                     "candidates_k": int(cfg.rag_retrieve_candidates_k),
                     "final_k": int(cfg.rag_retrieve_final_k),
                     "rewrite_query": final_state.get("retrieval_query") or query,
-                    "expanded_query": query_expansion.get("expanded_query") or final_state.get("retrieval_query") or query,
+                    "expanded_query": final_state.get("expanded_query") or rewrite_result.get("expanded_query") or query_expansion.get("expanded_query") or final_state.get("retrieval_query") or query,
                     "structured_terms": structured_terms,
-                    "catalog_candidates": structured_terms.get("catalog_candidates") or query_expansion.get("catalog_candidates") or [],
+                    "catalog_candidates": final_state.get("catalog_candidates") or structured_terms.get("catalog_candidates") or query_expansion.get("catalog_candidates") or [],
+                    "context_quality": rerank_result.get("context_quality"),
+                    "failure_type": rerank_result.get("failure_type"),
+                    "insufficiency_reason": rerank_result.get("insufficiency_reason"),
                     "first_retrieve_count": first_retrieve_count,
                     "complementary_retrieve_count": complementary_count,
                     "retrieve_calls": [
@@ -743,6 +915,12 @@ def main() -> None:
                 "errors": errors,
             }
             st.session_state["last_run"] = payload
+            if export_audit_path is not None:
+                export_audit_path.parent.mkdir(parents=True, exist_ok=True)
+                export_audit_path.write_text(
+                    json.dumps(payload.get("backend_state", {}).get("audit_trace") or {}, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
 
         last = st.session_state.get("last_run")
         if last and isinstance(last, dict):
@@ -758,31 +936,17 @@ def main() -> None:
             st.subheader("✅ Execução")
             exec_cols = st.columns(4)
             exec_cols[0].metric("Modo", str(mode.get("name") or "-"))
-            exec_cols[1].metric("Nodes backend", "sim" if mode.get("uses_backend_nodes") else "não")
+            exec_cols[1].metric("Rota executada", str(mode.get("route") or "-").upper())
             exec_cols[2].metric("LangGraph compilado", "sim" if mode.get("uses_compiled_langgraph") else "não")
             exec_cols[3].metric("Guardrail", "sim" if mode.get("guardrail_enabled") else "não")
-            if not mode.get("uses_compiled_langgraph"):
-                st.caption(
-                    "Este painel chama os nodes reais do backend em sequência para expor scores, prompt e tempos. "
-                    "Ele não usa o grafo compilado, porque o objetivo é inspecionar cada etapa."
-                )
+            if mode.get("uses_shared_debug_pipeline"):
+                st.caption("Inspector usando `run_full_graph_debug`, o mesmo serviço central chamado pelo fluxo real do chat.")
+            if export_audit_path is not None:
+                st.caption(f"Audit trace será exportado para `{export_audit_path}` após cada execução.")
 
             backend_state = cast(dict[str, Any], payload.get("backend_state") or {})
-            st.subheader("✅ Estado do backend")
-            st.json(
-                {
-                    "retrieval_query": backend_state.get("retrieval_query") or "",
-                    "clinical_understanding": backend_state.get("clinical_understanding") or {},
-                    "query_expansion": backend_state.get("query_expansion") or {},
-                    "sources": backend_state.get("sources") or [],
-                    "reasoning_steps": backend_state.get("reasoning_steps") or [],
-                    "audit_id": backend_state.get("audit_id") or "",
-                    "guardrail_status": backend_state.get("guardrail_status") or "",
-                    "guardrail_reason": backend_state.get("guardrail_reason") or "",
-                    "patient_context_preview": backend_state.get("patient_context_preview") or "",
-                },
-                expanded=False,
-            )
+            st.subheader("✅ Fluxo executado — nós do backend")
+            _render_flow_nodes(backend_state)
 
             st.subheader("✅ Retrieve detalhado (backend: expansão + Chroma + rerank)")
             retrieve_payload = cast(dict[str, Any], payload.get("retrieve") or {})
@@ -795,6 +959,9 @@ def main() -> None:
                     {
                         "structured_terms": retrieve_payload.get("structured_terms") or {},
                         "catalog_candidates": retrieve_payload.get("catalog_candidates") or [],
+                        "context_quality": retrieve_payload.get("context_quality"),
+                        "failure_type": retrieve_payload.get("failure_type"),
+                        "insufficiency_reason": retrieve_payload.get("insufficiency_reason"),
                     },
                     expanded=False,
                 )
@@ -1020,11 +1187,18 @@ def main() -> None:
             st.info("Rode o pipeline na aba anterior para gerar um payload exportável.")
         else:
             payload = cast(dict[str, Any], last)
-            raw = json.dumps(payload, ensure_ascii=False, indent=2)
+            raw = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
             st.download_button(
                 "Baixar JSON da última execução",
                 data=raw,
                 file_name=f"rag-inspector-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json",
+                mime="application/json",
+            )
+            audit_raw = json.dumps((payload.get("backend_state") or {}).get("audit_trace") or {}, ensure_ascii=False, indent=2)
+            st.download_button(
+                "Baixar audit_trace JSON",
+                data=audit_raw,
+                file_name=f"rag-audit-trace-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json",
                 mime="application/json",
             )
             st.text_area("Preview do JSON", value=raw[:12000], height=240)

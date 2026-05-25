@@ -92,7 +92,6 @@ async def _invoke_payload_and_config(
         "reasoning_steps": [],
         "answer": "",
         "retrieval_query": "",
-        "patient_context": "",
     }
     if not has_persisted_history:
         if is_resumed_thread:
@@ -243,6 +242,7 @@ async def post_chat(
     async def event_gen():
         tokens_streamed = 0
         guard_status: str | None = None
+        final_state: dict = {}
 
         def finalize_audit() -> None:
             lat = round((time.perf_counter() - t_started) * 1000, 2)
@@ -273,16 +273,26 @@ async def post_chat(
             async for event in graph.astream_events(initial, config, version="v2"):
                 kind = event["event"]
 
-                # Retrieve terminou → envia metadados antes dos tokens.
-                if kind == "on_chain_end" and event.get("name") == "retrieve":
+                # Accumulate outputs from every chain-end so final_state has the full picture.
+                if kind == "on_chain_end":
+                    output = event["data"].get("output") or {}
+                    if isinstance(output, dict):
+                        final_state.update(output)
+
+                # Rerank terminou → envia metadados antes dos tokens.
+                if kind == "on_chain_end" and event.get("name") == "rerank":
                     output = event["data"].get("output") or {}
                     yield {
                         "event": "sources",
-                        "data": json.dumps({"sources": output.get("sources") or []}),
+                        "data": json.dumps(
+                            {"sources": list(final_state.get("sources") or output.get("sources") or [])}
+                        ),
                     }
                     yield {
                         "event": "reasoning",
-                        "data": json.dumps({"steps": output.get("reasoning_steps") or []}),
+                        "data": json.dumps(
+                            {"steps": list(final_state.get("reasoning_steps") or output.get("reasoning_steps") or [])}
+                        ),
                     }
 
                 # Guardrail terminou → envia status e resposta final.
@@ -291,15 +301,15 @@ async def post_chat(
                 # BLOQUEAR/regenerated substitui por mensagem segura).
                 elif kind == "on_chain_end" and event.get("name") == "guardrail":
                     output = event["data"].get("output") or {}
-                    guard_status = output.get("guardrail_status")
+                    guard_status = final_state.get("guardrail_status") or output.get("guardrail_status")
                     yield {
                         "event": "guardrail",
                         "data": json.dumps(
                             {
-                                "status": output.get("guardrail_status"),
-                                "reason": output.get("guardrail_reason"),
-                                "answer": output.get("answer"),
-                                "auditId": output.get("audit_id"),
+                                "status": final_state.get("guardrail_status"),
+                                "reason": final_state.get("guardrail_reason"),
+                                "answer": final_state.get("answer"),
+                                "auditId": final_state.get("audit_id"),
                             }
                         ),
                     }
@@ -318,21 +328,31 @@ async def post_chat(
                             "data": json.dumps({"content": str(piece)}),
                         }
 
-            snap = await graph.aget_state(config)
-            final_sse: ChatRAGState = snap.values or {}
+            final_payload = {
+                "text": final_state.get("answer") or "",
+                "sources": list(final_state.get("sources") or []),
+                "reasoning": list(final_state.get("reasoning_steps") or []),
+                "threadId": thread_id,
+                "auditId": final_state.get("audit_id"),
+                "guardrailStatus": final_state.get("guardrail_status"),
+                "guardrailReason": final_state.get("guardrail_reason"),
+            }
+
             assistant_message_id = await chat_persistence.append_turn(
                 session,
                 conversation=conversation,
                 doctor_message=body.message,
-                final_state=final_sse,
+                final_state=final_state,
             )
             await session.commit()
 
             yield {
+                "event": "final",
+                "data": json.dumps(final_payload),
+            }
+            yield {
                 "event": "done",
-                "data": json.dumps(
-                    {"threadId": thread_id, "messageId": assistant_message_id}
-                ),
+                "data": json.dumps({"threadId": thread_id, "messageId": assistant_message_id}),
             }
 
         except Exception as exc:
