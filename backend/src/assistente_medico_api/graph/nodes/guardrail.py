@@ -194,11 +194,12 @@ async def guardrail_node(state: ChatRAGState, settings: Settings) -> dict:
             reason = str(regen_exc)
             steps.append("Guardrail: regeneração falhou — mensagem padrão exibida.")
 
-    # Atualiza histórico com a resposta final (pós-guardrail).
+    # Atualiza histórico com a resposta clínica sem disclaimer
+    history_answer = original_answer if verdict == "AVISO" else final_answer
     if query:
         hist = hist + [
             {"role": "user", "content": query},
-            {"role": "assistant", "content": final_answer},
+            {"role": "assistant", "content": history_answer},
         ]
         if len(hist) > CHAT_HISTORY_MAX_ITEMS:
             hist = hist[-CHAT_HISTORY_MAX_ITEMS:]
