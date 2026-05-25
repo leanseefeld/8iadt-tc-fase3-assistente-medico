@@ -56,6 +56,20 @@ def _history_transcript(state: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _rewrite_human_message(*, query: str, transcript: str) -> str:
+    """Monta o prompt de reescrita; primeiro turno omite bloco de histórico."""
+    if transcript:
+        return (
+            f"Histórico da conversa:\n{transcript}\n\n"
+            f"Última pergunta do médico:\n{query}\n\n"
+            "Reformule em uma consulta única para busca nos PCDTs."
+        )
+    return (
+        f"Pergunta do médico:\n{query}\n\n"
+        "Reformule em uma consulta única e autocontida para busca nos PCDTs."
+    )
+
+
 async def resolve_retrieval_query(
     *,
     state: dict[str, Any],
@@ -76,21 +90,9 @@ async def resolve_retrieval_query(
         )
 
     transcript = _history_transcript(state)
-    if not transcript:
-        steps.append("Busca: sem histórico — usada pergunta literal na recuperação.")
-        return RetrievalQueryResolution(
-            retrieval_query=query,
-            reasoning_steps=steps,
-            used_history=False,
-            llm_used=False,
-        )
-
+    used_history = bool(transcript)
     llm = build_llm(settings)
-    human = (
-        f"Histórico da conversa:\n{transcript}\n\n"
-        f"Última pergunta do médico:\n{query}\n\n"
-        "Reformule em uma consulta única para busca nos PCDTs."
-    )
+    human = _rewrite_human_message(query=query, transcript=transcript)
     rewrite_messages = [
         SystemMessage(content=_REWRITE_SYSTEM),
         HumanMessage(content=human),
@@ -113,15 +115,18 @@ async def resolve_retrieval_query(
             return RetrievalQueryResolution(
                 retrieval_query=query,
                 reasoning_steps=steps,
-                used_history=True,
+                used_history=used_history,
                 llm_used=True,
-                error="resposta vazia do modelo",
+                error="resposta vazia ou igual à pergunta",
             )
-        steps.append("Busca: pergunta reescrita com o histórico para recuperação.")
+        if used_history:
+            steps.append("Busca: pergunta reescrita com o histórico para recuperação.")
+        else:
+            steps.append("Busca: pergunta reescrita para recuperação.")
         return RetrievalQueryResolution(
             retrieval_query=retrieval_query,
             reasoning_steps=steps,
-            used_history=True,
+            used_history=used_history,
             llm_used=True,
         )
     except Exception as exc:
@@ -129,7 +134,7 @@ async def resolve_retrieval_query(
         return RetrievalQueryResolution(
             retrieval_query=query,
             reasoning_steps=steps,
-            used_history=True,
+            used_history=used_history,
             llm_used=True,
             error=str(exc)[:240],
         )

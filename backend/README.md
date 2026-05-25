@@ -58,7 +58,7 @@ uvicorn assistente_medico_api.main:app --reload --host 0.0.0.0 --port 8000
 - Documentação interativa: `http://127.0.0.1:8000/docs`
 - Chat JSON: `POST http://127.0.0.1:8000/api/assistant/chat` com `Accept: application/json`
 - Chat SSE: mesma URL com `Accept: text/event-stream`
-- **Memória de conversa:** envie `threadId` devolvido na resposta anterior (JSON `threadId` ou SSE `event: done`) para persistir o histórico no servidor (**LangGraph** + `MemorySaver`). Opcional: `messageHistory` — até **20** itens `{ "role", "content" }` anteriores à `message` atual (fallback se o thread ainda não tem estado ou cliente legado). O PCDT entra só no turno final da geração. Com histórico, o grafo **reescreve** a pergunta antes do retrieve no Chroma.
+- **Memória de conversa:** envie `threadId` devolvido na resposta anterior (JSON `threadId` ou SSE `event: done`) para persistir o histórico no servidor (**LangGraph** + `MemorySaver`). Opcional: `messageHistory` — até **20** itens `{ "role", "content" }` anteriores à `message` atual (fallback se o thread ainda não tem estado ou cliente legado). O PCDT entra só no turno final da geração. Em todo turno clínico (RAG), o nó **rewrite** reescreve a pergunta com LLM antes do retrieve no Chroma; com histórico, o transcript entra no prompt de reescrita.
 
 ## Variáveis de ambiente (prefixo `MEDICO_`)
 
@@ -144,7 +144,7 @@ Localização dos nós:
 
 O rewrite combina três fontes:
 
-1. LLM rewrite conversacional com transcript do histórico, preservado da `main`.
+1. LLM rewrite conversacional em todo turno RAG (com transcript do histórico quando houver).
 2. `last_structured_terms` da memória para resolver follow-ups sem regex de doenças.
 3. Catálogo Conitec e `clinical_entity_resolver` para `linked_entities`, `catalog_candidates`, `structured_terms` e `expanded_query`.
 
