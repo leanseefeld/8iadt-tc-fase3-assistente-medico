@@ -214,20 +214,26 @@ async def load_patient_context_node(state: ChatRAGState, settings: Settings) -> 
     """
     Carrega contexto clínico do paciente admitido (cache no checkpoint por thread).
 
-    Cache hit: patient_context já preenchido → retorna {}.
+    Cache hit: patient_context já preenchido E patient_id não mudou → retorna {}.
+    Se patient_id mudou, limpa o contexto stale e recarrega.
     """
     _ = settings
     pid = (state.get("patient_id") or "").strip()
     existing_steps = list(state.get("reasoning_steps") or [])
 
-    # Cache hit — contexto já carregado neste thread.
-    if state.get("patient_context"):
+    # Detecta mudança de paciente: invalida cache se patient_id mudou
+    cached_patient_id = state.get("_cached_patient_id") or ""
+    if state.get("patient_context") and cached_patient_id == pid:
+        # Cache hit — mesmo paciente, contexto já carregado
         return {}
+    
+    # Cache miss ou patient_id mudou: precisa recarregar
 
     if not pid:
         step = "Contexto clínico: paciente não informado."
         return {
             "patient_context": "",
+            "_cached_patient_id": "",
             "reasoning_steps": existing_steps + [step],
         }
 
@@ -237,6 +243,7 @@ async def load_patient_context_node(state: ChatRAGState, settings: Settings) -> 
             step = f"Contexto clínico: paciente {pid} não encontrado."
             return {
                 "patient_context": "",
+                "_cached_patient_id": pid,
                 "reasoning_steps": existing_steps + [step],
             }
 
@@ -246,5 +253,6 @@ async def load_patient_context_node(state: ChatRAGState, settings: Settings) -> 
     step = f"Contexto clínico carregado: {patient.name}, {patient.age}a, CID {patient.cid_code}"
     return {
         "patient_context": formatted,
+        "_cached_patient_id": pid,
         "reasoning_steps": existing_steps + [step],
     }

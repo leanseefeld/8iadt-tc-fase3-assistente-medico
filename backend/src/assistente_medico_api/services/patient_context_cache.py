@@ -21,7 +21,10 @@ async def invalidate_patient_context(app_state: Any, patient_id: str) -> None:
         try:
             config = {"configurable": {"thread_id": tid}}
             snap = await graph.aget_state(config)
-            if snap.values:
-                await graph.aupdate_state(config, {"patient_context": ""})
+            if snap:
+                await graph.aupdate_state(config, {
+                    "patient_context": "",
+                    "_cached_patient_id": "",
+                })
         except Exception:
             pass

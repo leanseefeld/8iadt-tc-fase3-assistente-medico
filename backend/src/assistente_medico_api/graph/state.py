@@ -53,5 +53,6 @@ class ChatRAGState(TypedDict, total=False):
     guardrail_status: str  # "safe" | "warned" | "blocked" | "regenerated"
     guardrail_reason: str
     patient_context: str
+    _cached_patient_id: str  # Rastreia qual paciente o contexto foi carregado (para detectar mudança)
     generate_llm_input: list[dict]
     generate_llm_output: str

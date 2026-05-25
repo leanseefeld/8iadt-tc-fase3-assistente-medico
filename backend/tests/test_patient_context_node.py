@@ -145,3 +145,59 @@ def test_format_patient_context_with_and_without_optional_fields():
     text2 = format_patient_context(patient_no_gender, [], reference=ref)
     assert "Identidade de gênero" not in text2
     assert "Sintomas: Não informado" in text2
+
+
+def test_format_patient_context_with_completed_exams():
+    """Valida que exames concluídos aparecem corretamente no contexto."""
+    ref = datetime(2026, 5, 24, 12, 0, tzinfo=UTC)
+    patient = Patient(
+        id="pt-1",
+        name="João Silva",
+        age=45,
+        sex="M",
+        status="admitted",
+        admitted_at=ref,
+        cid_code="E11",
+        cid_label="Diabetes Mellitus Tipo 2",
+    )
+    
+    # Exame pendente e exame concluído
+    pending_exam = Exam(
+        id="ex-pending",
+        patient_id="pt-1",
+        name="Creatinina",
+        requested_at=ref - timedelta(days=5),
+        status="pending",
+    )
+    
+    completed_exam = Exam(
+        id="ex-completed",
+        patient_id="pt-1",
+        name="HbA1c",
+        requested_at=ref - timedelta(days=2),
+        status="completed",
+        result="7.5%",
+        completed_at=ref - timedelta(hours=1),
+    )
+    
+    text = format_patient_context(patient, [pending_exam, completed_exam], reference=ref)
+    
+    # Valida estrutura geral - seções estão separadas
+    assert "- Exames concluídos (últimos 6 meses):" in text
+    assert "- Exames pendentes (últimos 6 meses):" in text
+    
+    # Valida conteúdo de cada seção
+    lines = text.split("\n")
+    pending_idx = next(i for i, l in enumerate(lines) if "pendentes" in l)
+    completed_idx = next(i for i, l in enumerate(lines) if "concluídos" in l)
+    
+    # Exame pendente deve estar entre "Exames pendentes" e "Exames concluídos"
+    pending_section = "\n".join(lines[pending_idx:completed_idx])
+    assert "Creatinina" in pending_section
+    assert "pendente" in pending_section
+    
+    # Exame concluído deve estar após "Exames concluídos"
+    completed_section = "\n".join(lines[completed_idx:])
+    assert "HbA1c" in completed_section
+    assert "7.5%" in completed_section
+    assert "concluído" in completed_section
