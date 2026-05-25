@@ -2,12 +2,9 @@ import { Archive, Send } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   archiveAssistantConversation,
-  getAssistantConversationMessages,
-  patchAssistantMessageFeedback,
-  postAssistantChatMock,
   quickQuestionsForCid,
 } from '@/api/clinicalApi';
 import {
@@ -16,53 +13,11 @@ import {
   type ExpandedMetaPanel,
 } from '@/components/chat/AssistantMessageMeta';
 import { useAppSession } from '@/context/AppSessionContext';
+import { useChatSession } from '@/context/ChatSessionContext';
 import { useConversationRefresh } from '@/context/ConversationRefreshContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
-import type {
-  ConversationMessageDto,
-  GuardrailStatus,
-  MessageFeedbackRating,
-} from '@/types/domain';
-
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-  /** True enquanto tokens SSE estão chegando (modo HTTP). */
-  streaming?: boolean;
-  sources?: string[];
-  reasoning?: string[];
-  /** Painel de meta aberto; no máximo um por mensagem. */
-  expandedPanel?: ExpandedMetaPanel | null;
-  guardrailStatus?: GuardrailStatus;
-  /** Id da mensagem no SQLite (para PATCH de feedback). */
-  persistedMessageId?: string;
-  feedbackRating?: MessageFeedbackRating;
-  feedbackSubmitting?: boolean;
-}
-
-function patchAssistantMessage(
-  messages: ChatMessage[],
-  assistantId: string,
-  patch: Partial<ChatMessage>,
-): ChatMessage[] {
-  return messages.map((msg) =>
-    msg.id === assistantId ? { ...msg, ...patch } : msg,
-  );
-}
-
-function mapPersistedMessages(rows: ConversationMessageDto[]): ChatMessage[] {
-  return rows.map((row) => ({
-    id: row.id,
-    role: row.author,
-    text: row.content,
-    sources: row.sources ?? undefined,
-    reasoning: row.reasoningSteps ?? undefined,
-    persistedMessageId: row.author === 'assistant' ? row.id : undefined,
-    feedbackRating: row.feedbackRating ?? undefined,
-  }));
-}
+import type { MessageFeedbackRating } from '@/types/domain';
 
 export function ChatPage() {
   const { activePatientId } = useAppSession();
@@ -70,114 +25,98 @@ export function ChatPage() {
   const { showToast } = useToast();
   const { refreshConversations } = useConversationRefresh();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const threadFromUrl = searchParams.get('thread');
 
+  const {
+    version,
+    getSession,
+    ensureSessionLoaded,
+    sendMessage,
+    submitFeedback,
+    updateMessages,
+    clearPendingSession,
+  } = useChatSession();
+
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [assistantThreadId, setAssistantThreadId] = useState<string | null>(null);
-  const [loadingThread, setLoadingThread] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [feedbackBusyMessageId, setFeedbackBusyMessageId] = useState<string | null>(
     null,
   );
+  const [loadError, setLoadError] = useState(false);
 
-  // Hidrata conversa salva ou inicia nova quando URL/paciente mudam.
+  // version in deps so UI re-renders when background stream updates session
+  const session = activePatientId
+    ? getSession(activePatientId, threadFromUrl)
+    : null;
+  void version;
+
+  const messages = session?.messages ?? [];
+  const assistantThreadId = session?.threadId ?? threadFromUrl;
+  const loadingThread = session?.status === 'loading';
+  const generating = session?.status === 'generating';
+
   useEffect(() => {
     if (!activePatientId) {
-      setMessages([]);
-      setAssistantThreadId(null);
       return;
     }
-
     if (!threadFromUrl) {
-      setMessages([]);
-      setAssistantThreadId(null);
+      clearPendingSession(activePatientId);
+      setLoadError(false);
       return;
     }
 
+    setLoadError(false);
     let cancelled = false;
-    setLoadingThread(true);
 
-    void getAssistantConversationMessages(threadFromUrl)
-      .then((res) => {
-        if (cancelled) {
-          return;
-        }
-        if (res.patientId !== activePatientId) {
-          showToast('Esta conversa pertence a outro paciente.');
-          navigate('/chat', { replace: true });
-          return;
-        }
-        setAssistantThreadId(res.conversationId);
-        setMessages(mapPersistedMessages(res.messages));
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
+    void ensureSessionLoaded(activePatientId, threadFromUrl).catch((err: Error) => {
+      if (cancelled) {
+        return;
+      }
+      if (err.message === 'wrong_patient') {
+        showToast('Esta conversa pertence a outro paciente.');
+      } else {
         showToast('Não foi possível carregar a conversa.');
-        setMessages([]);
-        setAssistantThreadId(null);
-        navigate('/chat', { replace: true });
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingThread(false);
-        }
-      });
+      }
+      setLoadError(true);
+      navigate('/chat', { replace: true });
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [activePatientId, threadFromUrl, navigate, showToast]);
+  }, [
+    activePatientId,
+    threadFromUrl,
+    ensureSessionLoaded,
+    clearPendingSession,
+    navigate,
+    showToast,
+  ]);
 
   async function handleFeedbackSelect(
     localMessageId: string,
     clicked: MessageFeedbackRating,
   ) {
-    const msg = messages.find((m) => m.id === localMessageId);
-    if (!msg?.persistedMessageId || !assistantThreadId) {
+    if (!activePatientId) {
       return;
     }
-    const previous = msg.feedbackRating;
-    const nextRating = previous === clicked ? undefined : clicked;
-
-    setMessages((m) =>
-      patchAssistantMessage(m, localMessageId, {
-        feedbackRating: nextRating,
-        feedbackSubmitting: true,
-      }),
-    );
     setFeedbackBusyMessageId(localMessageId);
-
     try {
-      await patchAssistantMessageFeedback(
-        assistantThreadId,
-        msg.persistedMessageId,
-        nextRating ?? null,
-      );
-    } catch {
-      setMessages((m) =>
-        patchAssistantMessage(m, localMessageId, {
-          feedbackRating: previous,
-        }),
-      );
-      showToast('Não foi possível salvar sua avaliação. Tente novamente.');
+      await submitFeedback(activePatientId, threadFromUrl, localMessageId, clicked);
     } finally {
       setFeedbackBusyMessageId(null);
-      setMessages((m) =>
-        patchAssistantMessage(m, localMessageId, {
-          feedbackSubmitting: false,
-        }),
-      );
     }
   }
 
   function toggleMessagePanel(messageId: string, panel: ExpandedMetaPanel) {
-    setMessages((m) =>
-      m.map((msg) => {
+    if (!activePatientId) {
+      return;
+    }
+    updateMessages(activePatientId, threadFromUrl, (msgs) =>
+      msgs.map((msg) => {
         if (msg.id !== messageId) {
           return msg;
         }
@@ -213,6 +152,10 @@ export function ChatPage() {
     );
   }
 
+  if (loadError) {
+    return null;
+  }
+
   const quick = quickQuestionsForCid(patient.cid.code);
 
   async function send(text: string) {
@@ -220,72 +163,17 @@ export function ChatPage() {
     if (!trimmed || loadingThread) {
       return;
     }
-    // Histórico multi-turno: servidor (threadId + checkpointer); não enviar messageHistory.
-    setMessages((m) => [
-      ...m,
-      { id: `u-${Date.now()}`, role: 'user', text: trimmed },
-    ]);
     setInput('');
 
-    const assistantId = `a-${Date.now()}`;
-    setMessages((m) => [
-      ...m,
-      { id: assistantId, role: 'assistant', text: '', streaming: true },
-    ]);
-    try {
-      const res = await postAssistantChatMock(activePatientId!, trimmed, {
-        threadId: assistantThreadId ?? undefined,
-        onToken: (delta) => {
-          setMessages((m) =>
-            patchAssistantMessage(m, assistantId, {
-              text: (m.find((x) => x.id === assistantId)?.text ?? '') + delta,
-            }),
-          );
-        },
-        onMeta: (src, steps) => {
-          setMessages((m) =>
-            patchAssistantMessage(m, assistantId, {
-              sources: src,
-              reasoning: steps,
-            }),
-          );
-        },
-        onError: (detail) => {
-          showToast(detail);
-        },
-      });
-      setMessages((m) =>
-        patchAssistantMessage(m, assistantId, {
-          text: res.text,
-          streaming: false,
-          sources: res.sources,
-          reasoning: res.reasoning,
-          ...(res.guardrailStatus
-            ? { guardrailStatus: res.guardrailStatus }
-            : {}),
-          ...(res.messageId ? { persistedMessageId: res.messageId } : {}),
-        }),
-      );
-      if (res.threadId) {
-        setAssistantThreadId(res.threadId);
-        if (!threadFromUrl) {
-          navigate(`/chat?thread=${encodeURIComponent(res.threadId)}`, {
-            replace: true,
-          });
-        }
-        refreshConversations();
-      }
-      if (!res.text.trim()) {
-        setMessages((m) =>
-          patchAssistantMessage(m, assistantId, {
-            text:
-              '__FALLBACK__O assistente não devolveu texto. Verifique o backend e o Ollama.__',
-            streaming: false,
-          }),
-        );
-      }
-    } catch {
-      setMessages((m) => m.filter((x) => x.id !== assistantId));
+  // Stream roda no context — sobrevive troca de rota/conversa.
+    const newThreadId = await sendMessage(activePatientId!, threadFromUrl, trimmed);
+    if (
+      newThreadId &&
+      !threadFromUrl &&
+      location.pathname === '/chat' &&
+      !searchParams.get('thread')
+    ) {
+      navigate(`/chat?thread=${encodeURIComponent(newThreadId)}`, { replace: true });
     }
   }
 
@@ -305,7 +193,8 @@ export function ChatPage() {
             <button
               type="button"
               onClick={() => setArchiveOpen(true)}
-              className="flex items-center gap-1 rounded-lg border border-amber-600 px-2 py-1 text-xs text-amber-900 hover:bg-amber-50"
+              disabled={generating}
+              className="flex items-center gap-1 rounded-lg border border-amber-600 px-2 py-1 text-xs text-amber-900 hover:bg-amber-50 disabled:opacity-50"
             >
               <Archive className="h-3.5 w-3.5" aria-hidden />
               Arquivar
@@ -323,10 +212,7 @@ export function ChatPage() {
           ) : null}
           {messages.map((msg) =>
             msg.text.startsWith('__FALLBACK__') ? (
-              <p
-                key={msg.id}
-                className="text-sm italic text-slate-500"
-              >
+              <p key={msg.id} className="text-sm italic text-slate-500">
                 {msg.text.replace('__FALLBACK__', '')}
               </p>
             ) : (
