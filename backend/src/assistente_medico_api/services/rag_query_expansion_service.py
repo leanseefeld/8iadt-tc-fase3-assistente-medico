@@ -137,28 +137,39 @@ def _load_catalog() -> dict[str, Any] | None:
         return None
 
 
+def _has_disease(expansion: dict) -> bool:
+    st = expansion.get("structured_terms") or {}
+    return bool(st.get("disease") or st.get("diretriz"))
+
+
 def expand_query_for_retrieval(
     *,
     query: str,
     retrieval_query: str,
     settings: Settings,
 ) -> QueryExpansionResult:
-    """Aplica a expansão estruturada preservando o refinamento da branch atual."""
-    base_query = (retrieval_query or query or "").strip()
-    catalog = _load_catalog()
-    if not base_query or not catalog:
-        expansion = expand_query_with_conitec_catalog(base_query, catalog or {}, max_terms=10)
-        return QueryExpansionResult(
-            expanded_query=expansion.get("expanded_query") or base_query,
-            clinical_understanding=expansion.get("clinical_understanding") or {},
-            structured_terms=expansion.get("structured_terms") or {},
-            matched_cid10_codes=list(expansion.get("matched_cid10_codes") or []),
-            matched_diseases=list(expansion.get("matched_diseases") or []),
-            matched_medications=list(expansion.get("matched_medications") or []),
-            query_expansion=expansion,
-        )
+    """Aplica a expansão estruturada preservando o refinamento da branch atual.
 
-    expansion = expand_query_with_conitec_catalog(base_query, catalog, max_terms=10)
+    Estratégia: expande a query ORIGINAL primeiro, pois abreviações curtas (sgb, les, ar)
+    matcham melhor no catálogo do que a versão reescrita pelo LLM, que tende a produzir
+    frases genéricas do tipo "conforme especificado no PCDT do Brasil" que diluem o match.
+    Só usa a query reescrita se a original não tiver detectado doença e a reescrita tiver.
+    """
+    original_query = (query or "").strip()
+    base_query = (retrieval_query or original_query).strip()
+    catalog = _load_catalog()
+
+    # Sempre expande a query original para detecção de doença/CID
+    orig_expansion = expand_query_with_conitec_catalog(original_query or base_query, catalog or {}, max_terms=10)
+
+    if original_query == base_query or _has_disease(orig_expansion):
+        # Query original já tem doença detectada — usa diretamente
+        expansion = orig_expansion
+    else:
+        # Original não detectou doença; tenta a reescrita (útil em follow-ups como "e os critérios de exclusão?")
+        base_expansion = expand_query_with_conitec_catalog(base_query, catalog or {}, max_terms=10)
+        expansion = base_expansion if _has_disease(base_expansion) else orig_expansion
+
     return QueryExpansionResult(
         expanded_query=expansion.get("expanded_query") or base_query,
         clinical_understanding=expansion.get("clinical_understanding") or {},

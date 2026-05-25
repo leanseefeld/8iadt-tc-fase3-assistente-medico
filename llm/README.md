@@ -21,29 +21,22 @@ pip install -e "llm[semantic]"
 ollama pull nomic-embed-text
 ```
 
-Para reconhecimento biomédico no chat médico, `spacy`, `medspacy` e `scispacy` fazem parte das dependências padrão. A instalação não baixa modelos de linguagem automaticamente:
+Para reconhecimento biomédico no chat médico, o modelo spaCy em português (`pt_core_news_sm`) é obrigatório. O `--setup` do orquestrador baixa o modelo automaticamente se ainda não estiver instalado:
 
 ```bash
-# NER genérico em português, opcional
+python run-local.py --setup
+```
+
+Para instalar manualmente:
+
+```bash
 python -m spacy download pt_core_news_sm
+```
+
+O backend usa spaCy NER em português para resolver entidades clínicas na query antes da busca; se o modelo não estiver disponível, continua com fallback pelo catálogo Conitec local.
 
 # QuickUMLS é opcional e exige base local previamente instalada
 export QUICKUMLS_FP=/caminho/quickumls
-```
-
-Também é possível baixar o modelo português pelo orquestrador da raiz:
-
-```bash
-python run-local.py --setup-medical-nlp
-```
-
-Para iniciar o backend usando medSpaCy com esse modelo:
-
-```bash
-python run-local.py --use-medspacy-pt
-```
-
-O backend tenta scispaCy + EntityLinker, QuickUMLS e, por último, spaCy apenas como NER. Se esses backends não existirem, o chat continua funcionando com fallback pelo catálogo Conitec local, sem baixar modelos em runtime.
 
 Para usar o download Einstein com navegador (Playwright), instale também o Chromium:
 
@@ -263,7 +256,7 @@ Campos exibidos:
 - `router_result`: decisão `search_needed` e tipo da pergunta.
 - `rewrite_result`: `resolved_query`, `expanded_query`, `structured_terms`, entidades e candidatos do catálogo.
 - `rewrite_result.llm_rewrite_used`: indica se o rewrite conversacional por LLM foi usado.
-- `rewrite_result.medspacy_used` / `spacy_used`: indica se medSpaCy/spaCy participou da resolução clínica.
+- `rewrite_result.spacy_used`: indica se spaCy (`pt_core_news_sm`) participou da resolução clínica.
 - `retrieve_result`: query enviada ao Chroma, filtro de metadata, tentativa, collection, persist dir e modelo de embedding.
 - `rerank_result`: `context_quality`, `failure_type`, documentos removidos/selecionados, seções esperadas/encontradas e saída do LLM rerank quando habilitado.
 - `audit_trace`: trilha append-only por etapa, exportável na aba **Exportar JSON**.

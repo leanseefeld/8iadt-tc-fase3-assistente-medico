@@ -6,6 +6,7 @@ from copy import deepcopy
 from functools import lru_cache
 import json
 import logging
+import uuid
 from typing import Any
 
 import httpx
@@ -32,13 +33,6 @@ from assistente_medico_api.graph.rag_enhancement import (
 CONTEXT_SUFFICIENT = "sufficient"
 CONTEXT_PARTIAL = "partial"
 CONTEXT_INSUFFICIENT = "insufficient"
-_REWRITE_SYSTEM = """\
-Você reformula a última pergunta do médico como uma única consulta autocontida para busca \
-por similaridade em documentos dos Protocolos Clínicos e Diretrizes Terapêuticas (PCDT) do Brasil.
-Use o histórico e os termos clínicos estruturados apenas para resolver referências conversacionais.
-Preserve termos clínicos, siglas resolvidas, CID/procedimentos e intenção da pergunta.
-Responda apenas com a consulta reformulada, sem prefixos nem explicações.\
-"""
 _logger = logging.getLogger("assistente_medico.rag")
 
 
@@ -102,109 +96,6 @@ def _last_structured_terms_from_state(state: dict[str, Any]) -> dict[str, Any] |
     return None
 
 
-def _is_simple_direct(text: str) -> bool:
-    norm = normalize_text_for_match(text)
-    return norm in {
-        "oi",
-        "ola",
-        "olá",
-        "bom dia",
-        "boa tarde",
-        "boa noite",
-        "obrigado",
-        "obrigada",
-        "quem e voce",
-        "quem é voce",
-        "quem é você",
-    }
-
-
-def run_search_router(
-    query: str,
-    memory_result: dict | str | None = None,
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    del settings
-    text = (query or "").strip()
-    memory = memory_result if isinstance(memory_result, dict) else {}
-    if not text:
-        decision = {
-            "search_needed": False,
-            "question_type": "unsupported",
-            "reason": "pergunta vazia",
-            "confidence": 1.0,
-            "method": "semantic",
-        }
-    elif _is_simple_direct(text):
-        decision = {
-            "search_needed": False,
-            "question_type": "smalltalk",
-            "reason": "interação simples que não solicita evidência PCDT",
-            "confidence": 0.9,
-            "method": "semantic",
-        }
-    else:
-        intent = classify_clinical_intent(text)
-        has_follow_up_memory = bool(memory.get("last_structured_terms") or memory.get("last_disease"))
-        follow_up_shape = normalize_text_for_match(text).startswith(("e ", "e os ", "e as ", "qual ", "quais "))
-        search_needed = True
-        question_type = "follow_up_question" if has_follow_up_memory and follow_up_shape else "clinical_question"
-        if intent.get("intent") and intent.get("intent") != "geral":
-            question_type = "protocol_query"
-        decision = {
-            "search_needed": search_needed,
-            "question_type": question_type,
-            "reason": "pergunta potencialmente clínica; buscar PCDT por política conservadora",
-            "confidence": max(0.7, float(intent.get("confidence") or 0.0)),
-            "method": "semantic",
-        }
-    return {"search_needed": bool(decision["search_needed"]), "router_result": decision, "router_decision": decision}
-
-
-async def run_llm_rewrite(
-    query: str,
-    memory_result: dict[str, Any] | None,
-    settings: Settings,
-) -> tuple[str, dict[str, Any]]:
-    """Rewrite the current turn with the same conversational LLM behavior from main."""
-    current = str(query or "").strip()
-    memory = memory_result or {}
-    transcript = str(memory.get("history_transcript") or "").strip()
-    last_structured = memory.get("last_structured_terms") or {}
-    if not transcript and not last_structured:
-        return current, {"llm_rewrite_used": False, "reason": "no_history"}
-
-    _logger.info("rewrite: before_llm_rewrite")
-    human = (
-        f"Histórico da conversa:\n{transcript or '(sem histórico textual)'}\n\n"
-        f"Termos estruturados anteriores:\n{last_structured}\n\n"
-        f"Última pergunta do médico:\n{current}\n\n"
-        "Reformule em uma consulta única, autocontida e adequada para busca nos PCDTs."
-    )
-    try:
-        result = await _build_llm(settings).ainvoke([SystemMessage(content=_REWRITE_SYSTEM), HumanMessage(content=human)])
-        raw = getattr(result, "content", None) or ""
-        if isinstance(raw, list):
-            raw = "".join(str(part) for part in raw)
-        resolved = str(raw or "").strip()
-        if not resolved:
-            raise ValueError("resposta vazia do modelo")
-        _logger.info("rewrite: after_llm_rewrite")
-        return resolved, {"llm_rewrite_used": True, "method": "llm", "history_transcript_used": transcript}
-    except Exception as exc:
-        _logger.info("rewrite: after_llm_rewrite")
-        fallback = current
-        disease = str(last_structured.get("diretriz") or last_structured.get("disease") or "").strip()
-        if disease and normalize_text_for_match(disease) not in normalize_text_for_match(current):
-            fallback = f"{current} para {disease}".strip()
-        return fallback, {
-            "llm_rewrite_used": False,
-            "method": "fallback",
-            "error": str(exc)[:240],
-            "history_transcript_used": transcript,
-        }
-
-
 def run_rewrite_query(
     query: str,
     memory_result: dict | str | None,
@@ -241,15 +132,10 @@ def run_rewrite_query(
         intent=understanding.get("intent_result") or {"intent": structured.get("intent"), "confidence": structured.get("confidence")},
         enable_medical_nlp=bool(getattr(settings, "enable_medical_nlp", True)),
         use_medspacy=bool(getattr(settings, "use_medspacy", False)),
-        use_spacy=bool(getattr(settings, "use_spacy", True)),
-        medspacy_model=str(getattr(settings, "medspacy_model", "pt_core_news_sm")),
-        medspacy_language_code=str(getattr(settings, "medspacy_language_code", "pt")),
-        spacy_model=str(getattr(settings, "spacy_model", "pt_core_news_sm")),
     )
     _logger.info(
-        "rewrite: after_entity_resolver backend=%s medspacy=%s spacy=%s linked_entities=%s",
+        "rewrite: after_entity_resolver backend=%s spacy=%s linked_entities=%s",
         entity_result.get("entity_backend"),
-        entity_result.get("medspacy_used"),
         entity_result.get("spacy_used"),
         len(entity_result.get("linked_entities") or []),
     )
@@ -269,10 +155,7 @@ def run_rewrite_query(
         "linked_entities": linked_entities,
         "catalog_candidates": catalog_candidates,
         "entity_backend": entity_result.get("entity_backend"),
-        "medspacy_used": entity_result.get("medspacy_used"),
         "spacy_used": entity_result.get("spacy_used"),
-        "medspacy_model": entity_result.get("medspacy_model"),
-        "spacy_model": entity_result.get("spacy_model"),
     }
     expanded_query = str(expansion.get("expanded_query") or final_resolved_query).strip()
     rewrite_result = {
@@ -288,10 +171,7 @@ def run_rewrite_query(
         "history_transcript_used": memory.get("history_transcript") or "",
         "llm_rewrite_used": bool((rewrite_debug or {}).get("llm_rewrite_used")),
         "rewrite_debug": rewrite_debug or {},
-        "medspacy_used": entity_result.get("medspacy_used"),
         "spacy_used": entity_result.get("spacy_used"),
-        "medspacy_model": entity_result.get("medspacy_model"),
-        "spacy_model": entity_result.get("spacy_model"),
     }
     return {
         "rewrite_result": rewrite_result,
@@ -650,18 +530,6 @@ async def run_rerank_and_validate_context(
         "rerank_result": rerank_result,
         "rerank_debug": rerank_result["debug"],
     }
-
-
-def route_context_quality(state: dict[str, Any]) -> str:
-    """Compatibilidade com testes e chamadas diretas de debug."""
-    quality = (state.get("rerank_result") or {}).get("context_quality")
-    if quality == CONTEXT_SUFFICIENT or state.get("context_sufficient") is True:
-        return "generate"
-    attempts = int(state.get("retrieve_attempt") or 1)
-    max_attempts = int(state.get("max_retrieve_attempts") or 1)
-    if attempts < max_attempts:
-        return "retry_retrieve"
-    return "generate"
 
 
 async def run_full_graph_debug(

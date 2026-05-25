@@ -14,7 +14,6 @@ from assistente_medico_api.graph.nodes.generate import _build_messages, generate
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
 from assistente_medico_api.services import rag_pipeline_service as rag_service
 from assistente_medico_api.services.rag_pipeline_service import (
-    route_context_quality,
     run_rerank_and_validate_context,
     run_rewrite_query,
 )

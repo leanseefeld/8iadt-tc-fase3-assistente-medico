@@ -39,12 +39,6 @@ python run-local.py --build-vectorstore
 # instala dependências opcionais para chunking semântico
 python run-local.py --setup --setup-semantic
 
-# baixa o modelo português para medSpaCy/spaCy clínico
-python run-local.py --setup-medical-nlp
-
-# sobe o backend usando medSpaCy com modelo português
-python run-local.py --use-medspacy-pt
-
 # executa a pipeline RAG usando chunking semântico
 python run-local.py --build-vectorstore --chunk-strategy semantic
 
@@ -80,7 +74,7 @@ Os nós do grafo ficam em `backend/src/assistente_medico_api/graph/nodes/`:
 `fallback_retrieve.py`, `generate.py`, `guardrail.py` e `save_memory.py`.
 O rewrite preserva o comportamento da `main`: usa LLM com transcript do histórico
 para gerar uma consulta autocontida e, em seguida, aplica catálogo Conitec e
-resolução clínica opcional com medSpaCy/spaCy para produzir `expanded_query` e
+resolução clínica com spaCy (`pt_core_news_sm`) para produzir `expanded_query` e
 `structured_terms`.
 
 Para depurar divergência entre frontend/backend e inspector, use:

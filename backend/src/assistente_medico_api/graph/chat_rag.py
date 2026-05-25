@@ -8,6 +8,7 @@ from langgraph.graph import END, StateGraph
 from assistente_medico_api.config import Settings
 from assistente_medico_api.graph.nodes.generate import generate_node
 from assistente_medico_api.graph.nodes.guardrail import guardrail_node
+from assistente_medico_api.graph.nodes.patient_context import load_patient_context_node
 from assistente_medico_api.graph.nodes.rerank import context_quality_router, rerank_and_validate_context_node
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
 from assistente_medico_api.graph.nodes.router import route_search_needed, router_search_needed_node
@@ -17,6 +18,9 @@ from assistente_medico_api.graph.state import ChatRAGState
 
 def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=None):
     """Monta o grafo com apenas os nós permitidos pelo contrato atual."""
+
+    async def _load_patient_context(state: ChatRAGState) -> dict:
+        return await load_patient_context_node(state, settings)
 
     async def _router(state: ChatRAGState) -> dict:
         return await router_search_needed_node(state, settings=settings)
@@ -37,13 +41,15 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=No
         return await guardrail_node(state, settings)
 
     workflow = StateGraph(ChatRAGState)
+    workflow.add_node("load_patient_context", _load_patient_context)
     workflow.add_node("router", _router)
     workflow.add_node("rewrite", _rewrite)
     workflow.add_node("retrieve", _retrieve)
     workflow.add_node("rerank", _rerank)
     workflow.add_node("generate", _generate)
     workflow.add_node("guardrail", _guardrail)
-    workflow.set_entry_point("router")
+    workflow.set_entry_point("load_patient_context")
+    workflow.add_edge("load_patient_context", "router")
     workflow.add_conditional_edges(
         "router",
         route_search_needed,

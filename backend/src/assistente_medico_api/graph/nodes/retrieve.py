@@ -7,11 +7,10 @@ import time
 from langchain_chroma import Chroma
 
 from assistente_medico_api.config import Settings
-from assistente_medico_api.graph.context_formatting import format_context_block
 from assistente_medico_api.graph.state import ChatRAGState
 from assistente_medico_api.observability.audit import audit, truncate
 from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
-from assistente_medico_api.services.rag_pipeline_service import format_source_label, run_retrieve
+from assistente_medico_api.services.rag_pipeline_service import run_retrieve
 
 
 def _fallback_query(query: str, state: ChatRAGState) -> str:
