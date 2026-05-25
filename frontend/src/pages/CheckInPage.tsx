@@ -611,7 +611,7 @@ export function CheckInPage() {
                 Sintomas
               </label>
               <textarea
-                maxLength={500}
+                maxLength={1000}
                 rows={3}
                 value={symptoms}
                 onChange={(e) => setSymptoms(e.target.value)}
@@ -619,7 +619,7 @@ export function CheckInPage() {
                 className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
               />
               <p className="mt-0.5 text-xs text-slate-500">
-                {symptoms.length}/500 — um sintoma por linha
+                {symptoms.length}/1000 — um sintoma por linha
               </p>
             </div>
 
@@ -628,7 +628,7 @@ export function CheckInPage() {
                 Observações
               </label>
               <textarea
-                maxLength={300}
+                maxLength={1000}
                 rows={3}
                 value={observations}
                 onChange={(e) => setChiefComplaint(e.target.value)}
@@ -636,7 +636,7 @@ export function CheckInPage() {
                 className="mt-1 w-full rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-sm"
               />
               <p className="mt-0.5 text-xs text-slate-500">
-                {observations.length}/300
+                {observations.length}/1000
               </p>
             </div>
             <div ref={comorbPickerRef} className="relative">

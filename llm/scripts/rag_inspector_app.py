@@ -368,6 +368,7 @@ _DEFAULT_PATIENT_CONTEXT = """Contexto do paciente admitido:
 - Sintomas:
   - febre alta
   - tosse seca
+- Observações: Paciente relata piora da tosse nas últimas 48h
 - Medicamentos em uso: Metformina, Losartana 50mg
 - CID/diagnóstico: E11 — Diabetes Mellitus Tipo 2
 - Comorbidades: Hipertensão Arterial Sistêmica

@@ -206,6 +206,12 @@ def format_patient_context(
 
     gender_label = format_gender_label(patient.gender)
     symptoms_block = format_symptoms_block(patient.symptoms)
+    observations_raw = (patient.observations or "").strip()
+    observations_block = (
+        format_symptoms_block(observations_raw)
+        if observations_raw and observations_raw != "Não informado"
+        else ""
+    )
     comorbidity_labels = resolve_comorbidity_labels(patient.comorbidities or [])
     medications = ", ".join(patient.current_medications or []) or "Nenhum"
     pending_exams, completed_exams = format_exam_sections(exams, cutoff=cutoff, reference=ref)
@@ -221,6 +227,11 @@ def format_patient_context(
         [
             f"- Idade: {patient.age} anos",
             f"- Sintomas:\n{symptoms_block}" if symptoms_block else "- Sintomas: Não informado",
+            (
+                f"- Observações:\n{observations_block}"
+                if observations_block
+                else "- Observações: Não informado"
+            ),
             f"- Medicamentos em uso: {medications}",
             f"- CID/diagnóstico: {patient.cid_code} — {patient.cid_label}".strip(" —"),
             f"- Comorbidades: {', '.join(comorbidity_labels) if comorbidity_labels else 'Nenhuma'}",
