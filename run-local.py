@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import http.client
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -90,18 +91,28 @@ def run_checked(command: list[str], cwd: Path, env: dict | None = None) -> None:
     subprocess.run(command, cwd=str(cwd), check=True, shell=use_shell, env=current_env)
 
 
-def start_service(command: list[str], cwd: Path, env: dict | None = None) -> int:
+def start_service(command: list[str], cwd: Path, env: dict | None = None) -> subprocess.Popen:
     """Inicia um serviço mantendo stdout/stderr no console (sem logs em arquivo)."""
     use_shell = os.name == 'nt'
     current_env = env if env is not None else os.environ.copy()
-
-    process = subprocess.Popen(
+    return subprocess.Popen(
         command,
         cwd=str(cwd),
         env=current_env,
-        shell=use_shell
+        shell=use_shell,
     )
-    return process.pid
+
+
+def _shutdown(procs: list[subprocess.Popen]) -> None:
+    print("\nEncerrando serviços...")
+    for proc in procs:
+        if proc.poll() is None:
+            proc.terminate()
+    for proc in procs:
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def parse_args() -> argparse.Namespace:
@@ -167,17 +178,17 @@ def main() -> int:
             print("Instalando dependências opcionais do chunking semântico...")
             run_checked([str(venv_python), "-m", "pip", "install", "-e", f"{repo_root / 'llm'}[semantic]"], repo_root)
 
-        print("Verificando modelo spaCy em português (pt_core_news_sm)...")
+        print("Verificando modelo medSpaCy em português (pt_core_news_sm)...")
         probe = subprocess.run(
-            [str(venv_python), "-c", "import spacy; spacy.load('pt_core_news_sm')"],
+            [str(venv_python), "-c", "import medspacy; medspacy.load('pt_core_news_sm', language_code='pt')"],
             cwd=str(repo_root),
             capture_output=True,
         )
         if probe.returncode != 0:
-            print("Baixando modelo spaCy 'pt_core_news_sm'...")
-            run_checked([str(venv_python), "-m", "spacy", "download", "pt_core_news_sm"], repo_root)
+            print("Baixando modelo medSpaCy 'pt_core_news_sm'...")
+            run_checked([str(venv_python), "-m", "medspacy", "download", "pt_core_news_sm"], repo_root)
         else:
-            print("Modelo spaCy 'pt_core_news_sm' já disponível.")
+            print("Modelo medSpaCy 'pt_core_news_sm' já disponível.")
 
         print("Instalando dependências do frontend...")
         run_checked(["npm", "install"], repo_root / "frontend")
@@ -265,11 +276,11 @@ def main() -> int:
     print(f"\nIniciando backend na porta {args.backend_port}...")
     backend_env = os.environ.copy()
     backend_env.update(medico_vars)
-    backend_pid = start_service(
+    backend_proc = start_service(
         [str(venv_python), "-m", "uvicorn", "assistente_medico_api.main:app", "--reload", "--host", "0.0.0.0", "--port",
          str(args.backend_port)],
         repo_root / "backend",
-        env=backend_env
+        env=backend_env,
     )
 
     # Inicia frontend
@@ -278,18 +289,34 @@ def main() -> int:
     frontend_env.update(medico_vars)
     frontend_env["VITE_API_BASE_URL"] = f"http://localhost:{args.backend_port}/api"
 
-    frontend_pid = start_service(
+    frontend_proc = start_service(
         ["npm", "run", "dev"],
         repo_root / "frontend",
-        env=frontend_env
+        env=frontend_env,
     )
 
+    procs = [backend_proc, frontend_proc]
     print(f"\nAmbiente iniciado com sucesso!")
-    print(f"- Backend:  http://localhost:{args.backend_port}/docs (PID: {backend_pid})")
-    print(f"- Frontend: http://localhost:{args.frontend_port} (PID: {frontend_pid})")
+    print(f"- Backend:  http://localhost:{args.backend_port}/docs (PID: {backend_proc.pid})")
+    print(f"- Frontend: http://localhost:{args.frontend_port} (PID: {frontend_proc.pid})")
     print("\nLogs sendo impressos diretamente no console acima.")
+    print("Pressione Ctrl+C para encerrar.\n")
 
-    return 0
+    try:
+        while True:
+            if backend_proc.poll() is not None:
+                print("\nBackend encerrou inesperadamente.")
+                _shutdown([frontend_proc])
+                return backend_proc.returncode or 1
+            if frontend_proc.poll() is not None:
+                print("\nFrontend encerrou inesperadamente.")
+                _shutdown([backend_proc])
+                return frontend_proc.returncode or 1
+            time.sleep(1)
+    except KeyboardInterrupt:
+        _shutdown(procs)
+        print("Serviços encerrados.")
+        return 0
 
 
 if __name__ == "__main__":
