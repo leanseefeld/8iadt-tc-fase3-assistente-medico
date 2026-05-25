@@ -273,10 +273,6 @@ const protocolResponseByCid: Record<string, ProtocolResult> = {
 - Alertas ativos (máx 3, com link "ver todos")
 - Exames pendentes (contagem + link para Página 4)
 
-**Linha do tempo (full-width, abaixo das colunas)**
-- Eventos horizontais em ordem cronológica: Admissão → Check-in → Exames solicitados → Alertas → (futuros)
-- Cada evento é um ponto clicável que exibe um tooltip com detalhes
-
 ### Interações dinâmicas
 
 - **Editar CID:** clique no badge do CID → abre `<CIDEditModal>` → re-executa protocolo

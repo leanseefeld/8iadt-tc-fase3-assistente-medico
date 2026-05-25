@@ -329,36 +329,6 @@ export function DashboardPage() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-[var(--color-border-subtle)] bg-white p-4 shadow-sm">
-        <h3 className="text-sm font-semibold text-slate-800">Linha do tempo</h3>
-        <div className="mt-4 flex flex-wrap gap-4 text-sm">
-          <span
-            className="cursor-help rounded-full border border-slate-200 bg-slate-50 px-3 py-1"
-            title={`Admissão: ${new Date(patient.admittedAt).toLocaleString('pt-BR')}`}
-          >
-            Admissão
-          </span>
-          <span
-            className="cursor-help rounded-full border border-slate-200 bg-slate-50 px-3 py-1"
-            title="Check-in registrado nesta demo"
-          >
-            Check-in
-          </span>
-          <span
-            className="cursor-help rounded-full border border-slate-200 bg-slate-50 px-3 py-1"
-            title={`${patient.exams.length} exames solicitados`}
-          >
-            Exames solicitados
-          </span>
-          <span
-            className="cursor-help rounded-full border border-slate-200 bg-slate-50 px-3 py-1"
-            title="Consulte o painel de alertas"
-          >
-            Alertas
-          </span>
-        </div>
-      </div>
-
       <CIDEditModal
         open={cidOpen}
         patient={patient}
