@@ -49,6 +49,14 @@ def message_count_in_prefix(messages: pd.DataFrame, last_pos_idx: int) -> int:
     return int((prefix["author"].isin(["user", "assistant"])).sum())
 
 
+def turn_count_in_prefix(messages: pd.DataFrame, last_pos_idx: int) -> int:
+    """Turnos completos (pergunta user + resposta assistant) no prefixo exportado."""
+    prefix = messages.iloc[: last_pos_idx + 1]
+    users = int((prefix["author"] == "user").sum())
+    assistants = int((prefix["author"] == "assistant").sum())
+    return min(users, assistants)
+
+
 @dataclass
 class ConversationExportTarget:
     conversation_id: str
@@ -59,6 +67,7 @@ class ConversationExportTarget:
     llm_input: list[dict[str, Any]]
     llm_output: str
     message_count: int
+    turn_count: int
 
 
 def evaluate_conversation(
@@ -97,6 +106,7 @@ def evaluate_conversation(
             llm_input=list(llm_input),
             llm_output=str(llm_output),
             message_count=message_count_in_prefix(messages, last_idx),
+            turn_count=turn_count_in_prefix(messages, last_idx),
         ),
         None,
     )
@@ -140,6 +150,7 @@ def build_export_rows(
                 "_raw_message_id": t.message_id,
                 "_patient_name": t.patient_name,
                 "_message_count": t.message_count,
+                "_turn_count": t.turn_count,
             }
         )
 
@@ -163,6 +174,7 @@ def build_export_rows(
                     "_raw_message_id": t.message_id,
                     "_patient_name": t.patient_name,
                     "_message_count": t.message_count,
+                    "_turn_count": t.turn_count,
                 }
             )
     return rows

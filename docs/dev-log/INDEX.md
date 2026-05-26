@@ -12,10 +12,15 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ## Marcos
 
+### 2026-05-26
+
+- **colab-unsloth-assistente-sft** — agent:cursor — Notebook `fine-tuning_colab_assistente.ipynb`: SFT Unsloth em Llama 3.2 3B 4-bit, JSONL exportado, inferência no Colab, GGUF Q4_K_M + Modelfile no Drive, push HF opcional via secret. — Revisão: `5a6a24e` rename notebooks FT
+
 ### 2026-05-25
 
 - **sft-export-positive-conversations** — agent:cursor — Notebook `export-positive-conversations.ipynb` + `sft_anonymize.py`/`sft_export_positive.py`: exporta até último 👍 (ativas), JSONL por `call_type` (generate + aux `conversation_message_llm_calls`), anonimização PII/PCDT; `assets/sft_positive_conversations.jsonl`. — Revisão: `9907ed5` feat(chat): allow multiple parallel new conversations via draft IDs
 - **chat-multi-draft-conversations** — agent:cursor — Chat: várias conversas novas em paralelo via `?draft=<uuid>` (substitui `pending:{patientId}`); Nova conversa não bloqueia stream em outro rascunho/thread. — Revisão: `8de6e8d` fix(rag): remove score e motivos do bloco PCDT no prompt
+- **chat-sqlite-wal-busy-timeout** — agent:cursor — Backend: SQLite com WAL + `busy_timeout` e commit após criar conversa para evitar `database is locked` em chats concorrentes. — Revisão: `5a6a24e` rename notebooks FT
 - **contexto-paciente-observacoes-limite** — agent:cursor — `format_patient_context` inclui Observações; sintomas/observações até 1000 chars (check-in + schema Pydantic). — Revisão: `ef44bd7` feat(rag): reescreve pergunta no primeiro turno
 - **rewrite-llm-primeiro-turno** — agent:cursor — `resolve_retrieval_query` chama LLM de reescrita também no primeiro turno (sem `chat_history`); histórico continua opcional no prompt. — Revisão: `9863c12` feat(chat): preservar rascunhos de mensagems
 - **chat-regenerate-last-answer** — agent:cursor — Regenerar só a última resposta: `superseded_by_message_id` em `conversation_messages`; POST `.../messages/{id}/regenerate` (SSE/JSON); UI 🔄 antes do 👍/👎; histórico/GET só mensagens ativas. — Revisão: `c7af82e` Merge branch 'feature/conversations-persistence'
