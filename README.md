@@ -52,6 +52,14 @@ python run-local.py --backend-port 8001 --frontend-port 5174
 python run-local.py --skip-migrations
 ```
 
+## Alertas clínicos (PCDT/RAG)
+
+A admissão/readmissão, as atualizações de sinais vitais críticos e os resultados de
+exames concluídos ou `critical` disparam o grafo `clinical_alert_graph`, com duas recuperações ao
+vectorstore de PCDTs e heurísticas/LLM (`MEDICO_CLINICAL_ALERTS_USE_LLM`, desliga em ambientes sem
+modelo disponível); a coluna `dedupe_key` em `alerts` evita repetições de alertas não resolvidos e o
+JSONL clínico registra `avaliacao_alerta_clinico_pcdt`.
+
 ## Fluxo RAG do chat
 
 O chat médico usa um grafo LangGraph com nós separados e auditáveis:

@@ -28,7 +28,12 @@ from assistente_medico_api.schemas.suggested_items import (
     SuggestedItemPatchRequest,
     SuggestedItemResponse,
 )
-from assistente_medico_api.services import alert_service, patient_service
+from assistente_medico_api.services import patient_service
+from assistente_medico_api.services.clinical_alert_service import (
+    evaluate_clinical_alerts,
+    exam_to_focus,
+    vital_sign_row_to_alert_dict,
+)
 from assistente_medico_api.services.patient_context_cache import invalidate_patient_context
 from assistente_medico_api.observability.clinical_audit_jsonl import (
     ClinicalAuditAction,
@@ -69,6 +74,7 @@ async def list_patients(
 
 @router.post("/patients", response_model=PatientResponse, status_code=201)
 async def create_patient(
+    request: Request,
     body: PatientCreateRequest,
     session: AsyncSession = Depends(get_session),
 ) -> PatientResponse:
@@ -82,6 +88,15 @@ async def create_patient(
         descricao=f"Paciente admitido ({patient.name}); idade {patient.age}; CID {patient.cid_code or '—'}.",
         detalhes={"cid": patient.cid_code or None, "idade": patient.age},
     )
+    await evaluate_clinical_alerts(
+        getattr(request.app.state, "clinical_alert_graph", None),
+        getattr(request.app.state, "settings", Settings()),
+        session,
+        patient_id=patient.id,
+        trigger_type="check_in",
+        patient=patient,
+    )
+    await session.commit()
     return PatientResponse(patient=await patient_service.build_patient_schema(session, patient))
 
 
@@ -170,6 +185,7 @@ async def patch_patient(
 
 @router.patch("/patients/{patient_id}/vitals", response_model=PatientResponse)
 async def patch_vitals(
+    request: Request,
     patient_id: str,
     body: VitalSignsPatchRequest,
     session: AsyncSession = Depends(get_session),
@@ -181,58 +197,21 @@ async def patch_vitals(
     new_vitals = await patient_service.append_vitals(session, patient=patient, patch=body)
     crit: list[str] = []
 
-    if body.oxygen_saturation is not None:
-        curr_critical = new_vitals.oxygen_saturation < 92
-        if curr_critical:
-            crit.append("oxigenacao")
-            await alert_service.create_alert(
-                session,
-                patient.id,
-                severity="critical",
-                category="clinical",
-                message=f"SpO2 crítico registrado ({new_vitals.oxygen_saturation}%).",
-                team="doctors",
-            )
-
+    if body.oxygen_saturation is not None and new_vitals.oxygen_saturation < 92:
+        crit.append("oxigenacao")
     if body.temperature is not None:
         curr_critical = new_vitals.temperature >= 39 or new_vitals.temperature < 35
         if curr_critical:
             crit.append("temperatura")
-            await alert_service.create_alert(
-                session,
-                patient.id,
-                severity="critical",
-                category="clinical",
-                message=f"Temperatura crítica registrada ({new_vitals.temperature:.1f} °C).",
-                team="doctors",
-            )
-
     if body.heart_rate is not None:
         curr_critical = new_vitals.heart_rate > 120 or new_vitals.heart_rate < 45
         if curr_critical:
             crit.append("frequencia_cardiaca")
-            await alert_service.create_alert(
-                session,
-                patient.id,
-                severity="critical",
-                category="clinical",
-                message=f"Frequência cardíaca crítica registrada ({new_vitals.heart_rate} bpm).",
-                team="doctors",
-            )
-
     if body.blood_pressure is not None:
         curr_sys = _extract_systolic(new_vitals.blood_pressure)
         curr_critical = curr_sys is not None and curr_sys >= 180
         if curr_critical:
             crit.append("pressao_arterial")
-            await alert_service.create_alert(
-                session,
-                patient.id,
-                severity="critical",
-                category="clinical",
-                message=f"Pressão arterial crítica registrada ({new_vitals.blood_pressure}).",
-                team="doctors",
-            )
 
     demo = audit_context_is_demo()
     acao_v = (
@@ -259,6 +238,16 @@ async def patch_vitals(
     )
 
     await session.commit()
+    await evaluate_clinical_alerts(
+        getattr(request.app.state, "clinical_alert_graph", None),
+        getattr(request.app.state, "settings", Settings()),
+        session,
+        patient_id=patient.id,
+        trigger_type="vital_sign",
+        patient=patient,
+        latest_vitals=vital_sign_row_to_alert_dict(new_vitals),
+    )
+    await session.commit()
     return PatientResponse(patient=await patient_service.build_patient_schema(session, patient))
 
 
@@ -283,6 +272,15 @@ async def readmit_patient(
         patient_name=patient.name,
         descricao=f"Readmissão de {patient.name}; CID {(patient.cid_code or '').strip() or '—'}.",
     )
+    await evaluate_clinical_alerts(
+        getattr(request.app.state, "clinical_alert_graph", None),
+        getattr(request.app.state, "settings", Settings()),
+        session,
+        patient_id=patient.id,
+        trigger_type="check_in",
+        patient=patient,
+    )
+    await session.commit()
     return PatientResponse(patient=await patient_service.build_patient_schema(session, patient))
 
 
@@ -346,17 +344,6 @@ async def patch_exam(
     if body.status in {"completed", "critical"} and exam.completed_at is None:
         exam.completed_at = datetime.now(UTC)
 
-    if body.status == "critical" and previous_status != "critical":
-        result_text = exam.result or "sem valor informado"
-        await alert_service.create_alert(
-            session,
-            patient_id,
-            severity="critical",
-            category="exam",
-            message=f"Resultado crítico registrado para {exam.name}: {result_text}.",
-            team="doctors",
-        )
-
     demo = audit_context_is_demo()
     acao_x = (
         ClinicalAuditAction.SIMULACAO_RESULTADO_EXAME
@@ -384,7 +371,31 @@ async def patch_exam(
 
     await session.commit()
     await invalidate_patient_context(request.app.state, patient_id)
-    return ExamResponse(exam=await patient_service.exam_to_schema_with_attachments(session, exam))
+
+    exam_for_resp = (
+        await exam_repo.get_exam_by_id(session, patient_id, exam_id)
+    ) or exam
+
+    should_eval_alerts = (
+        body.result is not None
+        or body.interpretation is not None
+        or (body.status is not None and body.status in {"completed", "critical"})
+    )
+    if should_eval_alerts and exam_for_resp is not None:
+        await evaluate_clinical_alerts(
+            getattr(request.app.state, "clinical_alert_graph", None),
+            getattr(request.app.state, "settings", Settings()),
+            session,
+            patient_id=patient_row.id,
+            trigger_type="exam_result",
+            patient=patient_row,
+            exam_focus=exam_to_focus(exam_for_resp),
+        )
+        await session.commit()
+        maybe = await exam_repo.get_exam_by_id(session, patient_id, exam_id)
+        exam_for_resp = maybe or exam_for_resp
+
+    return ExamResponse(exam=await patient_service.exam_to_schema_with_attachments(session, exam_for_resp))
 
 
 @router.post("/patients/{patient_id}/exams/{exam_id}/upload", response_model=ExamResponse)
