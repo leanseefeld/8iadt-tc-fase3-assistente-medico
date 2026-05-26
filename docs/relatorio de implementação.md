@@ -20,7 +20,7 @@ Utilizando IA, criamos as seguintes telas em um frontend React com dados simulad
 * **Fluxo de decisão**: a ideia é mostrar o fluxo de decisão do agente logo após a admissão do paciente, indicando etapas como triagem, consulta de protocolos, checagem de exames pendentes, sugestão de ações e alertas emitidos.
 * **Exames**: relação de exames realizados e pendentes para o paciente ativo.
 * **Ações sugeridas**: apresenta um resumo do caso, gerado pelo assistente, e uma lista de ações sugeridas - que podem ser aceitas, rejeitadas ou aceitas com modificações. Deve, também, indicar as fontes que justifiquem as sugestões.
-* **Alertas**: aqui serão exibidos todos os alertas gerados pelo assistente, para todos os pacientes. Deverá ser possível selecionar rapidamente o paciente para o qual o alerta foi emitido, entender o porquê do alerta e marcar o alerta como resolvido.
+* **Alertas**: todos os registros vindos da API (`GET /api/alerts`), incluindo os emitidos pelo **pipeline backend de alertas clínicos** (PCDT/RAG — secção Backend) e notificações manuais/demo da própria interface; é possível focar no paciente, filtrar e marcar como resolvido.
 
 ![Tela admissão](./assets/Screenshot%202026-04-06%20at%2017.34.47.png)
 
@@ -139,6 +139,20 @@ Este serviço consome a `/vectorstore/chroma` criada pelo comando `build-embeddi
 
 Para a listagem de CIDs utilizada no backend (endpoint `/api/cids`), passamos a usar o pacote [`simple-icd-10`](https://pypi.org/project/simple-icd-10/), que fornece a base de códigos e descrições ICD-10 em memória para o serviço.
 
+## Auditoria em JSON (clínica e operação do RAG)
+
+O backend registra eventos auditáveis de duas naturezas complementares: **ações clínicas e de uso do assistente**, em **JSONL**, e **telemetria operacional do RAG** no mesmo formato diário sempre que faz sentido institucional (enum unificado).
+
+**Diário sob `logs/`** — cada dia gera **`audit_clinical_YYYY-MM-DD.jsonl`**; a escrita usa [`clinical_audit_jsonl.py`](../backend/src/assistente_medico_api/observability/clinical_audit_jsonl.py): função `clinical_audit(...)` em modo **append-only**, **thread-safe**, diretório configurável **`log_dir`** (por defeito `./logs`). Desliga-se com **`MEDICO_CLINICAL_AUDIT_ENABLED=false`** (`clinical_audit_enabled` em [`Settings`](../backend/src/assistente_medico_api/config.py)); o **`pytest`** define isso por defeito no **`conftest`** para não poluir disco durante os testes.
+
+Cada linha é um objeto JSON típico com **`acao`** (valores definidos em [`ClinicalAuditAction`](../backend/src/assistente_medico_api/observability/clinical_audit_jsonl.py)), por exemplo: **`admissao_paciente`**, **`readmissao_paciente`**, **`alta_paciente`**, atualizações de CID, solicitações e alterações de exames (**`novo_exame`**, **`exame_alterado`**), vitais (**`sinal_vital_registrado`**), **`alerta_emitido`**, **`alerta_resolvido`**, **`avaliacao_alerta_clinico_pcdt`**, prescrições (**`prescricao_emitida`**, **`prescricao_arquivada`**), **`execucao_fluxo_decisao`**, bem como os códigos de **uso do assistente/RAG**: **`backend_assistente_iniciado`**, **`reescrita_consulta_rag`**, **`recuperacao_contexto_rag`**, **`geracao_resposta_rag`**, **`guardrail_avaliado`**, **`conversa_assistente_solicitada`**, **`conversa_assistente_finalizada`**. Quando faz sentido, seguem **`patient_id`** e **`patient_name`**, texto **`descricao`** e objeto **`detalhes`** livre (**`exam_id`**, **`trigger`**, contagens **`emitidos`/`pulados_deduplicacao`** no ciclo LangGraph dos alertas, trechos curtos das fontes, etc.), **`medico_id`** e **`request_id`** (derivados dos **ContextVars** da requisição se omitidos).
+
+O cabeçalho **`X-Audit-Context: demo`** sinaliza simulações na UI (vitais/resultados apenas para protótipo). Quando **`audit_context_is_demo()`** é verdadeira, aparecem ações **`simulacao_resultado_exame`**, **`simulacao_sinal_vital`**, etc., conforme [`patients.py`](../backend/src/assistente_medico_api/api/patients.py).
+
+**Fluxo só técnico** — **`rag_audit_enabled`** / **`MEDICO_RAG_AUDIT_ENABLED`** controlam registos **`audit(...)`** RAG (**[`audit.py`](../backend/src/assistente_medico_api/observability/audit.py)**, `kind` `rag`/subtipos no logger **`assistente_medico.audit.rag`**), habitualmente escritos também em **`logs/assistente_medico.jsonl`** mediante o formato JSON configurado no arranque. O **`audit_clinical_*.jsonl`** concentra o diário institucional (clínico + eventos compactos ligados ao RAG na mesma convenção quando aplicável). No console, o logger **`assistente_medico.alert_rag`** ajuda a depurar recuperações do grafo **`clinical_alert_graph`**.
+
+Para **validar só o ciclo dos alertas PCDTs**, procure no ficheiro do dia linhas **`"acao":"avaliacao_alerta_clinico_pcdt"`**, em que **`descricao`** e **`detalhes`** já trazem o resumo (**`run_id`**, metadados de trace compactos) escritos pelo serviço [`clinical_alert_service.py`](../backend/src/assistente_medico_api/services/clinical_alert_service.py).
+
 ## LangGraph - Chat com Assistente
 
 Em primeiro momento, criamos um LangGraph simples em [`assistente_medico_api/graph/chat_rag.py`](../backend/src/assistente_medico_api/graph/chat_rag.py) com um _retriever_ e um _generator_, recebendo uma mensagem do usuário e a usando diretamente para fazer a busca na base vetorizada.
@@ -174,6 +188,28 @@ Para facilitar os testes, integramos a aba "Chat com assistente" do nosso protó
 Para reduzir o tempo de espera até a resposta ser gerada, executamos o grafo LangGraph de forma assíncrona (`graph.astream_events`) e capturamos eventos (`on_chain_end`, `on_chat_model_stream`) para enviar tokens para o cliente front-end conforme são gerados (cabeçalho `Accepts: text/event-stream`).
 
 ![Chat com fontes e mensagem sendo gerada](./assets/Screenshot%202026-04-14%20at%2016.49.38.png)
+
+## Pipeline de alertas clínicos (LangGraph + PCDTs)
+
+Além do grafo principal do chat, foi implementado um **segundo grafo LangGraph** dedicado a **triagem institucional** com base nos PCDTs indexados (`clinical_alert_graph`), compilado no `lifespan` da aplicação (`app.state.clinical_alert_graph`, ver [`main.py`](../backend/src/assistente_medico_api/main.py)). Ele reutiliza rewrite, recuperação em Chroma e rerank já usados pelo RAG, porém com **consultas próprias** do fluxo de alertas (duas recuperações aos documentos: referência inicial e refinamento após interpretação dos dados locais).
+
+**Orquestração** — Estado e schemas em [`clinical_alert_state.py`](../backend/src/assistente_medico_api/graph/clinical_alert_state.py) e [`clinical_alert_schemas.py`](../backend/src/assistente_medico_api/graph/clinical_alert_schemas.py); nós modulares em [`graph/alert_nodes/`](../backend/src/assistente_medico_api/graph/alert_nodes/) (`build_query`, `retrieve`, `interpret`, `assess`); definição do grafo em [`clinical_alerts.py`](../backend/src/assistente_medico_api/graph/clinical_alerts.py). A avaliação e persistência ficam centralizadas em [`clinical_alert_service.py`](../backend/src/assistente_medico_api/services/clinical_alert_service.py), que só grava cada payload depois da checagem de duplicidade.
+
+**Gatilhos** ([`patients.py`](../backend/src/assistente_medico_api/api/patients.py)):
+
+* **check_in** — criação e readmissão de pacientes (bundles com sintomas, medicamentos, CID, etc.);
+* **vital_sign** — `PATCH` de sinais vitais quando o fluxo chama avaliação de alertas sobre vitais atualizados;
+* **exam_result** — `PATCH /api/patients/{id}/exams/{exam_id}` quando o corpo inclui **`result`** e/ou **`interpretation`** e/ou **`status`** ∈ `completed` \| `critical` (uso do flag `should_eval_alerts` no endpoint).
+
+Decisões **heurísticas** incluem mensagens rápidas para limiares de vitais (`interpret.py`) e, opcionalmente, **`MEDICO_CLINICAL_ALERTS_USE_LLM`** ([`config.py`](../backend/src/assistente_medico_api/config.py)) para avaliação estruturada via LLM com trechos recuperados dos PCDTs. Sem LLM ou em paralelo, o fluxo pode gerar alerta moderado quando os trechos recuperados contêm palavras associadas à urgência ou à gravidade (lista pré-definida no interpretador), o que pode **combinar com** vitais já críticos e produzir **mais de um alerta** no mesmo `PATCH`. Exames com `status=critical` disparam também alerta próprio (“Resultado crítico registrado…”) em [`assess.py`](../backend/src/assistente_medico_api/graph/alert_nodes/assess.py).
+
+Persistência segue [`alert_service.create_alert()`](../backend/src/assistente_medico_api/services/alert_service.py); foi adicionada coluna **`dedupe_key`** (migração Alembic `20260525_1800`, índice) e o repositório evita novo registro quando já há alerta não resolvido **com a mesma chave**. Nota importante: fingerprints de vitais rápidos incluem o **texto completo da mensagem** (ex.: percentual de SpO₂); dois valores diferentes geram duas linhas válidas até serem marcadas como resolvidas — a deduplicação suprime **PATCH idênticos** que gerariam a mesma mensagem, não agrupa diferentes leituras de SpO₂ no mesmo campo.
+
+**Auditabilidade** — Ver **Auditoria em JSON**: uma linha por execução com **`acao`** = **`avaliacao_alerta_clinico_pcdt`** (**`clinical_audit`** em [`clinical_alert_service.py`](../backend/src/assistente_medico_api/services/clinical_alert_service.py)), com **`descricao`** (alertas emitidos versus saltados pela deduplicação) e **`detalhes`** (**`trigger`**, **`run_id`**, **`audit_trace_compacto`** com fontes resumidas). No console usa-se o logger **`assistente_medico.alert_rag`** nas recuperações do fluxo.
+
+**Contrato frontend** — [`AlertsPage.tsx`](../frontend/src/pages/AlertsPage.tsx) lista via HTTP **todos** os alertas (lista global por design); o painel “Volume mock” continua apenas decorativo. Nem todo alerta vem do multigrafo: a página **Exames** pode usar “notificar responsável”, que cria alerta direto pela API sem o pipeline LangGraph dos PCDTs.
+
+**Testes** — [`test_clinical_alert_graph.py`](../backend/tests/test_clinical_alert_graph.py) (smoke do grafo sem vector store / SpO₂ crítico) e [`test_clinical_alert_dedupe_integration.py`](../backend/tests/test_clinical_alert_dedupe_integration.py) (dois PATCH vitais **idênticos** ⇒ um só alerta SpO₂ crítico aberto). Resumo operacional também no [`README.md`](../README.md) (Alertas clínicos).
 
 ## Plano de extração dos nomes de medicamentos (RENAME)
 

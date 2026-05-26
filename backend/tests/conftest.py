@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlmodel import SQLModel
 
 from assistente_medico_api.deps import get_session
-from assistente_medico_api.main import create_app
+from assistente_medico_api.main import create_app, lifespan as backend_lifespan
 from assistente_medico_api.models import (
     AgentLogEntry,
     Alert,
@@ -28,32 +28,50 @@ from assistente_medico_api.models import (
 
 _CLINICAL_AUDIT_ENV_KEY = "MEDICO_CLINICAL_AUDIT_ENABLED"
 _clinical_audit_env_backup: tuple[bool, str] | None = None
+_ALERTS_USE_LLM_KEY = "MEDICO_CLINICAL_ALERTS_USE_LLM"
+_alerts_llm_env_backup: tuple[bool, str] | None = None
 
 
 def pytest_configure(config: pytest.Config) -> None:
     """Não criar/atualizar `logs/audit_clinical_*.jsonl` durante a suíte de testes."""
     global _clinical_audit_env_backup  # noqa: PLW0603
+    global _alerts_llm_env_backup  # noqa: PLW0603
+
     key = _CLINICAL_AUDIT_ENV_KEY
     had = key in os.environ
     prev = os.environ[key] if had else ""
     _clinical_audit_env_backup = (had, prev)
     os.environ[key] = "false"
 
+    lk = _ALERTS_USE_LLM_KEY
+    had_l = lk in os.environ
+    prev_l = os.environ[lk] if had_l else ""
+    _alerts_llm_env_backup = (had_l, prev_l)
+    os.environ[lk] = "false"
+
 
 def pytest_unconfigure(config: pytest.Config) -> None:
-    """Restaura o valor anterior de MEDICO_CLINICAL_AUDIT_ENABLED."""
+    """Restaura valores de ambiente modificados pela suíte."""
     global _clinical_audit_env_backup  # noqa: PLW0603
-    if _clinical_audit_env_backup is None:
-        return
-    key = _CLINICAL_AUDIT_ENV_KEY
-    had, prev = _clinical_audit_env_backup
-    if had:
-        os.environ[key] = prev
-    else:
-        os.environ.pop(key, None)
-    _clinical_audit_env_backup = None
+    global _alerts_llm_env_backup  # noqa: PLW0603
 
+    if _clinical_audit_env_backup is not None:
+        key = _CLINICAL_AUDIT_ENV_KEY
+        had, prev = _clinical_audit_env_backup
+        if had:
+            os.environ[key] = prev
+        else:
+            os.environ.pop(key, None)
+        _clinical_audit_env_backup = None
 
+    if _alerts_llm_env_backup is not None:
+        lk = _ALERTS_USE_LLM_KEY
+        had_l, prev_l = _alerts_llm_env_backup
+        if had_l:
+            os.environ[lk] = prev_l
+        else:
+            os.environ.pop(lk, None)
+        _alerts_llm_env_backup = None
 @pytest_asyncio.fixture
 async def test_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -85,8 +103,9 @@ async def app(test_session_factory: async_sessionmaker[AsyncSession]) -> AsyncIt
 @pytest_asyncio.fixture
 async def async_client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+    async with backend_lifespan(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client
 
 
 @pytest_asyncio.fixture

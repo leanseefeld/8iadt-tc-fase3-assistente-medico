@@ -18,3 +18,4 @@ class Alert(SQLModel, table=True):
     team: str = Field(default="all")  # doctors, nursing, pharmacy, all
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)
     resolved: bool = Field(default=False, index=True)
+    dedupe_key: str | None = Field(default=None, index=True)

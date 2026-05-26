@@ -16,6 +16,16 @@ def _new_alert_id() -> str:
     return f"alert-{uuid4()}"
 
 
+async def would_duplicate_unresolved_alert(
+    session: AsyncSession,
+    patient_id: str,
+    *,
+    dedupe_key: str,
+) -> bool:
+    """Indica alerta já aberto equivalente pela chave determinística."""
+    return await alert_repo.has_unresolved_duplicate_dedupe(session, patient_id, dedupe_key)
+
+
 async def create_alert(
     session: AsyncSession,
     patient_id: str,
@@ -24,6 +34,7 @@ async def create_alert(
     category: str = "clinical",
     message: str,
     team: str = "all",
+    dedupe_key: str | None = None,
 ) -> Alert:
     """Create and persist an alert."""
     alert = Alert(
@@ -34,6 +45,7 @@ async def create_alert(
         message=message,
         team=team,
         resolved=False,
+        dedupe_key=dedupe_key,
     )
     created = await alert_repo.create_alert(session, alert)
     pname = None
@@ -51,6 +63,7 @@ async def create_alert(
             "severidade": severity,
             "categoria": category,
             "equipe": team,
+            "dedupe_key": dedupe_key,
         },
     )
     return created
