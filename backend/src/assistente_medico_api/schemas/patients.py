@@ -52,9 +52,9 @@ class PatientCreateRequest(BaseModel):
     age: int | None = None
     sex: str | None = None
     cid: Cid | None = None
-    observations: str | None = None
+    observations: str | None = Field(default=None, max_length=1000)
     gender: str | None = None
-    symptoms: str | None = None
+    symptoms: str | None = Field(default=None, max_length=1000)
     comorbidities: list[str] | None = None
     current_medications: str | None = Field(default=None, alias="currentMedications")
 
@@ -65,9 +65,9 @@ class PatientPatchRequest(BaseModel):
     sex: str | None = None
     status: str | None = None
     cid: Cid | None = None
-    observations: str | None = None
+    observations: str | None = Field(default=None, max_length=1000)
     gender: str | None = None
-    symptoms: str | None = None
+    symptoms: str | None = Field(default=None, max_length=1000)
     comorbidities: list[str] | None = None
     current_medications: list[str] | None = Field(default=None, alias="currentMedications")
 

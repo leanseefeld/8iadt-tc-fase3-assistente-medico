@@ -138,6 +138,8 @@ def test_format_patient_context_with_and_without_optional_fields():
     assert "Maria Oliveira" in text
     assert "Mulher transgênero" in text
     assert "febre" in text
+    assert "Observações:" in text
+    assert "Obs" in text
     assert "Hipertensão Arterial Sistêmica" in text
     assert "Creatinina" in text
 
@@ -145,6 +147,11 @@ def test_format_patient_context_with_and_without_optional_fields():
     text2 = format_patient_context(patient_no_gender, [], reference=ref)
     assert "Identidade de gênero" not in text2
     assert "Sintomas: Não informado" in text2
+    assert "Obs" in text2
+
+    patient_empty_obs = patient.model_copy(update={"observations": "Não informado"})
+    text3 = format_patient_context(patient_empty_obs, [], reference=ref)
+    assert "Observações: Não informado" in text3
 
 
 def test_format_patient_context_with_completed_exams():

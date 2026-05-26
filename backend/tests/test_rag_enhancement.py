@@ -763,6 +763,9 @@ def test_format_context_document_includes_metadata_and_limits_medications() -> N
     assert "CID-10: E27.1" in formatted
     assert "Seção: CRITÉRIOS DE INCLUSÃO" in formatted
     assert "Páginas: 6-6" in formatted
+    assert "[Documento 1]" in formatted
+    assert "Score final:" not in formatted
+    assert "Motivos do ranking:" not in formatted
     assert "Medicamento 9" in formatted
     assert "Medicamento 10" not in formatted
     assert "..." in formatted
