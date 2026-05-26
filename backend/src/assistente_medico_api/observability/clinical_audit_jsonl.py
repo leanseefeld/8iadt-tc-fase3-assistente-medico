@@ -38,6 +38,7 @@ class ClinicalAuditAction(StrEnum):
     SINAL_VITAL_REGISTRADO = "sinal_vital_registrado"
     SIMULACAO_SINAL_VITAL = "simulacao_sinal_vital"
     ALERTA_EMITIDO = "alerta_emitido"
+    AVALIACAO_ALERTA_CLINICO_PCDT = "avaliacao_alerta_clinico_pcdt"
     ALERTA_RESOLVIDO = "alerta_resolvido"
     ACAO_SUGERIDA_ATUALIZADA = "acao_sugerida_atualizada"
     PRESCRICAO_EMITIDA = "prescricao_emitida"

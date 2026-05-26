@@ -150,6 +150,17 @@ class Settings(BaseSettings):
             "em conversation_message_llm_calls, correlacionadas por assistant_message_id."
         ),
     )
+    clinical_alerts_use_llm: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "MEDICO_CLINICAL_ALERTS_USE_LLM",
+            "CLINICAL_ALERTS_USE_LLM",
+        ),
+        description=(
+            "Permite segunda passagem avaliativa por LLM no fluxo de alertas clínicos "
+            "(além das heurísticas e das duas recuperações ao vectorstore PCDT)."
+        ),
+    )
 
 
 def resolve_runtime_path(path: Path) -> Path:

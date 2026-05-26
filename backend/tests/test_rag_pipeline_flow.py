@@ -232,7 +232,8 @@ async def test_post_chat_sse_emits_final_for_insufficient_context():
 
 
 def test_chat_payload_does_not_hardcode_retry_or_pipeline_version():
-    chat_source = Path("backend/src/assistente_medico_api/api/chat.py").read_text(encoding="utf-8")
+    src_root = Path(__file__).resolve().parents[1] / "src"
+    chat_source = (src_root / "assistente_medico_api/api/chat.py").read_text(encoding="utf-8")
     assert '"max_retrieve_attempts": 2' not in chat_source
     legacy_pipeline_version = "separated" + "_nodes_v2"
     assert legacy_pipeline_version not in chat_source
@@ -242,7 +243,8 @@ def test_chat_payload_does_not_hardcode_retry_or_pipeline_version():
 
 
 def test_prohibited_node_files_are_absent():
-    base = Path("backend/src/assistente_medico_api/graph/nodes")
+    src_root = Path(__file__).resolve().parents[1] / "src"
+    base = src_root / "assistente_medico_api/graph/nodes"
     assert not (base / "load_memory.py").exists()
     assert not (base / "save_memory.py").exists()
     assert not (base / "fallback_retrieve.py").exists()

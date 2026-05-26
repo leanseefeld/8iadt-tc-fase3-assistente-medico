@@ -26,6 +26,24 @@ async def get_alert_by_id(session: AsyncSession, alert_id: str) -> Alert | None:
     return result.scalar_one_or_none()
 
 
+async def has_unresolved_duplicate_dedupe(
+    session: AsyncSession,
+    patient_id: str,
+    dedupe_key: str,
+) -> bool:
+    """True se já existe alerta não resolvido com a mesma chave deduplicadora."""
+    if not dedupe_key:
+        return False
+    result = await session.execute(
+        select(Alert.id).where(
+            Alert.patient_id == patient_id,
+            Alert.resolved == False,  # noqa: E712
+            Alert.dedupe_key == dedupe_key,
+        ).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def list_alerts(
     session: AsyncSession,
     patient_id: str | None = None,

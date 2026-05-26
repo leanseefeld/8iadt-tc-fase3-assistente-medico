@@ -18,6 +18,7 @@ from assistente_medico_api.api.patients import router as patients_router
 from assistente_medico_api.api.prescriptions import router as prescriptions_router
 from assistente_medico_api.config import Settings, resolve_chroma_persist_dir
 from assistente_medico_api.graph.chat_rag import build_compiled_chat_graph
+from assistente_medico_api.graph.clinical_alerts import build_compiled_clinical_alert_graph
 from assistente_medico_api.observability.audit import audit
 from assistente_medico_api.observability.clinical_audit_jsonl import ClinicalAuditAction, clinical_audit
 from assistente_medico_api.observability.logging_setup import configure_logging
@@ -100,11 +101,13 @@ async def lifespan(app: FastAPI):
     app.state.chat_graph = build_compiled_chat_graph(
         store, settings, app.state.chat_checkpointer
     )
+    app.state.clinical_alert_graph = build_compiled_clinical_alert_graph(store, settings)
 
     yield
 
     app.state.chroma_store = None
     app.state.chat_graph = None
+    app.state.clinical_alert_graph = None
     app.state.chat_checkpointer = None
     app.state.patient_threads_registry = None
     app.state.settings = None
