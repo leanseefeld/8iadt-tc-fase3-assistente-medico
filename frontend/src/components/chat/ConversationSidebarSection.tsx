@@ -9,7 +9,7 @@ import { useConversationRefresh } from '@/context/ConversationRefreshContext';
 import { useToast } from '@/context/ToastContext';
 import { usePatientConversations } from '@/hooks/usePatientConversations';
 import type { ConversationSummary } from '@/types/domain';
-import type { OptimisticConversationEntry } from '@/types/chatSession';
+import { createDraftId, type OptimisticConversationEntry } from '@/types/chatSession';
 import { formatLocalDateTime } from '@/utils/formatDateTime';
 
 type SidebarConversation =
@@ -35,6 +35,7 @@ export function ConversationSidebarSection() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const activeThreadId = searchParams.get('thread');
+  const activeDraftId = searchParams.get('draft');
 
   const [archiveTarget, setArchiveTarget] = useState<ConversationSummary | null>(
     null,
@@ -62,7 +63,7 @@ export function ConversationSidebarSection() {
   ]);
 
   function startNewConversation() {
-    navigate('/chat');
+    navigate(`/chat?draft=${encodeURIComponent(createDraftId())}`);
   }
 
   async function confirmArchive() {
@@ -74,7 +75,7 @@ export function ConversationSidebarSection() {
       await archiveAssistantConversation(archiveTarget.id);
       showToast('Conversa arquivada.');
       if (activeThreadId === archiveTarget.id) {
-        navigate('/chat');
+        navigate(`/chat?draft=${encodeURIComponent(createDraftId())}`);
       }
       refreshConversations();
     } catch {
@@ -118,7 +119,7 @@ export function ConversationSidebarSection() {
           {sidebarItems.map((conv) => {
             const isActive = conv.isOptimistic
               ? conv.isPendingDraft
-                ? onChatRoute && !activeThreadId
+                ? onChatRoute && !activeThreadId && activeDraftId === conv.id
                 : onChatRoute && activeThreadId === conv.id
               : onChatRoute && activeThreadId === conv.id;
             const generating = conv.isOptimistic
@@ -127,7 +128,7 @@ export function ConversationSidebarSection() {
             const label = conversationLabel(conv.preview);
             const linkTo = conv.isOptimistic
               ? conv.isPendingDraft
-                ? '/chat'
+                ? `/chat?draft=${encodeURIComponent(conv.draftId ?? conv.id)}`
                 : `/chat?thread=${encodeURIComponent(conv.id)}`
               : `/chat?thread=${encodeURIComponent(conv.id)}`;
 

@@ -19,6 +19,7 @@ import { useToast } from '@/context/ToastContext';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
 import type { MessageFeedbackRating } from '@/types/domain';
 import {
+  createDraftId,
   messageIsInFlight,
   resolveRegenerateMessageId,
   resolveSessionKey,
@@ -34,6 +35,7 @@ export function ChatPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const threadFromUrl = searchParams.get('thread');
+  const draftFromUrl = searchParams.get('draft');
 
   const {
     version,
@@ -43,13 +45,14 @@ export function ChatPage() {
     submitFeedback,
     regenerateMessage,
     updateMessages,
-    clearPendingSession,
+    clearDraftSession,
   } = useChatSession();
 
   const [input, setInput] = useState('');
   /** Rascunho não enviado por conversa (chave = resolveSessionKey). */
   const draftsRef = useRef<Record<string, string>>({});
   const prevDraftKeyRef = useRef<string | null>(null);
+  const prevDraftIdRef = useRef<string | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [feedbackBusyMessageId, setFeedbackBusyMessageId] = useState<string | null>(
@@ -59,7 +62,7 @@ export function ChatPage() {
 
   // version in deps so UI re-renders when background stream updates session
   const session = activePatientId
-    ? getSession(activePatientId, threadFromUrl)
+    ? getSession(activePatientId, threadFromUrl, draftFromUrl)
     : null;
   void version;
 
@@ -69,9 +72,10 @@ export function ChatPage() {
   const conversationInFlight = sessionHasInFlightWork(session ?? undefined);
   const regenerateMessageId = resolveRegenerateMessageId(session ?? undefined);
   const sessionDraftKey = activePatientId
-    ? resolveSessionKey(activePatientId, threadFromUrl)
+    ? resolveSessionKey(activePatientId, threadFromUrl, draftFromUrl)
     : null;
-  const sendDisabled = loadingThread || conversationInFlight;
+  const awaitingDraft = !threadFromUrl && !draftFromUrl;
+  const sendDisabled = loadingThread || conversationInFlight || awaitingDraft;
 
   // Restaura o rascunho da conversa ativa; migra pending → thread após 1ª mensagem.
   useEffect(() => {
@@ -85,8 +89,8 @@ export function ChatPage() {
     if (
       prevKey &&
       prevKey !== sessionDraftKey &&
-      prevKey.startsWith('pending:') &&
-      !sessionDraftKey.startsWith('pending:')
+      prevKey.startsWith('draft:') &&
+      !sessionDraftKey.startsWith('draft:')
     ) {
       const pendingDraft = draftsRef.current[prevKey] ?? '';
       if (pendingDraft && !draftsRef.current[sessionDraftKey]) {
@@ -106,12 +110,36 @@ export function ChatPage() {
     }
   }
 
+  // Nova conversa sem thread nem draft → aloca um rascunho (permite várias em paralelo).
+  useEffect(() => {
+    if (!activePatientId || threadFromUrl) {
+      return;
+    }
+    if (draftFromUrl) {
+      return;
+    }
+    const newDraftId = createDraftId();
+    navigate(`/chat?draft=${encodeURIComponent(newDraftId)}`, { replace: true });
+  }, [activePatientId, threadFromUrl, draftFromUrl, navigate]);
+
+  // Remove rascunho vazio ao sair dele (não interrompe streams em andamento).
+  useEffect(() => {
+    if (!activePatientId || threadFromUrl) {
+      prevDraftIdRef.current = null;
+      return;
+    }
+    const prev = prevDraftIdRef.current;
+    if (prev && prev !== draftFromUrl) {
+      clearDraftSession(activePatientId, prev);
+    }
+    prevDraftIdRef.current = draftFromUrl;
+  }, [activePatientId, threadFromUrl, draftFromUrl, clearDraftSession]);
+
   useEffect(() => {
     if (!activePatientId) {
       return;
     }
     if (!threadFromUrl) {
-      clearPendingSession(activePatientId);
       setLoadError(false);
       return;
     }
@@ -129,26 +157,25 @@ export function ChatPage() {
         showToast('Não foi possível carregar a conversa.');
       }
       setLoadError(true);
-      navigate('/chat', { replace: true });
+      const fallbackDraft = createDraftId();
+      navigate(`/chat?draft=${encodeURIComponent(fallbackDraft)}`, { replace: true });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [
-    activePatientId,
-    threadFromUrl,
-    ensureSessionLoaded,
-    clearPendingSession,
-    navigate,
-    showToast,
-  ]);
+  }, [activePatientId, threadFromUrl, ensureSessionLoaded, navigate, showToast]);
 
   async function handleRegenerate(localMessageId: string) {
     if (!activePatientId || conversationInFlight) {
       return;
     }
-    await regenerateMessage(activePatientId, threadFromUrl, localMessageId);
+    await regenerateMessage(
+      activePatientId,
+      threadFromUrl,
+      draftFromUrl,
+      localMessageId,
+    );
   }
 
   async function handleFeedbackSelect(
@@ -160,7 +187,13 @@ export function ChatPage() {
     }
     setFeedbackBusyMessageId(localMessageId);
     try {
-      await submitFeedback(activePatientId, threadFromUrl, localMessageId, clicked);
+      await submitFeedback(
+        activePatientId,
+        threadFromUrl,
+        draftFromUrl,
+        localMessageId,
+        clicked,
+      );
     } finally {
       setFeedbackBusyMessageId(null);
     }
@@ -170,7 +203,7 @@ export function ChatPage() {
     if (!activePatientId) {
       return;
     }
-    updateMessages(activePatientId, threadFromUrl, (msgs) =>
+    updateMessages(activePatientId, threadFromUrl, draftFromUrl, (msgs) =>
       msgs.map((msg) => {
         if (msg.id !== messageId) {
           return msg;
@@ -193,7 +226,8 @@ export function ChatPage() {
       showToast('Conversa arquivada.');
       setArchiveOpen(false);
       refreshConversations();
-      navigate('/chat', { replace: true });
+      const fallbackDraft = createDraftId();
+      navigate(`/chat?draft=${encodeURIComponent(fallbackDraft)}`, { replace: true });
     } catch {
       showToast('Não foi possível arquivar a conversa.');
     } finally {
@@ -221,7 +255,12 @@ export function ChatPage() {
     setDraftForSession(sessionDraftKey, '');
 
     // Stream roda no context — sobrevive troca de rota/conversa.
-    const newThreadId = await sendMessage(activePatientId!, threadFromUrl, trimmed);
+    const newThreadId = await sendMessage(
+      activePatientId!,
+      threadFromUrl,
+      draftFromUrl,
+      trimmed,
+    );
     if (
       newThreadId &&
       !threadFromUrl &&

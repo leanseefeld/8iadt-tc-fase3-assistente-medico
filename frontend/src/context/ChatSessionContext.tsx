@@ -18,8 +18,8 @@ import { useToast } from '@/context/ToastContext';
 import type { ConversationMessageDto, MessageFeedbackRating } from '@/types/domain';
 import type { ChatMessage, ChatSession, OptimisticConversationEntry } from '@/types/chatSession';
 import {
+  draftSessionKey,
   mergeStreamMeta,
-  pendingSessionKey,
   resolveSessionKey,
   sessionHasInFlightWork,
   truncatePreview,
@@ -27,11 +27,16 @@ import {
 
 interface ChatSessionContextValue {
   version: number;
-  getSession: (patientId: string, threadId: string | null) => ChatSession;
+  getSession: (
+    patientId: string,
+    threadId: string | null,
+    draftId?: string | null,
+  ) => ChatSession;
   ensureSessionLoaded: (patientId: string, threadId: string | null) => Promise<void>;
   sendMessage: (
     patientId: string,
     threadId: string | null,
+    draftId: string | null,
     text: string,
   ) => Promise<string | null>;
   isThreadGenerating: (threadId: string) => boolean;
@@ -42,26 +47,30 @@ interface ChatSessionContextValue {
   patchMessage: (
     patientId: string,
     threadId: string | null,
+    draftId: string | null,
     messageId: string,
     patch: Partial<ChatMessage>,
   ) => void;
   updateMessages: (
     patientId: string,
     threadId: string | null,
+    draftId: string | null,
     updater: (messages: ChatMessage[]) => ChatMessage[],
   ) => void;
   submitFeedback: (
     patientId: string,
     threadId: string | null,
+    draftId: string | null,
     localMessageId: string,
     clicked: MessageFeedbackRating,
   ) => Promise<void>;
   regenerateMessage: (
     patientId: string,
     threadId: string | null,
+    draftId: string | null,
     localMessageId: string,
   ) => Promise<void>;
-  clearPendingSession: (patientId: string) => void;
+  clearDraftSession: (patientId: string, draftId: string) => void;
 }
 
 const ChatSessionContext = createContext<ChatSessionContextValue | null>(null);
@@ -78,11 +87,16 @@ function mapPersistedMessages(rows: ConversationMessageDto[]): ChatMessage[] {
   }));
 }
 
-function emptySession(patientId: string, threadId: string | null): ChatSession {
-  const sessionKey = resolveSessionKey(patientId, threadId);
+function emptySession(
+  patientId: string,
+  threadId: string | null,
+  draftId?: string | null,
+): ChatSession {
+  const sessionKey = resolveSessionKey(patientId, threadId, draftId);
   return {
     sessionKey,
     threadId,
+    draftId: threadId ? null : (draftId ?? null),
     patientId,
     messages: [],
     status: 'idle',
@@ -99,6 +113,17 @@ function patchAssistantMessage(
   );
 }
 
+function sessionKeyIsDraft(key: string): boolean {
+  return key.startsWith('draft:');
+}
+
+function draftIdFromSessionKey(key: string): string | null {
+  if (!sessionKeyIsDraft(key)) {
+    return null;
+  }
+  return key.slice('draft:'.length);
+}
+
 export function ChatSessionProvider({ children }: { children: ReactNode }) {
   const sessionsRef = useRef<Map<string, ChatSession>>(new Map());
   const [version, setVersion] = useState(0);
@@ -110,13 +135,17 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const getSession = useCallback(
-    (patientId: string, threadId: string | null): ChatSession => {
+    (
+      patientId: string,
+      threadId: string | null,
+      draftId?: string | null,
+    ): ChatSession => {
       if (threadId) {
         return sessionsRef.current.get(threadId) ?? emptySession(patientId, threadId);
       }
-      const pending = sessionsRef.current.get(pendingSessionKey(patientId));
-      if (pending?.status === 'generating') {
-        return pending;
+      if (draftId) {
+        const key = draftSessionKey(draftId);
+        return sessionsRef.current.get(key) ?? emptySession(patientId, null, draftId);
       }
       return emptySession(patientId, null);
     },
@@ -133,8 +162,10 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
 
   const updateSession = useCallback(
     (key: string, updater: (session: ChatSession) => ChatSession) => {
+      const draftId = draftIdFromSessionKey(key);
       const current =
-        sessionsRef.current.get(key) ?? emptySession('', key.startsWith('pending:') ? null : key);
+        sessionsRef.current.get(key) ??
+        emptySession('', sessionKeyIsDraft(key) ? null : key, draftId);
       const next = updater(current);
       sessionsRef.current.set(key, next);
       bump();
@@ -142,19 +173,20 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     [bump],
   );
 
-  const migratePendingToThread = useCallback(
-    (patientId: string, threadId: string) => {
-      const pk = pendingSessionKey(patientId);
-      const pending = sessionsRef.current.get(pk);
-      if (!pending) {
+  const migrateDraftToThread = useCallback(
+    (draftId: string, threadId: string) => {
+      const dk = draftSessionKey(draftId);
+      const draft = sessionsRef.current.get(dk);
+      if (!draft) {
         return;
       }
       sessionsRef.current.set(threadId, {
-        ...pending,
+        ...draft,
         sessionKey: threadId,
         threadId,
+        draftId: null,
       });
-      sessionsRef.current.delete(pk);
+      sessionsRef.current.delete(dk);
       bump();
     },
     [bump],
@@ -177,36 +209,36 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         entries.push(entry);
       };
 
-      const pending = sessionsRef.current.get(pendingSessionKey(patientId));
-      if (pending) {
-        const firstUser = pending.messages.find((m) => m.role === 'user');
-        if (firstUser?.text.trim()) {
-          pushEntry({
-            id: pendingSessionKey(patientId),
-            preview: truncatePreview(firstUser.text),
-            generating: sessionHasInFlightWork(pending),
-            isPendingDraft: true,
-          });
-        }
-      }
-
       for (const session of sessionsRef.current.values()) {
-        if (session.patientId !== patientId || !session.threadId) {
+        if (session.patientId !== patientId) {
           continue;
         }
-        if (apiConversationIds.has(session.threadId)) {
-          continue;
-        }
+
         const firstUser = session.messages.find((m) => m.role === 'user');
         if (!firstUser?.text.trim()) {
           continue;
         }
-        pushEntry({
-          id: session.threadId,
-          preview: truncatePreview(firstUser.text),
-          generating: sessionHasInFlightWork(session),
-          isPendingDraft: false,
-        });
+
+        if (session.threadId && !apiConversationIds.has(session.threadId)) {
+          pushEntry({
+            id: session.threadId,
+            preview: truncatePreview(firstUser.text),
+            generating: sessionHasInFlightWork(session),
+            isPendingDraft: false,
+          });
+          continue;
+        }
+
+        const draftId = session.draftId ?? draftIdFromSessionKey(session.sessionKey);
+        if (draftId && sessionKeyIsDraft(session.sessionKey)) {
+          pushEntry({
+            id: draftId,
+            preview: truncatePreview(firstUser.text),
+            generating: sessionHasInFlightWork(session),
+            isPendingDraft: true,
+            draftId,
+          });
+        }
       }
 
       return entries;
@@ -259,10 +291,11 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     (
       patientId: string,
       threadId: string | null,
+      draftId: string | null,
       messageId: string,
       patch: Partial<ChatMessage>,
     ) => {
-      const key = resolveSessionKey(patientId, threadId);
+      const key = resolveSessionKey(patientId, threadId, draftId);
       updateSession(key, (session) => ({
         ...session,
         messages: session.messages.map((msg) =>
@@ -277,9 +310,10 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     (
       patientId: string,
       threadId: string | null,
+      draftId: string | null,
       updater: (messages: ChatMessage[]) => ChatMessage[],
     ) => {
-      const key = resolveSessionKey(patientId, threadId);
+      const key = resolveSessionKey(patientId, threadId, draftId);
       updateSession(key, (session) => ({
         ...session,
         messages: updater(session.messages),
@@ -292,23 +326,28 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     async (
       patientId: string,
       threadId: string | null,
+      draftId: string | null,
       text: string,
     ): Promise<string | null> => {
       const trimmed = text.trim();
       if (!trimmed) {
         return threadId;
       }
+      if (!threadId && !draftId) {
+        return null;
+      }
 
-      let activeKey = resolveSessionKey(patientId, threadId);
+      let activeKey = resolveSessionKey(patientId, threadId, draftId);
       const existing =
         sessionsRef.current.get(activeKey) ??
-        emptySession(patientId, threadId);
+        emptySession(patientId, threadId, draftId);
       const assistantId = `a-${Date.now()}`;
 
       setSession(activeKey, {
         ...existing,
         patientId,
         threadId,
+        draftId: threadId ? null : draftId,
         sessionKey: activeKey,
         status: 'generating',
         messages: [
@@ -357,9 +396,12 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
           },
         });
 
-        if (res.threadId && activeKey.startsWith('pending:')) {
-          migratePendingToThread(patientId, res.threadId);
-          activeKey = res.threadId;
+        if (res.threadId && sessionKeyIsDraft(activeKey)) {
+          const resolvedDraftId = draftIdFromSessionKey(activeKey);
+          if (resolvedDraftId) {
+            migrateDraftToThread(resolvedDraftId, res.threadId);
+            activeKey = res.threadId;
+          }
         } else if (res.threadId) {
           activeKey = res.threadId;
         }
@@ -382,6 +424,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         setSession(activeKey, {
           ...session,
           threadId: res.threadId ?? session.threadId,
+          draftId: null,
           sessionKey: res.threadId ?? activeKey,
           status: 'idle',
           messages: !res.text.trim()
@@ -410,17 +453,18 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
         return threadId;
       }
     },
-    [bump, migratePendingToThread, refreshConversations, setSession, showToast],
+    [bump, migrateDraftToThread, refreshConversations, setSession, showToast],
   );
 
   const submitFeedback = useCallback(
     async (
       patientId: string,
       threadId: string | null,
+      draftId: string | null,
       localMessageId: string,
       clicked: MessageFeedbackRating,
     ) => {
-      const key = resolveSessionKey(patientId, threadId);
+      const key = resolveSessionKey(patientId, threadId, draftId);
       const session = sessionsRef.current.get(key);
       const effectiveThreadId = session?.threadId ?? threadId;
       const msg = session?.messages.find((m) => m.id === localMessageId);
@@ -431,7 +475,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       const previous = msg.feedbackRating;
       const nextRating = previous === clicked ? undefined : clicked;
 
-      patchMessage(patientId, threadId, localMessageId, {
+      patchMessage(patientId, threadId, draftId, localMessageId, {
         feedbackRating: nextRating,
         feedbackSubmitting: true,
       });
@@ -443,12 +487,12 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
           nextRating ?? null,
         );
       } catch {
-        patchMessage(patientId, threadId, localMessageId, {
+        patchMessage(patientId, threadId, draftId, localMessageId, {
           feedbackRating: previous,
         });
         showToast('Não foi possível salvar sua avaliação. Tente novamente.');
       } finally {
-        patchMessage(patientId, threadId, localMessageId, {
+        patchMessage(patientId, threadId, draftId, localMessageId, {
           feedbackSubmitting: false,
         });
       }
@@ -460,9 +504,10 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     async (
       patientId: string,
       threadId: string | null,
+      draftId: string | null,
       localMessageId: string,
     ) => {
-      const key = resolveSessionKey(patientId, threadId);
+      const key = resolveSessionKey(patientId, threadId, draftId);
       const session = sessionsRef.current.get(key);
       const effectiveThreadId = session?.threadId ?? threadId;
       const msg = session?.messages.find((m) => m.id === localMessageId);
@@ -482,7 +527,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       const previousPersistedId = msg.persistedMessageId;
       const previousFeedback = msg.feedbackRating;
 
-      patchMessage(patientId, threadId, localMessageId, {
+      patchMessage(patientId, threadId, draftId, localMessageId, {
         regenerating: true,
         streaming: true,
         text: '',
@@ -534,7 +579,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
 
         const current = sessionsRef.current.get(key);
         const prevAssistant = current?.messages.find((m) => m.id === localMessageId);
-        patchMessage(patientId, threadId, localMessageId, {
+        patchMessage(patientId, threadId, draftId, localMessageId, {
           text: res.text,
           streaming: false,
           regenerating: false,
@@ -544,7 +589,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
           ...(res.messageId ? { persistedMessageId: res.messageId } : {}),
         });
       } catch {
-        patchMessage(patientId, threadId, localMessageId, {
+        patchMessage(patientId, threadId, draftId, localMessageId, {
           regenerating: false,
           streaming: false,
           text: previousText,
@@ -559,14 +604,17 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
     [bump, patchMessage, showToast],
   );
 
-  const clearPendingSession = useCallback(
-    (patientId: string) => {
-      const pk = pendingSessionKey(patientId);
-      const pending = sessionsRef.current.get(pk);
-      if (pending?.status === 'generating') {
+  const clearDraftSession = useCallback(
+    (patientId: string, draftId: string) => {
+      const dk = draftSessionKey(draftId);
+      const draft = sessionsRef.current.get(dk);
+      if (!draft || draft.patientId !== patientId) {
         return;
       }
-      sessionsRef.current.delete(pk);
+      if (sessionHasInFlightWork(draft)) {
+        return;
+      }
+      sessionsRef.current.delete(dk);
       bump();
     },
     [bump],
@@ -584,7 +632,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       updateMessages,
       submitFeedback,
       regenerateMessage,
-      clearPendingSession,
+      clearDraftSession,
     }),
     [
       version,
@@ -597,7 +645,7 @@ export function ChatSessionProvider({ children }: { children: ReactNode }) {
       updateMessages,
       submitFeedback,
       regenerateMessage,
-      clearPendingSession,
+      clearDraftSession,
     ],
   );
 

@@ -22,6 +22,8 @@ export interface ChatMessage {
 export interface ChatSession {
   sessionKey: string;
   threadId: string | null;
+  /** Rascunho local até a 1ª resposta devolver threadId. */
+  draftId?: string | null;
   patientId: string;
   messages: ChatMessage[];
   status: ChatSessionStatus;
@@ -31,8 +33,10 @@ export interface OptimisticConversationEntry {
   id: string;
   preview: string;
   generating: boolean;
-  /** Navega para /chat sem thread (rascunho ainda sem id do servidor). */
+  /** Navega para /chat?draft=… (ainda sem threadId do servidor). */
   isPendingDraft: boolean;
+  /** Valor do query param `draft` quando isPendingDraft. */
+  draftId?: string;
 }
 
 export function truncatePreview(text: string, max = 80): string {
@@ -43,15 +47,27 @@ export function truncatePreview(text: string, max = 80): string {
   return `${stripped.slice(0, max - 1)}…`;
 }
 
-export function pendingSessionKey(patientId: string): string {
-  return `pending:${patientId}`;
+/** Identificador de rascunho local (query `draft` na rota /chat). */
+export function createDraftId(): string {
+  return crypto.randomUUID();
+}
+
+export function draftSessionKey(draftId: string): string {
+  return `draft:${draftId}`;
 }
 
 export function resolveSessionKey(
   patientId: string,
   threadId: string | null,
+  draftId?: string | null,
 ): string {
-  return threadId ?? pendingSessionKey(patientId);
+  if (threadId) {
+    return threadId;
+  }
+  if (draftId) {
+    return draftSessionKey(draftId);
+  }
+  return `draft-empty:${patientId}`;
 }
 
 /** Turno em andamento (nova mensagem ou regeneração) — não recarregar do servidor. */
