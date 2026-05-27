@@ -245,7 +245,7 @@ flowchart TD
 
     RETRIEVE -. consulta vetorial .-> CHROMA[LangChain Chroma vectorstore]
     CHROMA -. embeddings .-> EMB[OllamaEmbeddings / nomic-embed-text]
-    CHROMA -. Document[] candidatos .-> RERANK
+    CHROMA -. documentos candidatos .-> RERANK
 ```
 
 ### Alertas Clinicos
@@ -262,12 +262,12 @@ flowchart TD
     QUERY --> REF[retrieve_reference_pcdt]
     REF --> EMB1[OllamaEmbeddings]
     REF --> CHROMA1[LangChain Chroma]
-    CHROMA1 --> REFDOCS[Document[] referencia]
+    CHROMA1 --> REFDOCS[Documentos de referencia]
 
     REFDOCS --> PATIENT[retrieve_patient_pcdt]
     PATIENT --> EMB2[OllamaEmbeddings]
     PATIENT --> CHROMA2[LangChain Chroma]
-    CHROMA2 --> PATDOCS[Document[] contexto do paciente]
+    CHROMA2 --> PATDOCS[Documentos do contexto do paciente]
 
     PATDOCS --> ASSESS[assess_alert_payloads]
     ASSESS -. avaliacao opcional .-> CHATMODEL[ChatOllama / MEDICO_OLLAMA_CHAT_MODEL]
