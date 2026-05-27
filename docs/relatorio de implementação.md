@@ -400,14 +400,33 @@ Em [fine-tuning_colab_assistente.ipynb](../llm/fine-tuning/fine-tuning_colab_ass
 - aplicando o chat template do Llama3.2, com os devidos tokens especiais
 - exportamos o modelo quantizado em GGUF para Google Drive e HuggingFace
 
-O resultado visto no Notebook pareceu promissor, mas na prática, testando com `ollama run hf.co/leanseefeld/assistente-medico-llama32-3b-q4km:Q4_K_M`, a degradação de performance do modelo foi notável. Vimos o modelo responder em espanhol para perguntas em português, usar formatadores de data desnecassariamente e, mais notoriamente, esquecer informações básicas, como datas de acontecimentos históricos. Na execução com o nosso grafo LangGraph - com o system prompt e contexto muito parecido ao usado em alguns treinamentos - o modelo passou a se repetir e inventar trechos PCDT ou listas, e diversas vezes nao foi capaz de chegar ao fim da geração.
+### Resultados iniciais e ajuste
 
-Tudo indica para esquecimento catastrófico do modelo.
-
-O próximo passo, dado mais tempo de desenvolvimento, seria experimentar com configurações menos agressivas de fine-tuning, como lora rank, camadas afetadas e taxa de aprendizagem reduzidas (`r=8, lora_alpha=16, learning_rate=1e-4`) , incluir mais exemplos de conversas, incluir exemplos de conversas não relacionadas com o domínio na aplicação (para evitar esquecimento) e verificar a ordem em que os exemplos são apresentados ao modelo (exemplos apresentados primeiro tem maior influência que os últimos).
+O resultado visto no Notebook pareceu promissor, mas na prática, testando com `ollama run hf.co/leanseefeld/assistente-medico-llama32-3b-q4km:Q4_K_M`, a degradação de performance do modelo foi notável. Vimos o modelo responder em espanhol para perguntas em português, usar formatadores de data desnecassariamente e, mais notoriamente, esquecer informações básicas, como datas de acontecimentos históricos. Na execução com o nosso grafo LangGraph - com o system prompt e contexto muito parecido ao usado em alguns treinamentos - o modelo passou a se repetir e inventar trechos PCDT ou listas, e diversas vezes não foi capaz de chegar ao fim da geração.
 
 Outro problema em potencial é a exportação GGUF quantizada. Logo após o treinamento, ainda no mesmo notebook, o modelo responde adequadamente às perguntas de teste. É depois de quantizar [um modelo já quantizado] que fica muito evidente a perda de performance.
 
+Tudo indica para esquecimento catastrófico do modelo.
+
+Para contornar o problema, foi experimentado outra configuração mais conservadora, com lora rank, camadas afetadas e taxa de aprendizagem reduzidas (`r=8, lora_alpha=16, learning_rate=1e-4`), e dessa vez treinando no modelo não quantizado (FP16), antes de fazer a quantização.
+
+Os resultados foram melhores, com menos alucinações e repetições intermináveis, porém ainda houve uma significativa degradação de desempenho do modelo.
+
+## Resultados finais
+
+Para perguntas não vistas antes, o modelo tendeu a trazer o resumo do caso do paciente antes de dar uma resposta vaga e sem valor ("para saber mais, consulte um especialista"). Para perguntas presentes no treinamento, usou formatos [Observação][Exame][Reavaliação] em listas onde não deveria usar, e respondeu com "Ações sugeridas" sem que a pergunta exigisse isso. Para perguntas de conhecimento geral (fora do domínio de treinamento), o modelo tentou fazer associações com o paciente em questão ("não há um evento X associado com o paciente João"). Em alguns casos, respondeu corretamente a pergunta, em outros, se recusou a responder ("A pergunta do médico parece ser uma curiosidade ou um exercício de humor. Não há nenhuma ação clínica sugerida para essa pergunta").
+
+No geral, quase não desviou do padrão visto no treinamento para as mesmas perguntas iniciais ("Resuma o caso clínico atual", "Qual a ação sugerida?", "Quais exames estão pendentes?"), mas ficou preso a respostas vistas no treinamento para perguntas de acompanhamento (trazendo ações sugeridas quando perguntado "Que outros exames solicitar?").
+
+O resultado ainda não é satisfatório para o uso em um ambiente real ou sequer de treinamento médico, mas indica evolução perante a configuração anterior de SFT.
+
+## Melhorias possíveis
+
+Dado mais tempo, os próximos passos para melhorar o modelo seriam:
+- incluir mais exemplos de conversas com perguntas mais diversas;
+- incluir exemplos de conversas não relacionadas com o domínio na aplicação (para evitar esquecimento);
+- verificar a ordem em que os exemplos são apresentados ao modelo (exemplos apresentados primeiro tem maior influência que os últimos); e
+- experimentar com parâmetros de ajuste ainda mais moderados, dependendo do tamanho do dataset.
 
 ## Resolução clínica e expansão de consultas orientada por catálogo
 

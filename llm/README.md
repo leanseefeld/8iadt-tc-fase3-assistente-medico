@@ -3,7 +3,15 @@
 Este diretório contém o pacote Python **assistente-medico-llm**, com:
 
 - **PCDT (CONITEC)**: script `download-pcdt` que lê a **tabela** da página oficial de listagem PCDT, baixa cada documento ligado na segunda coluna e grava PDFs em `llm/data/raw/pcdt/` e manifestos em `llm/data/manifests/` (`pcdt_index.jsonl`, `pcdt_run.json`). Uma única URL HTTP (sem crawl nem navegador headless para este fluxo).
-- **Exames (Einstein / USP)**: script que obtém artefatos do [Dados COVID Hospital Israelita Albert Einstein](https://repositoriodatasharingfapesp.uspdigital.usp.br/handle/item/98) em `llm/data/raw/clinical_exams/` para exemplos de exames clínicos.
+- **Exames (Einstein / USP)**: script que obtém artefatos do [Dados COVID Hospital Israelita Albert Einstein](https://repositoriodatasharingfapesp.uspdigital.usp.br/handle/item/98) em `llm/data/raw/clinical_exams/` para exemplos de exames clínicos. (não utilizado na entrega final)
+
+## Fine tuning
+
+Para informações sobre o processo de ajuste do modelo, consulte [fine-tuning/README.md](./fine-tuning/README.md).
+
+## Análise de tokens
+
+Para uma análise de uso de tokens em uma base chroma já construída, use o notebook [chroma_llama_token_analysis.ipynb](./chroma_llama_token_analysis.ipynb)
 
 ## Instalação
 

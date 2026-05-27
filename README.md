@@ -48,13 +48,19 @@ O projeto pode ser executado de duas formas: pelo orquestrador `run-local.py`, r
 - Com o Ollama aberto, baixe os modelos usados pelo runtime local:
 
 ```bash
+# Modelo treinado com conversas tidas no assistente
 ollama pull hf.co/leanseefeld/assistente-medico-llama32-3b-q4km:Q4_K_M
+
+# ou use llama3.2 diretamente, sem o fine tuning
+# ollama pull llama3.2
+
+# Modelo usado para gerar e buscar embeddings Chroma
 ollama pull nomic-embed-text
 ```
 
 ### 2. Adicionar base de dados vetorial local
 
-Na raiz do repositorio, adicione a base vetorial já populada com os PCDTs, disponível em `[vectorstore/chroma/](https://drive.google.com/file/d/1mEDyTzbWI4nWjXp4xCXWzfTptb0KuaGE/view?usp=drive_link)
+Na raiz do repositorio, adicione a base vetorial já populada com os PCDTs, disponível em [vectorstore/chroma/](https://drive.google.com/file/d/1mEDyTzbWI4nWjXp4xCXWzfTptb0KuaGE/view?usp=drive_link)
 
 ### 3. Subir aplicacao com setup automatico
 
@@ -271,6 +277,7 @@ Este README da raiz e a referencia canônica para avaliacao da entrega e para en
 | Documento | Papel | Observacao                                                             |
 | --- | --- |------------------------------------------------------------------------|
 | [README.md](README.md) | Visao integrada do produto, arquitetura, execucao local e limites clinicos. | Fonte principal para banca e avaliacao geral.                          |
+| [llm/fine-tuning/README.md](llm/fine-tuning/README.md) | Visão geral do processo de ajuste do modelo | Fonte principal para banca e avaliacao geral.                          |
 | [backend/README.md](backend/README.md) | Detalha API FastAPI, endpoints do chat, variaveis, auditoria, grafo RAG e SQLite. | Referencia operacional do backend; este README da raiz consolida a arquitetura integrada. |
 | [llm/README.md](llm/README.md) | Documenta a pipeline de ingestao PCDT, catalogo Conitec, limpeza, chunking, Chroma, RAG Inspector e dataset Einstein. | Principal referencia para reconstruir `llm/data/` e `vectorstore/chroma/`. |
 | [frontend/README.md](frontend/README.md) | Explica requisitos Node, scripts Vite, build, preview, Docker e estrutura da UI. |  |
@@ -686,7 +693,8 @@ Implementado:
 - RAG Inspector;
 - frontend React integrado ao backend;
 - seed sintetico de pacientes;
-- scripts de exportacao/anonimizacao para SFT.
+- scripts de exportacao/anonimizacao para SFT;
+- fine tuning do modelo com conversas exportadas.
 
 Proximos passos possiveis:
 
