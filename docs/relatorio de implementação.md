@@ -323,7 +323,7 @@ Segue um exemplo de chunk após os enriquecimentos e tratamentos realizados:
 
 Tendo em vista a tendência de carregar documentos inteiros na janela de contexto de modelos LLM mais recentes, com modelos suportando janelas acima de 1 milhão de tokens, decidimos investigar o tamanho da nossa base de PCDTs, com 131 protocolos no momento da escrita desta análise.
 
-Criamos o notebook [chroma_llama_token_analysis](../llm/notebooks/chroma_llama_token_analysis.ipynb) para obter as respostas para perguntas como:
+Criamos o notebook [chroma_llama_token_analysis](../llm/fine-tuning/chroma_llama_token_analysis.ipynb) para obter as respostas para perguntas como:
 
 * Quantos tokens Llama3.2:3B (4bit / Q4_K_M) nossos chunks ocupam? \
 R: 4.249.631 tokens Llama (em 15,541 chunks)
@@ -364,30 +364,49 @@ O ideal seria escolher um dataset mais consistente e robusto, e com linguajar ma
 
 Criado o notebook [data-prep.ipynb](../llm/fine-tuning/data-prep.ipynb) para tratar e traduzir o dataset filtrado.
 
-## Execução do Fine Tune
+## Execução do Fine Tuning
 
-O fine tune inicial foi executado via unsloth em uma GPU T4 do Google Colab. ([fine-tuning_colab.ipynb](../llm/fine-tuning/fine-tuning_colab.ipynb))
+O fine tune inicial foi executado via unsloth em uma GPU T4 do Google Colab. ([fine-tuning_colab_medquad.ipynb](../llm/fine-tuning/fine-tuning_colab_medquad.ipynb))
 Em uma tentativa de deixar as mensagens o mais próxima do cenário onde são utilizadas, foi usado o `ChatPromptTemplate` para gerar as mensagens formatadas para o treinamento. Para o treinamento, foi constatado que uma única época não produziu uma alteração satisfatória, e com 3 épocas tivemos over fitting, onde ao executar a inferência do modelo ajustado com uma nova pergunta, o modelo halucinou e prodiziu mensagens inconsistentes.
 
-Para contornar a limitação de uso do Google Colab e acelerar o tempo de iteração, foi criado um novo notebook para executar o fine tune localmente em Apple Silicon ([fine-tuning_apple-silicon.ipynb](../llm/fine-tuning/fine-tuning_apple-silicon.ipynb)). Infelizmente, unsloth ainda não suporta este ambiente e por isso foi usado `mlx-tune` no lugar, que mantém a mesma interface/API/contrato e delega o treino para `mlx-lm`, otimizado para Apple Silicon.
+Para contornar a limitação de uso do Google Colab e acelerar o tempo de iteração, foi criado um novo notebook para executar o fine tune localmente em Apple Silicon ([fine-tuning_apple-silicon_medquad.ipynb](../llm/fine-tuning/fine-tuning_apple-silicon_medquad.ipynb)). Infelizmente, unsloth ainda não suporta este ambiente e por isso foi usado `mlx-tune` no lugar, que mantém a mesma interface/API/contrato e delega o treino para `mlx-lm`, otimizado para Apple Silicon.
 
 ### Resultados preliminares
 
 Feito isso, foi constatado que o uso do `ChatPromptTemplate` "bagunçou a cabeça" do modelo Llama3.2:3B-Instruct, que na verdade já foi pré-treinado com um padrão. Com este template, em muitos casos o modelo respondia com perguntas utilizadas durante o treinamento, ao invés de responder diretamente. Este problema foi contornado ao usar `tokenizer.apply_chat_template`.
 
-Outro problema foi a inconsistência no tamanho das respostas do dataset, que gerou truncamento durante o treinamento. Com este truncamento, o modelo viu vários exemplos sem o token de fim de geração (`<|eot_id|>`, para Llama3+) e resultou em gerações/respostas com repetição de frases até completar `max_seq_length`/tamanho do contexto.
+Outro problema foi a inconsistência no tamanho das respostas do dataset, que gerou truncamento durante o treinamento. Com este truncamento, o modelo viu vários exemplos sem o token de fim de geração (`<|eot_id|>`, para Llama3+) e resultou em gerações/respostas com repetição de frases até completar `max_seq_length`/tamanho do contexto. Neste cenário, foi identificado que o `mlx-tune` não passa corretamente o tamanho de contexto para o módulo `mlx-lm`, limitando o uso da lib com 2048 tokens.
 
-### TODO: próximos passos
+## Nova estratégia - nossas conversas
 
-* próximo passo é tentar fazer o treinamento sem as respostas que estão sendo truncadas
-* outra ideia, é usar o Gemma4 pra *transformar* esse dataset horroroso em algo mais padronizado e útil
-* precisamos testar como o modelo ajustado se comporta quando é usado com o system prompt to rewrite e do guardrail, pois é possível que o modelo perca a capacidade de seguir outras instruções se ele for treinado só com a mesma
-* existem datasets de instruções que podemos "surrupiar" pra que uns 5 a 10% da massa de treino seja diferente, pra não bitolar o modelo.
+Considerando que gemma4:e4b gerou respostas mais precisas e concisas do que as presentes no dataset, decidimos usar o modelo llama3.2:3b como base, ajustado com conversas tidas com o assistente usando gemma4.
 
-E depois disso:
-* exportar modelo quantizado Q4 GGUF (Ollama compatible)
-      * só é possível via CUDA (Colab/T4) ou a partir de modelo sem quantização no MLX (usa mais memória e tempo)
-      * com MLX, tá pra fazer FT quantizado mas o resultado não pode ser executado fora de Apple Silicon
+A interface de chat foi melhorada para permitir que os usuários classifiquem as respostas como positivas ou negativas, além de exibir conversas anteriores entre o mesmo médico e paciente e também permitir gerar novamente a última resposta do assistente. Assim, usando o MedQuAD mais como uma referência sobre o que perguntar e o que esperar, além de verificações de perguntas sobre o conteúdo de alguns dos PCDTs disponíveis, criamos nossa própria base de conversas com curadoria própria.
+
+Enquanto isto acontecia, outras features passaram a depender mais de integração com LLM, como reescrita de pergunta usando RAG, rerank de resultados RAG, avaliação de segurança da resposta e reescrita ("guardrail"). Para coletar as conversas e as interações relacionadas ao processamento das respostas, criamos o notebook [export-positive-conversations.ipynb](../llm/fine-tuning/export-positive-conversations.ipynb).
+
+O resultado é uma coleção de entradas e saídas da LLM anonimizadas, o nosso dataset de treinamento: [`sft_positive_conversations.jsonl`](../llm/fine-tuning/assets/sft_positive_conversations.jsonl)
+
+## Treinamento com as conversas
+
+Foi criado o notebook [fine-tuning_apple-silicon_assistente.ipynb](../llm/fine-tuning/fine-tuning_apple-silicon_assistente.ipynb) para gerar a primeira versão do modelo ajustado e fazer a validação inicial. Desta vez, foi usado `mlx-lm` diretamente para contornar a limitação descrita na versão com MedQuAD (`max_seq_length`).
+
+Entretanto, para exportar um formato compatível com Ollama e quantizado em 4bits para execução em placas que não sejam Apple Silicon, o padrão `unsloth` em Google Colab foi o escolhido e elaborado mais a fundo.
+
+Em [fine-tuning_colab_assistente.ipynb](../llm/fine-tuning/fine-tuning_colab_assistente.ipynb), fazemos o fine-tuning LoRA do modelo usando nosso dataset:
+- com um `max_seq_length` de 9000 tokens para que a conversa mais longa não seja truncada,
+- usamos as configurações do [exemplo oficial de fine-tuning](https://colab.research.google.com/github/unslothai/notebooks/blob/main/nb/Llama3.2_(1B_and_3B)-Conversational.ipynb#scrollTo=vhXv0xFMGNKE) do unsloth
+- usamos o modelo base já quantizado: `unsloth/llama-3.2-3b-instruct-unsloth-bnb-4bit`
+- aplicando o chat template do Llama3.2, com os devidos tokens especiais
+- exportamos o modelo quantizado em GGUF para Google Drive e HuggingFace
+
+O resultado visto no Notebook pareceu promissor, mas na prática, testando com `ollama run hf.co/leanseefeld/assistente-medico-llama32-3b-q4km:Q4_K_M`, a degradação de performance do modelo foi notável. Vimos o modelo responder em espanhol para perguntas em português, usar formatadores de data desnecassariamente e, mais notoriamente, esquecer informações básicas, como datas de acontecimentos históricos. Na execução com o nosso grafo LangGraph - com o system prompt e contexto muito parecido ao usado em alguns treinamentos - o modelo passou a se repetir e inventar trechos PCDT ou listas, e diversas vezes nao foi capaz de chegar ao fim da geração.
+
+Tudo indica para esquecimento catastrófico do modelo.
+
+O próximo passo, dado mais tempo de desenvolvimento, seria experimentar com configurações menos agressivas de fine-tuning, como lora rank, camadas afetadas e taxa de aprendizagem reduzidas (`r=8, lora_alpha=16, learning_rate=1e-4`) , incluir mais exemplos de conversas, incluir exemplos de conversas não relacionadas com o domínio na aplicação (para evitar esquecimento) e verificar a ordem em que os exemplos são apresentados ao modelo (exemplos apresentados primeiro tem maior influência que os últimos).
+
+Outro problema em potencial é a exportação GGUF quantizada. Logo após o treinamento, ainda no mesmo notebook, o modelo responde adequadamente às perguntas de teste. É depois de quantizar [um modelo já quantizado] que fica muito evidente a perda de performance.
 
 
 ## Resolução clínica e expansão de consultas orientada por catálogo
