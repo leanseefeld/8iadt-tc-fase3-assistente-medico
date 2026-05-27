@@ -207,6 +207,9 @@ async def post_chat(
         session,
         is_resumed_thread=is_resumed_thread,
     )
+    # Evita segurar lock de escrita do SQLite durante o RAG/streaming.
+    # A criação da conversa faz flush() antes de iniciar o grafo.
+    await session.commit()
     if body.patient_id:
         await invalidate_patient_context(request.app.state, body.patient_id)
     wants_stream = _wants_sse(accept)
@@ -398,6 +401,10 @@ async def post_regenerate_assistant_message(
         user_message_content=user_row.content,
         chat_history=history,
     )
+
+    # Evita manter transação aberta (leituras) durante o RAG/streaming.
+    # Em SQLite isso pode aumentar contenção e risco de "database is locked" sob concorrência.
+    await session.commit()
 
     if conversation.patient_id:
         await invalidate_patient_context(request.app.state, conversation.patient_id)
