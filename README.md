@@ -10,7 +10,7 @@
 
 Este projeto implementa uma solução de assistente virtual medico para apoio a decisao clinica em ambiente hospitalar, combinando FastAPI, LangGraph, LangChain, RAG sobre PCDTs da Conitec, contexto estruturado de paciente, alertas clinicos automatizados e guardrails de seguranca clinica.
 
-Vídeo de apresentação: 
+Vídeo de apresentação: https://youtu.be/oVQ0AvYr8yw
 
 ## Nosso Grupo - Grupo 12
 * Ana Paula Rodrigues Pereira (RM 369663) - aninha-felicio@hotmail.com
