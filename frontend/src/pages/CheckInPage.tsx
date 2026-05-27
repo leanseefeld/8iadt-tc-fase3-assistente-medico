@@ -9,6 +9,7 @@ import {
 } from '@/api/clinicalApi';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
+import { useComorbidityLabels } from '@/hooks/useComorbidityLabels';
 import type { Cid, MedicationOption, Patient, PatientSex, PatientGender } from '@/types/domain';
 import { formatPatientCid } from '@/utils/formatPatientCid';
 import { Search, UserPlus, UserRoundSearch } from 'lucide-react';
@@ -36,6 +37,7 @@ const GENDER_OPTIONS: { value: PatientGender; label: string }[] = [
 export function CheckInPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { codeToLabel: comorbidityCodeToLabel } = useComorbidityLabels();
   const {
     setActivePatientId,
     refreshAdmittedPatients,
@@ -194,14 +196,6 @@ export function CheckInPage() {
         o.code.toLowerCase().includes(q) || o.label.toLowerCase().includes(q),
     );
   }, [comorbQuery, comorbidityOptions]);
-
-  const comorbidityCodeToLabel = useMemo(() => {
-    const map: Record<string, string> = {};
-    comorbidityOptions.forEach((opt) => {
-      map[opt.code] = opt.label;
-    });
-    return map;
-  }, [comorbidityOptions]);
 
   const parsedMedicationLines = useMemo(() => {
     return medications
@@ -663,7 +657,7 @@ export function CheckInPage() {
                       key={c}
                       className="rounded-full bg-teal-100 px-2.5 py-0.5 text-xs font-medium text-teal-900"
                     >
-                      {comorbidityCodeToLabel[c] || c}
+                      {comorbidityCodeToLabel(c)}
                     </span>
                   ))}
                 </div>

@@ -4,6 +4,7 @@ import { getPatientVitalsHistoryMock, patchPatientMock } from '@/api/clinicalApi
 import { CIDEditModal } from '@/components/CIDEditModal';
 import { useAppSession } from '@/context/AppSessionContext';
 import { useToast } from '@/context/ToastContext';
+import { useComorbidityLabels } from '@/hooks/useComorbidityLabels';
 import { usePatientDetail } from '@/hooks/usePatientDetail';
 import type { VitalSigns } from '@/types/domain';
 import { formatPatientCid } from '@/utils/formatPatientCid';
@@ -103,10 +104,19 @@ function overallVitalStatus(vitals: VitalSigns): 'normal' | 'warn' | 'crit' {
   return 'normal';
 }
 
+function formatClinicalText(value: string, emptyLabel: string): string {
+  const trimmed = (value || '').trim();
+  if (!trimmed || trimmed === 'Não informado') {
+    return emptyLabel;
+  }
+  return trimmed;
+}
+
 export function DashboardPage() {
   const { showToast } = useToast();
   const { activePatientId, refreshAlertBadge } = useAppSession();
   const { patient, refetch } = usePatientDetail(activePatientId);
+  const { codeToLabel: comorbidityCodeToLabel } = useComorbidityLabels();
   const [cidOpen, setCidOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [vitalOpen, setVitalOpen] = useState(false);
@@ -244,16 +254,6 @@ export function DashboardPage() {
           >
             {formatPatientCid(patient.cid)}
           </button>
-          <div className="mt-3 flex flex-wrap gap-1">
-            {patient.comorbidities.map((c) => (
-              <span
-                key={c}
-                className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700"
-              >
-                {c}
-              </span>
-            ))}
-          </div>
           <p className="mt-3 text-xs text-slate-500">
             Alta disponível na barra superior.
           </p>
@@ -326,6 +326,44 @@ export function DashboardPage() {
           <Link to="/alerts" className="text-sm text-teal-700 underline">
             Ver todos os alertas
           </Link>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-[var(--color-border-subtle)] bg-white p-4 shadow-sm">
+        <h3 className="text-sm font-semibold text-slate-800">Apresentação clínica</h3>
+
+        <div className="mt-3 grid gap-4 lg:grid-cols-3">
+          <section>
+            <p className="text-xs font-medium text-slate-500">Sintomas</p>
+            <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">
+              {formatClinicalText(patient.symptoms, 'Nenhum registrado')}
+            </p>
+          </section>
+
+          <section>
+            <p className="text-xs font-medium text-slate-500">Observações</p>
+            <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">
+              {formatClinicalText(patient.observations, 'Não informado')}
+            </p>
+          </section>
+
+          <section>
+            <p className="text-xs font-medium text-slate-500">Comorbidades</p>
+            {patient.comorbidities.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {patient.comorbidities.map((c) => (
+                  <span
+                    key={c}
+                    className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700"
+                  >
+                    {comorbidityCodeToLabel(c)}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-1 text-sm text-slate-700">Nenhuma registrada</p>
+            )}
+          </section>
         </div>
       </div>
 
