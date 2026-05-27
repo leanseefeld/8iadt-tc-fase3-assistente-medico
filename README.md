@@ -132,10 +132,6 @@ curl -N \
 
 ## Arquitetura
 
-![Arquitetura do Assistente Medico IA](docs/assets/arquitetura_final.png)
-
-### Diagrama Mermaid do fluxo integrado
-
 ```mermaid
 flowchart TD
     USER[Medico] --> WEB[Frontend React / Vite]
@@ -217,10 +213,6 @@ O projeto usa LangChain como camada de integracao para mensagens, documentos, em
 
 ### Chat RAG
 
-![Fluxo de chat RAG integrado](docs/assets/diagrama_langgraph_chat.png)
-
-#### Diagrama Mermaid do fluxo de chat RAG integrado
-
 ```mermaid
 flowchart TD
     START([Entrada ChatRAGState]) --> LOAD[load_patient_context]
@@ -250,9 +242,6 @@ flowchart TD
 
 ### Alertas Clinicos
 
-![Fluxo de alertas clinicos integrado](docs/assets/diagrama_langgraph_alerta.png)
-
-#### Diagrama Mermaid do fluxo de alertas clinicos integrado
 
 ```mermaid
 flowchart TD
@@ -352,9 +341,6 @@ O resultado tambem gera auditoria clinica com `avaliacao_alerta_clinico_pcdt`.
 
 ## Pipeline RAG
 
-![Pipeline de ingestao e RAG](docs/assets/pipeline_rag.png)
-
-### Diagrama Mermaid do fluxo de ingestao e RAG
 ```mermaid
 flowchart LR
     A[Documentos PCDT Conitec] --> B[Download]
