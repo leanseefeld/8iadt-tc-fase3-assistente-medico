@@ -7,6 +7,7 @@ import logging
 import re
 from typing import Literal
 
+from assistente_medico_api.graph.context_formatting import format_context_block
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from assistente_medico_api.config import Settings, resolve_runtime_path
@@ -122,7 +123,6 @@ async def _regenerate_strict(
     Regenera a resposta com system prompt endurecido usando ainvoke — não emite tokens
     para o cliente (evita vazar conteúdo bloqueado via on_chat_model_stream).
     """
-    from assistente_medico_api.graph.nodes.retrieve import format_context_block
 
     llm = build_llm(settings)
     docs = state.get("retrieved_docs") or []

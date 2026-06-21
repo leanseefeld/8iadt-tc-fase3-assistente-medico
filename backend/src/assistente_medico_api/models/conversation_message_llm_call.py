@@ -10,7 +10,7 @@ from sqlmodel import Field, SQLModel
 
 
 class ConversationMessageLlmCall(SQLModel, table=True):
-    """Uma invocação auxiliar de MEDICO_OLLAMA_CHAT_MODEL ligada à resposta do assistente."""
+    """Uma invocação auxiliar de MEDICO_LLM_CHAT_MODEL ligada à resposta do assistente."""
 
     __tablename__ = "conversation_message_llm_calls"
 

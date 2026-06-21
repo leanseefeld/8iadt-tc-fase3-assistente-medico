@@ -2,7 +2,7 @@
 """
 RAG Inspector (standalone).
 
-Objetivo: inspecionar embeddings, retrieve (Chroma), montagem de contexto/prompt e geração (Ollama)
+Objetivo: inspecionar embeddings, retrieve (Chroma), montagem de contexto/prompt e geração (Ollama ou OpenAI-compatível)
 sem iniciar a API/frontend.
 
 Como rodar (venv ativo):
@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 import sys
+from traceback import print_exception
 from typing import Any, cast
 
 import asyncio
@@ -117,9 +118,12 @@ except ModuleNotFoundError as exc:
 
 @dataclass(frozen=True)
 class InspectorSettings:
+    llm_chat_provider: str
     ollama_base_url: str
     ollama_embed_model: str
-    ollama_chat_model: str
+    llm_chat_model: str
+    openai_base_url: str
+    openai_api_key: str
     chroma_persist_dir: str
     chroma_collection: str
     retrieval_k: int
@@ -150,14 +154,22 @@ class Timing:
     total_ms: float | None
 
 
+def _active_chat_model(cfg: InspectorSettings) -> str:
+    """Retorna o nome do modelo de chat conforme o provedor selecionado."""
+    return cfg.llm_chat_model
+
+
 def _default_settings() -> InspectorSettings:
     backend_env = REPO_ROOT / "backend" / ".env"
     backend_cfg = Settings(_env_file=backend_env if backend_env.exists() else None)
     chroma_dir = resolve_chroma_persist_dir(backend_cfg)
     return InspectorSettings(
+        llm_chat_provider=backend_cfg.llm_chat_provider,
         ollama_base_url=backend_cfg.ollama_base_url,
         ollama_embed_model=backend_cfg.ollama_embed_model,
-        ollama_chat_model=backend_cfg.ollama_chat_model,
+        llm_chat_model=backend_cfg.llm_chat_model,
+        openai_base_url=backend_cfg.openai_base_url,
+        openai_api_key=backend_cfg.openai_api_key,
         chroma_persist_dir=str(chroma_dir),
         chroma_collection=backend_cfg.chroma_collection,
         retrieval_k=backend_cfg.retrieval_k,
@@ -215,9 +227,12 @@ def _format_exception(exc: BaseException) -> str:
 
 def _backend_settings(cfg: InspectorSettings) -> Settings:
     return Settings(
+        llm_chat_provider=cfg.llm_chat_provider,
         ollama_base_url=cfg.ollama_base_url,
         ollama_embed_model=cfg.ollama_embed_model,
-        ollama_chat_model=cfg.ollama_chat_model,
+        llm_chat_model=cfg.llm_chat_model,
+        openai_base_url=cfg.openai_base_url,
+        openai_api_key=cfg.openai_api_key,
         chroma_persist_dir=Path(cfg.chroma_persist_dir),
         chroma_collection=cfg.chroma_collection,
         retrieval_k=int(cfg.retrieval_k),
@@ -531,17 +546,46 @@ def main() -> None:
     cfg0 = _default_settings()
     with st.sidebar:
         st.header("Configuração")
+
+        st.subheader("LLM de chat")
+        llm_chat_provider = st.selectbox(
+            "Provedor de chat",
+            options=["openai", "ollama"],
+            index=0 if str(cfg0.llm_chat_provider).strip().lower() != "ollama" else 1,
+            help="`openai`: endpoint OpenAI-compatível (ex.: hosting local). `ollama`: ChatOllama.",
+        )
+        if llm_chat_provider == "openai":
+            openai_base_url = st.text_input(
+                "OpenAI base URL",
+                value=cfg0.openai_base_url,
+                help="Base URL do endpoint OpenAI-compatível (ex.: http://127.0.0.1:8000/v1).",
+            )
+            openai_api_key = st.text_input(
+                "OpenAI API key",
+                value=cfg0.openai_api_key,
+                help="Chave de API; em hosts locais pode ser um valor fictício.",
+            )
+        else:
+            openai_base_url = cfg0.openai_base_url
+            openai_api_key = cfg0.openai_api_key
+        llm_chat_model = st.text_input(
+            "Modelo de chat",
+            value=cfg0.llm_chat_model,
+            help="Nome do modelo usado pelo provedor selecionado (MEDICO_LLM_CHAT_MODEL).",
+        )
+
+        st.subheader("Embeddings (Ollama)")
+        ollama_base_url = st.text_input("Ollama base URL", value=cfg0.ollama_base_url)
+        ollama_embed_model = st.text_input("Modelo de embedding", value=cfg0.ollama_embed_model)
+
+        st.subheader("Vectorstore / RAG")
         cfg = InspectorSettings(
-            ollama_base_url=st.text_input("Ollama base URL", value=cfg0.ollama_base_url),
-            ollama_embed_model=st.text_input("Modelo de embedding", value=cfg0.ollama_embed_model),
-            ollama_chat_model=st.text_input(
-                "Modelo de chat",
-                value="llama3.2:3b",
-                help=(
-                    "Padrão do painel para caber em máquinas com menos memória. "
-                    f"Modelo configurado no backend: {cfg0.ollama_chat_model}."
-                ),
-            ),
+            llm_chat_provider=llm_chat_provider,
+            ollama_base_url=ollama_base_url,
+            ollama_embed_model=ollama_embed_model,
+            llm_chat_model=llm_chat_model,
+            openai_base_url=openai_base_url,
+            openai_api_key=openai_api_key,
             chroma_persist_dir=st.text_input("Chroma persist dir", value=cfg0.chroma_persist_dir),
             chroma_collection=st.text_input("Chroma collection", value=cfg0.chroma_collection),
             retrieval_k=st.number_input(
@@ -555,7 +599,7 @@ def main() -> None:
             rag_retrieve_candidates_k=st.number_input(
                 "k inicial RAG (candidatos)",
                 min_value=1,
-                max_value=100,
+                max_value=300,
                 value=int(cfg0.rag_retrieve_candidates_k),
                 step=1,
             ),
@@ -793,6 +837,7 @@ def main() -> None:
                     final_state["_inspector_retrieve_calls"] = inspectable_store.calls
                 except Exception as exc:
                     errors.append(f"Falha no fluxo RAG de debug do backend: {_format_exception(exc)}")
+                    print_exception(exc)
 
             docs = cast(list[Document], final_state.get("retrieved_docs") or [d for d, _ in raw_candidates])
 
@@ -809,7 +854,7 @@ def main() -> None:
             # --- Extrai resposta gerada pelo run_full_graph_debug (sem double call) ---
             if run_generate:
                 answer_text = str(final_state.get("answer") or "") or None
-                generation_model_used = cfg.ollama_chat_model
+                generation_model_used = _active_chat_model(cfg)
 
             timing = replace(timing, total_ms=(time.perf_counter() - run_started) * 1000.0)
             candidate_scores = [float(s) for _, s in raw_candidates]
@@ -910,7 +955,8 @@ def main() -> None:
                 "generation": {
                     "enabled": bool(run_generate),
                     "answer": answer_text or "",
-                    "model_requested": cfg.ollama_chat_model,
+                    "llm_chat_provider": cfg.llm_chat_provider,
+                    "model_requested": _active_chat_model(cfg),
                     "model_used": generation_model_used or "",
                 },
                 "timing": asdict(timing),
@@ -1119,8 +1165,11 @@ def main() -> None:
             if not gen_enabled:
                 st.info("Geração LLM desabilitada nesta execução (modo foco RAG ou opção manual).")
             else:
-                if requested:
-                    st.caption(f"Modelo usado: `{used or requested}`")
+                provider = gen.get("llm_chat_provider") or (payload.get("settings") or {}).get("llm_chat_provider") or ""
+                if provider or requested:
+                    st.caption(
+                        f"Provedor: `{provider or '-'}` | modelo: `{used or requested or '-'}`"
+                    )
                 if backend_state.get("guardrail_status"):
                     st.caption(
                         "Guardrail: "

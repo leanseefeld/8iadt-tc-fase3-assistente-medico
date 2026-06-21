@@ -1,4 +1,4 @@
-"""Nó de geração: prompt + ChatOllama."""
+"""Nó de geração: prompt + chat (endpoint OpenAI-compatível)."""
 
 from __future__ import annotations
 

@@ -257,7 +257,7 @@ async def test_append_turn_persists_aux_trace(
                     {
                         "call_type": "guardrail_classify",
                         "sequence": 0,
-                        "model": settings.ollama_chat_model,
+                        "model": settings.llm_chat_model,
                         "llm_input": [{"role": "user", "content": "ok"}],
                         "llm_output": '{"verdict":"SEGURO","reason":""}',
                     }

@@ -23,9 +23,37 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    # Embeddings: seguem via Ollama (pcdt_ingest.embed).
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_embed_model: str = "nomic-embed-text"
-    ollama_chat_model: str = "llama3.2:3b"
+    # Chat: permite alternar rapidamente entre Ollama e endpoint OpenAI-compatível.
+    llm_chat_provider: str = Field(
+        default="openai",
+        validation_alias=AliasChoices("MEDICO_LLM_CHAT_PROVIDER", "LLM_CHAT_PROVIDER"),
+        description="Provedor do chat: `openai` (OpenAI-compatível) ou `ollama`.",
+    )
+    llm_chat_model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices(
+            "MEDICO_LLM_CHAT_MODEL",
+            # Aliases de compatibilidade para .env existentes
+            "MEDICO_OPENAI_CHAT_MODEL", "OPENAI_CHAT_MODEL",
+            "MEDICO_OLLAMA_CHAT_MODEL", "OLLAMA_CHAT_MODEL",
+        ),
+        description="Nome do modelo de chat (usado por ambos os provedores via `llm_chat_provider`).",
+    )
+
+    # Chat (OpenAI-compatível): hospedado localmente.
+    openai_base_url: str = Field(
+        default="http://127.0.0.1:8000/v1",
+        validation_alias=AliasChoices("MEDICO_OPENAI_BASE_URL", "OPENAI_BASE_URL"),
+        description="Base URL do endpoint OpenAI-compatível usado no chat (ex.: http://127.0.0.1:8000/v1).",
+    )
+    openai_api_key: str = Field(
+        default="local",
+        validation_alias=AliasChoices("MEDICO_OPENAI_API_KEY", "OPENAI_API_KEY"),
+        description="Chave de API para o endpoint OpenAI-compatível (em hosts locais, pode ser um valor fictício).",
+    )
     chroma_persist_dir: Path | None = Field(
         default=None,
         description="Se None, usa vectorstore/chroma na raiz do repositório (via pcdt_ingest.paths).",
@@ -121,7 +149,7 @@ class Settings(BaseSettings):
     )
     llm_stream_timeout_s: float = Field(
         default=240.0,
-        description="Timeout (segundos) para o streaming do nó de geração via Ollama.",
+        description="Timeout (segundos) para o streaming do nó de geração via LLM de chat (OpenAI-compatível ou Ollama).",
     )
     log_dir: Path = Field(
         default=Path("./logs"),

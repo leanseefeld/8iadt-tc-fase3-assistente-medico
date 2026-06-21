@@ -68,9 +68,11 @@ async def lifespan(app: FastAPI):
         chroma_persist_dir=str(chroma_path),
         chroma_collection=settings.chroma_collection,
         chroma_document_count=chroma_count,
+        llm_chat_provider=settings.llm_chat_provider,
         ollama_base_url=settings.ollama_base_url,
         ollama_embed_model=settings.ollama_embed_model,
-        ollama_chat_model=settings.ollama_chat_model,
+        llm_chat_model=settings.llm_chat_model,
+        openai_base_url=settings.openai_base_url,
         conitec_catalog_path=str(catalog_path) if catalog_path else "",
         conitec_catalog_exists=bool(catalog_path and catalog_path.is_file()),
     )
@@ -78,9 +80,11 @@ async def lifespan(app: FastAPI):
         "chroma_persist_dir": str(chroma_path),
         "chroma_collection": settings.chroma_collection,
         "chroma_document_count": chroma_count,
+        "llm_chat_provider": settings.llm_chat_provider,
         "ollama_base_url": settings.ollama_base_url,
         "ollama_embed_model": settings.ollama_embed_model,
-        "ollama_chat_model": settings.ollama_chat_model,
+        "llm_chat_model": settings.llm_chat_model,
+        "openai_base_url": settings.openai_base_url,
         "conitec_catalog_path": str(catalog_path) if catalog_path else "",
         "conitec_catalog_exists": bool(catalog_path and catalog_path.is_file()),
     }
@@ -88,7 +92,7 @@ async def lifespan(app: FastAPI):
         if not _clinical_startup_jsonl_state["emitted"]:
             clinical_audit(
                 ClinicalAuditAction.BACKEND_ASSISTENTE_INICIADO,
-                descricao="Backend do assistente iniciado com vectorstore RAG e modelos Ollama.",
+                descricao="Backend do assistente iniciado com vectorstore RAG, embeddings via Ollama e chat via endpoint OpenAI-compatível.",
                 detalhes=detalhes_startup,
                 settings=settings,
             )
