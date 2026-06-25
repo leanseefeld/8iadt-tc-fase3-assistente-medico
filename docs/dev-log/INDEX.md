@@ -12,6 +12,11 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ## Marcos
 
+### 2026-06-24
+
+- **doc-rag-alinhamento-realidade** — agent:cursor — `pipeline-rag.md` alinhado ao código real: remove afirmação de busca híbrida BM25+denso (só denso), descreve rewrite LLM + expansão por catálogo + rerank multi-estágio + grading de contexto, e ganha seção de ferramentas de inspeção (RAG Inspector + 3 scripts `llm/scripts/`). — Revisão: `bf3812f` chore: configurar Claude Code com regras espelhadas do Cursor
+- **ideacao-agente-busca-especializado** — agent:cursor — Ideação em `docs/handoff/agente-busca-especializado.md` + ADR `decisions/20260624-agente-busca-especializado.md`: N queries via LLM (CoT), chunking/ingestão estruturados (tabelas/figuras/hierarquia), reavaliação da conversão de PDF (`extract.py`), UI de operação do pipeline; inspirações (BM25 híbrido, scrapers de protocolos, perfis enfermagem/farmácia). Sugestões ao relatório histórico em `docs/handoff/sugestoes-relatorio-implementacao.md` (relatório não editado). — Revisão: `bf3812f` chore: configurar Claude Code com regras espelhadas do Cursor
+
 ### 2026-05-26
 
 - **colab-unsloth-assistente-sft** — agent:cursor — Notebook `fine-tuning_colab_assistente.ipynb`: SFT Unsloth em Llama 3.2 3B 4-bit, JSONL exportado, inferência no Colab, GGUF Q4_K_M + Modelfile no Drive, push HF opcional via secret. — Revisão: `5a6a24e` rename notebooks FT

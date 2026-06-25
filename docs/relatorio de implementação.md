@@ -267,7 +267,7 @@ Os textos limpos estão em `data/processed/pcdt/*.pages.cleaned.jsonl` e serão 
 
 ### Chunks após limpeza de texto
 
-Apos a limpeza de texto, os chunks gerados apresentam uma qualidade significativamente melhor, com menos ruídos e informações irrelevantes. Porém, a geração de chunks ainda apresenta desafios, como a identificação correta de seções e cabeçalhos, e atualmente não existe uma implementação de overlap entre os chunks, o que pode resultar em perda de contexto importante para o modelo. A implementação de uma estratégia de overlap, onde parte do conteúdo de um chunk é repetida no próximo chunk, pode ajudar a manter o contexto e melhorar a relevância dos chunks gerados. 
+Apos a limpeza de texto, os chunks gerados apresentaram uma qualidade significativamente melhor, com menos ruídos e informações irrelevantes. Porém, a geração de chunks ainda apresenta desafios, como a identificação correta de seções e cabeçalhos, sem uma implementação de overlap entre os chunks, o que resulta em perda de contexto importante para o modelo. A implementação de uma estratégia de overlap, onde parte do conteúdo de um chunk é repetida no próximo chunk, pode ajudar a manter o contexto e melhorar a relevância dos chunks gerados. 
 
 Evidência:
 
@@ -526,3 +526,7 @@ Devo avaliar também se a segmentação e recuperação de trechos permite recon
 Para o nó de geração de termos de busca, garantir que funcione para retornar múltiplas queries. Implementar o rankeamento das diferentes consultas considerando a similaridade com o vetor usado na busca - apenas se esse rankeamento já for implementado pelo chrome-db. Explorar _chain of though_ para melhorar os resultados do modelo.
 
 Futuramente, revisitar o fine tuning. Incluir uma maneira mais objetiva de avaliar o modelo, como recall e accuracy. Então, produzir mais exemplos de qualidade para cada categoria de instrução esperada para o modelo ajustado - avaliando incluir saídas do _chain of thought_ onde for usado (como na geração de queries). Potencialmente, usar modelo superior (gemma4, claude ou chatgpt) para gerar exemplos de perguntas e respostas adequadas  para o fine tuning.
+
+Eventualmente, pode ser necessário consolidar os módulos backend e llm e rever a estrutura de documentação do projeto.
+
+A gestão de PCDTs pode também ser melhorada com uma interface que exponha os resultados do scraping das páginas do CONITEC ou portal de secretarias de saúde, como https://portal.pmf.sc.gov.br/entidades/saude/index.php?cms=procedimentos+operacionais+padrao+++pops&menu=10&submenuid=1478, ou que permita cadastro manual de protocolos.
