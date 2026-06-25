@@ -402,15 +402,15 @@ Em [fine-tuning_colab_assistente.ipynb](../llm/fine-tuning/fine-tuning_colab_ass
 
 ### Resultados iniciais e ajuste
 
-O resultado visto no Notebook pareceu promissor, mas na prática, testando com `ollama run hf.co/leanseefeld/assistente-medico-llama32-3b-q4km:Q4_K_M`, a degradação de performance do modelo foi notável. Vimos o modelo responder em espanhol para perguntas em português, usar formatadores de data desnecassariamente e, mais notoriamente, esquecer informações básicas, como datas de acontecimentos históricos. Na execução com o nosso grafo LangGraph - com o system prompt e contexto muito parecido ao usado em alguns treinamentos - o modelo passou a se repetir e inventar trechos PCDT ou listas, e diversas vezes não foi capaz de chegar ao fim da geração.
+O resultado visto no Notebook pareceu promissor, mas na prática, testando com `ollama run hf.co/leanseefeld/assistente-medico-llama32-3b-q4km:Q4_K_M`, a degradação de performance do modelo foi notável. Vimos o modelo responder em espanhol para perguntas em português, usar formatadores de data desnecessariamente e, mais notoriamente, esquecer informações básicas, como datas de acontecimentos históricos. Na execução com o nosso grafo LangGraph - com o system prompt e contexto muito parecido ao usado em alguns treinamentos - o modelo passou a se repetir e inventar trechos PCDT ou listas, e diversas vezes não foi capaz de chegar ao fim da geração.
 
 Outro problema em potencial é a exportação GGUF quantizada. Logo após o treinamento, ainda no mesmo notebook, o modelo responde adequadamente às perguntas de teste. É depois de quantizar [um modelo já quantizado] que fica muito evidente a perda de performance.
 
 Tudo indica para esquecimento catastrófico do modelo.
 
-Para contornar o problema, foi experimentado outra configuração mais conservadora, com lora rank, camadas afetadas e taxa de aprendizagem reduzidas (`r=8, lora_alpha=16, learning_rate=1e-4`), e dessa vez treinando no modelo não quantizado (FP16), antes de fazer a quantização.
+Para contornar o problema, foi experimentado outra configuração mais conservadora, com lora rank, camadas afetadas e taxa de aprendizagem reduzidas (`r=8, lora_alpha=16, learning_rate=1e-4`), e dessa vez treinando no modelo não quantizado (FP16), antes de fazer a quantização. Foi também habilitado o masking de atenção do prompt, fazendo com que o modelo aprenda a prever a resposta correta para a pergunta, e não prever o próprio prompt.
 
-Os resultados foram melhores, com menos alucinações e repetições intermináveis, porém ainda houve uma significativa degradação de desempenho do modelo.
+Os resultados foram melhores, com menos alucinações e repetições intermináveis, porém ainda houve uma significativa degradação de desempenho do modelo e a ocasional resposta interminável, especialmente em nós que usam prompts especiais para RAG.
 
 ## Resultados finais
 
@@ -510,3 +510,19 @@ O nó `generate` foi unificado: em vez de manter nós separados para resposta di
 Também foram expostas configurações no backend e no RAG Inspector (`llm/scripts/rag_inspector_app.py`) para facilitar testes, depuração e ajustes finos do pipeline. Entre elas estão `rag_max_retrieve_attempts`, que controla o número máximo de tentativas de recuperação; `rag_use_llm_rerank`, que habilita o reranking com LLM; e `rag_llm_rerank_top_n`, que define quantos candidatos são enviados para essa etapa.
 
 Além disso, o projeto passou a permitir configuração do timeout de geração (`llm_stream_timeout_s`), do número inicial de candidatos recuperados (`rag_retrieve_candidates_k`), do número final de documentos usados no prompt (`rag_retrieve_final_k`) e da exigência de fonte para respostas clínicas (`rag_require_source_for_clinical_answer`). Essas opções tornam o comportamento do RAG mais controlável e observável durante experimentos e validações.
+
+----------
+
+# Extensão
+
+Após a entrega do trabalho, decidi revisitar o pipeline RAG para remover a complexidade e usar melhor as ferramentas existentes.
+
+Pretendo melhorar a vizualização e teste da pipeline RAG, potencialmente criando um sub agente dedicado a pesquisa de documentos.
+
+Pretendo remover as heurísticas de expansão de queries e fallbacks - o serviço dependerá de um servidor de inferência estável para gerar respostas com mais robustez.
+
+Devo avaliar também se a segmentação e recuperação de trechos permite reconstruir adequadamente partes do documento consultado. Explorar a expansão para trechos vizinhos de resultados retornados.
+
+Para o nó de geração de termos de busca, garantir que funcione para retornar múltiplas queries. Implementar o rankeamento das diferentes consultas considerando a similaridade com o vetor usado na busca - apenas se esse rankeamento já for implementado pelo chrome-db. Explorar _chain of though_ para melhorar os resultados do modelo.
+
+Futuramente, revisitar o fine tuning. Incluir uma maneira mais objetiva de avaliar o modelo, como recall e accuracy. Então, produzir mais exemplos de qualidade para cada categoria de instrução esperada para o modelo ajustado - avaliando incluir saídas do _chain of thought_ onde for usado (como na geração de queries). Potencialmente, usar modelo superior (gemma4, claude ou chatgpt) para gerar exemplos de perguntas e respostas adequadas  para o fine tuning.
