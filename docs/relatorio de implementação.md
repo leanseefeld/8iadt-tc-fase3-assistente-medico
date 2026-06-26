@@ -530,3 +530,16 @@ Futuramente, revisitar o fine tuning. Incluir uma maneira mais objetiva de avali
 Eventualmente, pode ser necessário consolidar os módulos backend e llm e rever a estrutura de documentação do projeto.
 
 A gestão de PCDTs pode também ser melhorada com uma interface que exponha os resultados do scraping das páginas do CONITEC ou portal de secretarias de saúde, como https://portal.pmf.sc.gov.br/entidades/saude/index.php?cms=procedimentos+operacionais+padrao+++pops&menu=10&submenuid=1478, ou que permita cadastro manual de protocolos.
+
+Uma revisão sobre como o KV cache está sendo aproveitado pode ser interessante de documentar.
+
+# Melhoria de RAG com múltiplas consultas
+
+Foi implementado um novo grafo dedicado para a busca em [specialized_search_graph](../backend/src/assistente_medico_api/graph/search/specialized_search_graph.py). Este grafo utiliza uma LLM para gerar múltiplas consultas por similaridade para nossa vectorstore Chroma, e os resultados são rankeados e mesclados via Reciprocal Rank Fusion. Os N resultados melhores avaliados (definidos pela config `RAG_RETRIEVE_FINAL_K`) são passados adiante como resultado da busca.
+
+O script [rag_eval_multiquery.py](../llm/scripts/rag_eval_multiquery.py) foi gerado para verificar se os novos nós estão trazendo resultados de PCDTs relevantes para uma base de perguntas sobre um subconjunto dos PCDTs - sem avaliar a relevância do trecho em primeiro momento. Foi constatado que:
+- a pergunta literal quase sempre traz resultados do PCDT correto (95% das perguntas)
+- múltiplas consultas com Llama3.2:3b-4bit recuperam apenas 50% dos documentos
+- Llama3.2:3b-4bit sem fine tuning ocasionalmente sofre com geração infinita - algo observado anteriormente apenas em modelos onde foi feito o fine tuning
+- com um `REPETITION_PENALTY=1.05`, o resultado melhora para 75%, e com 0.5, cai para 70% - penalidade por repetição encoraja queries mais diversas
+- termos chave da consulta ()

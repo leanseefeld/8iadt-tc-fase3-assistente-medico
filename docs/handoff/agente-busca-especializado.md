@@ -1,7 +1,9 @@
 # Ideação: Agente de busca especializado + ingestão estruturada
 
-> Documento de **design/ideação** — ainda não implementado. Serve de ponto de partida para discussão antes de escrever código.
+> Documento de **design/ideação**. Serve de ponto de partida para discussão.
 > ADR correspondente: [`docs/dev-log/decisions/20260624-agente-busca-especializado.md`](../dev-log/decisions/20260624-agente-busca-especializado.md).
+>
+> **Status — Pilar 1 (busca por N queries) implementado** atrás da flag `MEDICO_RAG_MULTI_QUERY_ENABLED` (**default ON**). Versão minimalista e desacoplada do RAG legado: **sem** catálogo Conitec, `structured_terms` ou expansão de query. Subgrafo isolado em `backend/src/assistente_medico_api/graph/search/` (`plan_queries` via LLM/CoT → `search` com fusão RRF). Com a flag OFF, roda o fluxo RAG legado intacto. Avaliação: `llm/scripts/rag_eval_multiquery.py` sobre `llm/data/eval/rag_questions.jsonl`. Pilares 2 e 3 e a Parte C seguem como ideação.
 
 ## Problema
 

@@ -11,8 +11,9 @@ from assistente_medico_api.graph.nodes.guardrail import guardrail_node
 from assistente_medico_api.graph.nodes.patient_context import load_patient_context_node
 from assistente_medico_api.graph.nodes.rerank import context_quality_router, rerank_and_validate_context_node
 from assistente_medico_api.graph.nodes.retrieve import retrieve_node
-from assistente_medico_api.graph.nodes.router import route_search_needed, router_search_needed_node
+from assistente_medico_api.graph.nodes.router import router_search_needed_node
 from assistente_medico_api.graph.nodes.rewrite import rewrite_query_node
+from assistente_medico_api.graph.search import build_specialized_search_graph, decide_search_route
 from assistente_medico_api.graph.state import ChatRAGState
 
 
@@ -40,9 +41,16 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=No
     async def _guardrail(state: ChatRAGState) -> dict:
         return await guardrail_node(state, settings)
 
+    # Subgrafo de busca especializada (nova busca), plugado por flag.
+    specialized_search = build_specialized_search_graph(store, settings)
+
+    def _route_after_router(state: ChatRAGState) -> str:
+        return decide_search_route(state, settings)
+
     workflow = StateGraph(ChatRAGState)
     workflow.add_node("load_patient_context", _load_patient_context)
     workflow.add_node("router", _router)
+    workflow.add_node("specialized_search", specialized_search)
     workflow.add_node("rewrite", _rewrite)
     workflow.add_node("retrieve", _retrieve)
     workflow.add_node("rerank", _rerank)
@@ -52,12 +60,14 @@ def build_compiled_chat_graph(store: Chroma, settings: Settings, checkpointer=No
     workflow.add_edge("load_patient_context", "router")
     workflow.add_conditional_edges(
         "router",
-        route_search_needed,
+        _route_after_router,
         {
             "direct": "generate",
-            "rag": "rewrite",
+            "new": "specialized_search",
+            "legacy": "rewrite",
         },
     )
+    workflow.add_edge("specialized_search", "generate")
     workflow.add_edge("rewrite", "retrieve")
     workflow.add_edge("retrieve", "rerank")
     workflow.add_conditional_edges(

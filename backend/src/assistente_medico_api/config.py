@@ -141,6 +141,31 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MEDICO_RAG_DEBUG", "RAG_DEBUG"),
         description="Expõe diagnóstico RAG adicional em rotas/inspector quando habilitado.",
     )
+    rag_multi_query_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MEDICO_RAG_MULTI_QUERY_ENABLED", "RAG_MULTI_QUERY_ENABLED"),
+        description="Usa o subgrafo de busca especializada (N queries via LLM + RRF). OFF cai no fluxo RAG legado.",
+    )
+    rag_multi_query_max: int = Field(
+        default=4,
+        validation_alias=AliasChoices("MEDICO_RAG_MULTI_QUERY_MAX", "RAG_MULTI_QUERY_MAX"),
+        description="Número máximo de queries de busca geradas pelo LLM (o N).",
+    )
+    rag_multi_query_rrf_k: int = Field(
+        default=60,
+        validation_alias=AliasChoices("MEDICO_RAG_MULTI_QUERY_RRF_K", "RAG_MULTI_QUERY_RRF_K"),
+        description="Constante k do Reciprocal Rank Fusion na fusão das buscas multi-query.",
+    )
+    rag_multi_query_min_p: float | None = Field(
+        default=0.2,
+        validation_alias=AliasChoices("MEDICO_RAG_MULTI_QUERY_MIN_P", "RAG_MULTI_QUERY_MIN_P"),
+        description="min_p para o nó plan_queries (filtra tokens com probabilidade < min_p × p_max). Ollama: parâmetro direto; omlx: model_kwargs.",
+    )
+    rag_multi_query_max_tokens: int | None = Field(
+        default=512,
+        validation_alias=AliasChoices("MEDICO_RAG_MULTI_QUERY_MAX_TOKENS", "RAG_MULTI_QUERY_MAX_TOKENS"),
+        description="Limite de tokens de saída do nó plan_queries. Ollama: num_predict; OpenAI-compatível: max_tokens.",
+    )
 
     database_url: str = "sqlite+aiosqlite:///./assistente_medico.db"
     uploads_dir: Path = Field(
@@ -150,6 +175,20 @@ class Settings(BaseSettings):
     llm_stream_timeout_s: float = Field(
         default=240.0,
         description="Timeout (segundos) para o streaming do nó de geração via LLM de chat (OpenAI-compatível ou Ollama).",
+    )
+    llm_temperature: float = Field(
+        default=0.8,
+        validation_alias=AliasChoices("MEDICO_LLM_TEMPERATURE", "LLM_TEMPERATURE"),
+        description="Temperatura do LLM de chat (0.0 = determinístico; valores maiores aumentam a variabilidade).",
+    )
+    llm_repetition_penalty: float | None = Field(
+        default=1.15,
+        validation_alias=AliasChoices("MEDICO_LLM_REPETITION_PENALTY", "LLM_REPETITION_PENALTY"),
+        description=(
+            "Penalidade de repetição do LLM. "
+            "Para Ollama: mapeado em `repeat_penalty` (1.0 = sem penalidade; recomendado: 1.05–1.3). "
+            "Para OpenAI-compatível (omlx/llama.cpp): mapeado em `repetition_penalty` via `model_kwargs`."
+        ),
     )
     log_dir: Path = Field(
         default=Path("./logs"),

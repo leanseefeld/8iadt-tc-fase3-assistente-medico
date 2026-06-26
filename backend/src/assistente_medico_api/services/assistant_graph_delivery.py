@@ -89,7 +89,7 @@ async def iter_assistant_graph_sse(
             if isinstance(output, dict):
                 ctx.final_state.update(output)
 
-        if kind == "on_chain_end" and event.get("name") == "rerank":
+        if kind == "on_chain_end" and event.get("name") in ("rerank", "specialized_search"):
             output = event["data"].get("output") or {}
             yield {
                 "event": "sources",

@@ -12,6 +12,10 @@ Monorepo com **frontend** SPA (“Assistente Médico”), Docker e fachada `clin
 
 ## Marcos
 
+### 2026-06-25
+
+- **busca-especializada-n-queries** — agent:claude-code — Pilar 1 do agente de busca: subgrafo isolado `graph/search/` (`plan_queries` LLM/CoT → `search` com fusão RRF), desacoplado do RAG legado (sem catálogo/`structured_terms`/expand). Plugado ao `chat_rag` por flag `MEDICO_RAG_MULTI_QUERY_ENABLED` (default ON); OFF mantém o RAG legado. SSE emite sources/reasoning no nó `specialized_search`. Eval `llm/scripts/rag_eval_multiquery.py` + `llm/data/eval/rag_questions.jsonl`. — Revisão: `aa58c82` docs: alinhar pipeline-rag ao real e idear agente de busca especializado
+
 ### 2026-06-24
 
 - **doc-rag-alinhamento-realidade** — agent:cursor — `pipeline-rag.md` alinhado ao código real: remove afirmação de busca híbrida BM25+denso (só denso), descreve rewrite LLM + expansão por catálogo + rerank multi-estágio + grading de contexto, e ganha seção de ferramentas de inspeção (RAG Inspector + 3 scripts `llm/scripts/`). — Revisão: `bf3812f` chore: configurar Claude Code com regras espelhadas do Cursor

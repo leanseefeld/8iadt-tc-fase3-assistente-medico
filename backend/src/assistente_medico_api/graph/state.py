@@ -29,6 +29,8 @@ class ChatRAGState(TypedDict, total=False):
     generation_mode: Literal["grounded_answer", "direct_answer", "insufficient_context"]
     retrieval_query: str
     expanded_query: str
+    search_queries: list[str]
+    multi_query_debug: dict
     structured_terms: dict
     clinical_understanding: dict
     linked_entities: list
