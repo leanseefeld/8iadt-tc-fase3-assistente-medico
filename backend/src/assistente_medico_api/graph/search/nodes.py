@@ -151,6 +151,10 @@ async def plan_queries_node(state: ChatRAGState, settings: Settings) -> dict:
         raw_str = str(raw)
         queries = _parse_queries(raw_str, max_n=max_n, fallback=query)
         llm_reasoning = _extract_reasoning(raw_str)
+        # Garante que a pergunta original entra na fusão RRF (1q + N queries CoT).
+        q_lower = query.lower()
+        if not any(q.strip().lower() == q_lower for q in queries):
+            queries = [query] + queries
     except Exception as exc:  # noqa: BLE001 - qualquer falha cai no fallback de 1 query.
         error = str(exc)[:240]
         llm_reasoning = ""

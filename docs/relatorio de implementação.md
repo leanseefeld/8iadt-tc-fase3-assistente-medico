@@ -533,13 +533,21 @@ A gestão de PCDTs pode também ser melhorada com uma interface que exponha os r
 
 Uma revisão sobre como o KV cache está sendo aproveitado pode ser interessante de documentar.
 
+Fazer fine tuning com exemplos de chunks PCDT para que o agente de busca saiba gerar queries melhores para a busca vetorial RAG.
+
 # Melhoria de RAG com múltiplas consultas
 
 Foi implementado um novo grafo dedicado para a busca em [specialized_search_graph](../backend/src/assistente_medico_api/graph/search/specialized_search_graph.py). Este grafo utiliza uma LLM para gerar múltiplas consultas por similaridade para nossa vectorstore Chroma, e os resultados são rankeados e mesclados via Reciprocal Rank Fusion. Os N resultados melhores avaliados (definidos pela config `RAG_RETRIEVE_FINAL_K`) são passados adiante como resultado da busca.
 
-O script [rag_eval_multiquery.py](../llm/scripts/rag_eval_multiquery.py) foi gerado para verificar se os novos nós estão trazendo resultados de PCDTs relevantes para uma base de perguntas sobre um subconjunto dos PCDTs - sem avaliar a relevância do trecho em primeiro momento. Foi constatado que:
+O script [rag_eval_multiquery.py](../llm/scripts/rag_eval_multiquery.py) (comando `eval-rag --docs --docs-single --docs-combined`) foi gerado para verificar se os novos nós estão trazendo resultados de PCDTs relevantes para uma base de perguntas sobre um subconjunto dos PCDTs - sem avaliar a relevância do trecho em primeiro momento. Foi constatado que:
 - a pergunta literal quase sempre traz resultados do PCDT correto (95% das perguntas)
 - múltiplas consultas com Llama3.2:3b-4bit recuperam apenas 50% dos documentos
 - Llama3.2:3b-4bit sem fine tuning ocasionalmente sofre com geração infinita - algo observado anteriormente apenas em modelos onde foi feito o fine tuning
 - com um `REPETITION_PENALTY=1.05`, o resultado melhora para 75%, e com 0.5, cai para 70% - penalidade por repetição encoraja queries mais diversas
-- termos chave da consulta ()
+- com regras mais claras para cada query, instruções com passos de raciocínio, e exemplos de seções PCDT, a taxa de recall subiu para 70%
+- com ajustes do modelo no momento da geração, chegou-se em `temperature=0.8 min_p=0.2 max_tokens=512 repeat_penalty=1.15` <br/> \
+  nesta configuração, o modelo faz sugestões menos aleatórias, penalizando repetições, e o recall aumenta para 85%, chegando em 95%
+
+![Exemplo de avaliação do RAG mostrando os resultados das queries e documentos recuperados](./assets/rag-eval_1.png)
+
+Apesar da melhoria de recall do PCDT, esta ferramenta não avalia a qualidade dos trechos retornados.

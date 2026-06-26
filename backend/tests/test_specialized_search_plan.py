@@ -43,7 +43,8 @@ async def test_plan_queries_node_generates_n(monkeypatch):
         lambda settings, **_kw: _FakeLLM('{"reasoning":"r","queries":["q1","q2","q3"]}'),
     )
     out = await plan_queries_node({"query": "tratamento de sepse", "reasoning_steps": []}, Settings())
-    assert out["search_queries"] == ["q1", "q2", "q3"]
+    # A pergunta original é sempre prepended como 1ª query (1q+Nq).
+    assert out["search_queries"] == ["tratamento de sepse", "q1", "q2", "q3"]
 
 
 @pytest.mark.asyncio

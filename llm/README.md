@@ -278,6 +278,51 @@ streamlit run scripts/rag_inspector_app.py -- --export-audit /tmp/rag-audit.json
 
 Quando esse argumento é informado, a última execução grava o `audit_trace` completo no caminho indicado. A aba **Exportar JSON** também oferece download do payload completo e do `audit_trace`.
 
+### RAG Eval (avaliação comparativa de retrieval)
+
+`scripts/rag_eval_multiquery.py` mede hit-rate@k sobre um conjunto curado de perguntas clínicas (`llm/data/eval/rag_questions.jsonl`) e compara quatro caminhos de busca:
+
+| Caminho | Descrição |
+|---------|-----------|
+| **1q** | `similarity_search_with_score(pergunta, k)` — baseline direto |
+| **Nq** | Union dos resultados individuais das N queries geradas por CoT |
+| **RRF** | Fusão das N queries por Reciprocal Rank Fusion |
+| **1q+Nq** | RRF de [pergunta original + N queries CoT] — **caminho padrão do agente** |
+
+Após `pip install -e .` no pacote `llm/` (ou `uv sync`), o comando `eval-rag` fica disponível:
+
+```bash
+eval-rag                                      # avaliação completa, saída resumida
+eval-rag --docs                               # + tabela de chunks do caminho padrão (1q+Nq via RRF)
+eval-rag --docs-single --docs --docs-combined # todos os caminhos visíveis
+eval-rag --k 10 --docs 10                     # top-10
+```
+
+Alternativa sem instalar (backend como ambiente de execução):
+
+```bash
+uv run --project backend python llm/scripts/rag_eval_multiquery.py --docs
+```
+
+Opções principais:
+
+| Flag | Padrão | Descrição |
+|------|--------|-----------|
+| `--k N` | `rag_retrieve_final_k` do `.env` | Top-k avaliado |
+| `--docs [N]` | — | Tabela de chunks do caminho RRF (N=6 sem valor) |
+| `--docs-single [N]` | — | Tabela de chunks do caminho 1q |
+| `--docs-nq [N]` | — | Tabela de chunks do caminho Nq (union) |
+| `--docs-combined [N]` | — | Tabela de chunks do caminho 1q+Nq |
+| `--eval-file PATH` | `llm/data/eval/rag_questions.jsonl` | JSONL de perguntas curadas |
+| `--env-file PATH` | `backend/.env` | `.env` com credenciais/modelo |
+| `--runs-dir PATH` | `llm/data/eval/runs/` | Diretório de persistência dos runs |
+
+A saída no terminal usa Rich com hierarquia visual: CoT do planner em painel dim, queries em magenta, badge verde/vermelho por caminho e tabelas com stem/seção/score/campeão (query que levou ao doc no topo da sua busca individual).
+
+Cada execução persiste um JSONL em `llm/data/eval/runs/run_<timestamp>.jsonl` com stems, hits, queries geradas, raciocínio CoT, saída raw do LLM e detalhes de cada chunk retornado por caminho — útil para comparar configurações de modelo entre runs.
+
+Pré-requisitos: Chroma populado (`build-vectorstore`), Ollama com `nomic-embed-text` para embeddings, LLM de chat acessível conforme `backend/.env`.
+
 ### Dataset COVID Albert Einstein
 
 ```bash

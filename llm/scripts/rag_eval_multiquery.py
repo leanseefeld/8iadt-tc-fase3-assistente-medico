@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Avaliação comparativa: busca de 1 query (pergunta literal) vs N queries + RRF.
+"""Avaliação comparativa: 1-query vs N-query (CoT) vs RRF vs 1q+Nq.
 
-Mede hit-rate@k / recall do ``expected_source_stem`` (e, opcionalmente,
-``expected_sections``) sobre um conjunto curado de perguntas clínicas, comparando:
-  - baseline: ``similarity_search_with_score(pergunta, k)``
-  - nova busca: subgrafo especializado (plan_queries → search com fusão RRF)
+Mede hit-rate@k / recall do ``expected_source_stem`` sobre um conjunto curado de
+perguntas clínicas, comparando quatro caminhos:
+  - 1q:    ``similarity_search_with_score(pergunta, k)`` — baseline
+  - Nq:    union de todos os resultados individuais das N queries geradas via CoT
+  - RRF:   fusão das N queries por Reciprocal Rank Fusion
+  - 1q+Nq: RRF de [pergunta original + N queries CoT] — explora se a pergunta
+           direta complementa as queries estruturadas pelo planner
 
 Como rodar (da raiz do repo, com o venv do backend ativo):
 
@@ -14,8 +17,10 @@ Como rodar (da raiz do repo, com o venv do backend ativo):
       --k 10                    top-k avaliado (default: rag_retrieve_final_k do .env)
       --eval-file path/to.jsonl JSONL alternativo de perguntas
       --env-file path/to/.env   .env alternativo (default: backend/.env)
-      --docs [N]                exibe top N chunks do caminho N-query+RRF (default N=6)
+      --docs [N]                exibe top N chunks do caminho RRF (default N=6)
       --docs-single [N]         exibe top N chunks do caminho 1-query (default N=6)
+      --docs-nq [N]             exibe top N chunks do caminho Nq (union, por dist_score)
+      --docs-combined [N]       exibe top N chunks do caminho 1q+Nq (default N=6)
                                 ambos: --docs → top 6; --docs 10 → top 10
 
 Pré-requisitos:
@@ -149,19 +154,60 @@ def single_query_docs(store, question: str, k: int) -> tuple[list[Document], lis
 
 
 async def multi_query_docs(
-    store, settings: Settings, question: str
-) -> tuple[list[Document], list[str], str, str, str | None, list[tuple[Document, float]]]:
-    """Retorna (docs, queries, llm_reasoning, raw_llm, error, scored)."""
+    store, settings: Settings, question: str, k: int
+) -> tuple[
+    list[Document],      # rrf_docs
+    list[str],           # queries
+    str,                 # llm_reasoning
+    str,                 # raw_llm
+    str | None,          # plan_error
+    list[tuple[Document, float]],  # rrf_scored
+    list[Document],      # nq_union_docs
+    list[Document],      # combined_docs (1q+Nq)
+    list[tuple[Document, float]],  # combined_scored
+    list[str],           # combined_queries
+]:
+    """Retorna rrf_docs, queries, reasoning, raw_llm, error, rrf_scored, nq_union_docs, combined_docs, combined_scored, combined_queries.
+
+    rrf_docs / rrf_scored — resultado da fusão RRF (caminho RRF).
+    nq_union_docs         — union de todos os resultados individuais das N queries (caminho Nq).
+    """
     plan = await plan_queries_node({"query": question, "reasoning_steps": []}, settings)
     debug = plan.get("multi_query_debug") or {}
     queries = plan.get("search_queries") or [question]
     llm_reasoning = debug.get("reasoning") or ""
     raw_llm = debug.get("raw") or ""
     plan_error = debug.get("error")
+
+    # Coleta resultados por-query para o caminho Nq (union, top-k cada).
+    # Mantém a melhor dist_score de qualquer query para cada doc.
+    nq_seen: dict[str, Document] = {}
+    nq_scored_map: dict[str, float] = {}
+    for q in queries:
+        pairs = store.similarity_search_with_score(q, k=k)
+        for doc, score in pairs:
+            key = _doc_key_eval(doc)
+            if key not in nq_seen or float(score) > nq_scored_map[key]:
+                nq_seen[key] = doc
+                nq_scored_map[key] = float(score)
+    nq_union_docs = list(nq_seen.values())
+    nq_union_scored = [(nq_seen[key], nq_scored_map[key]) for key in nq_seen]
+
+    # Fusão RRF via search_node (usa rag_retrieve_candidates_k internamente).
     out = search_node({"search_queries": queries, "reasoning_steps": []}, store=store, settings=settings)
     fused: list[Document] = out.get("retrieved_docs") or []
-    scored = [(doc, float((doc.metadata or {}).get("rrf_score", 0.0))) for doc in fused]
-    return fused, queries, llm_reasoning, raw_llm, plan_error, scored
+    rrf_scored = [(doc, float((doc.metadata or {}).get("rrf_score", 0.0))) for doc in fused]
+
+    # 1q+Nq: RRF de [pergunta original + queries CoT]. A pergunta entra primeiro.
+    q_lower = question.strip().lower()
+    combined_queries = [question] + [q for q in queries if q.strip().lower() != q_lower]
+    out_combined = search_node(
+        {"search_queries": combined_queries, "reasoning_steps": []}, store=store, settings=settings
+    )
+    combined_docs: list[Document] = out_combined.get("retrieved_docs") or []
+    combined_scored = [(doc, float((doc.metadata or {}).get("rrf_score", 0.0))) for doc in combined_docs]
+
+    return fused, queries, llm_reasoning, raw_llm, plan_error, rrf_scored, nq_union_docs, combined_docs, combined_scored, combined_queries
 
 
 def _write_run_jsonl(path: Path, records: list[dict]) -> None:
@@ -295,8 +341,10 @@ async def run(args: argparse.Namespace) -> int:
     )
 
     k = int(args.k or settings.rag_retrieve_final_k)
-    show_multi: int | None = args.docs
+    show_rrf: int | None = args.docs
     show_single: int | None = args.docs_single
+    show_nq: int | None = args.docs_nq
+    show_combined: int | None = args.docs_combined
     store = load_store()
     cases = load_cases(Path(args.eval_file))
 
@@ -305,7 +353,9 @@ async def run(args: argparse.Namespace) -> int:
     run_file = runs_dir / f"run_{run_ts}.jsonl"
 
     single_hits = 0
-    multi_hits = 0
+    nq_hits = 0
+    rrf_hits = 0
+    combined_hits = 0
     records: list[dict] = []
 
     console.print()
@@ -321,13 +371,21 @@ async def run(args: argparse.Namespace) -> int:
         single_ms = round((time.perf_counter() - t0) * 1000, 1)
 
         t1 = time.perf_counter()
-        m_docs, queries, llm_reasoning, raw_llm, plan_error, m_scored = await multi_query_docs(store, settings, question)
+        (
+            rrf_docs, queries, llm_reasoning, raw_llm, plan_error,
+            rrf_scored, nq_union_docs,
+            combined_docs, combined_scored, combined_queries,
+        ) = await multi_query_docs(store, settings, question, k)
         multi_ms = round((time.perf_counter() - t1) * 1000, 1)
 
         s_hit = _hit(s_docs, expected)
-        m_hit = _hit(m_docs, expected)
+        nq_hit = _hit(nq_union_docs, expected)
+        rrf_hit = _hit(rrf_docs, expected)
+        combined_hit = _hit(combined_docs, expected)
         single_hits += int(s_hit)
-        multi_hits += int(m_hit)
+        nq_hits += int(nq_hit)
+        rrf_hits += int(rrf_hit)
+        combined_hits += int(combined_hit)
 
         # ── question header ──
         header = Text()
@@ -342,7 +400,11 @@ async def run(args: argparse.Namespace) -> int:
         meta_line.append("  1q ", style="dim")
         meta_line.append_text(_hit_badge(s_hit))
         meta_line.append("  Nq ", style="dim")
-        meta_line.append_text(_hit_badge(m_hit))
+        meta_line.append_text(_hit_badge(nq_hit))
+        meta_line.append("  RRF ", style="dim")
+        meta_line.append_text(_hit_badge(rrf_hit))
+        meta_line.append("  1q+Nq ", style="dim")
+        meta_line.append_text(_hit_badge(combined_hit))
         meta_line.append(f"  {len(queries)} queries  ", style="dim")
         meta_line.append(f"{multi_ms:.0f}ms", style="dim")
         console.print(meta_line)
@@ -370,13 +432,45 @@ async def run(args: argparse.Namespace) -> int:
             )
             console.print(_docs_table(s_scored, show_single, "dist_score", expected_stem=expected))
 
-        if show_multi is not None:
+        if show_nq is not None:
+            nq_scored = [
+                (doc, float((doc.metadata or {}).get("rrf_score") or 0.0)
+                 if (doc.metadata or {}).get("rrf_score") is not None
+                 else next(
+                     (sc for d2, sc in rrf_scored if _doc_key_eval(d2) == _doc_key_eval(doc)),
+                     0.0,
+                 ))
+                for doc in nq_union_docs
+            ]
+            # Usa a melhor dist_score disponível via nova busca por-query.
+            nq_scored_final = [
+                (doc, max(
+                    (sc for d2, sc in s_scored if _doc_key_eval(d2) == _doc_key_eval(doc)),
+                    default=0.0,
+                ))
+                for doc in nq_union_docs
+            ]
+            console.print(
+                f"  [bold yellow]Nq (union)[/bold yellow]"
+                f"[dim]  top {show_nq}  ↑ dist_score[/dim]"
+            )
+            console.print(_docs_table(nq_scored_final, show_nq, "dist_score", expected_stem=expected))
+
+        if show_rrf is not None:
             champion_map = _build_champion_map(store, queries)
             console.print(
-                f"  [bold cyan]N-query + RRF[/bold cyan]"
-                f"[dim]  top {show_multi}  ↑ rrf_score[/dim]"
+                f"  [bold cyan]RRF[/bold cyan]"
+                f"[dim]  top {show_rrf}  ↑ rrf_score[/dim]"
             )
-            console.print(_docs_table(m_scored, show_multi, "rrf_score", champion_map, expected))
+            console.print(_docs_table(rrf_scored, show_rrf, "rrf_score", champion_map, expected))
+
+        if show_combined is not None:
+            combined_champ = _build_champion_map(store, combined_queries)
+            console.print(
+                f"  [bold green]1q+Nq[/bold green]"
+                f"[dim]  top {show_combined}  ↑ rrf_score  ({len(combined_queries)} queries)[/dim]"
+            )
+            console.print(_docs_table(combined_scored, show_combined, "rrf_score", combined_champ, expected))
 
         console.rule(style="dim")
 
@@ -386,15 +480,22 @@ async def run(args: argparse.Namespace) -> int:
             "question": question,
             "expected_source_stem": expected,
             "single_query_hit": s_hit,
-            "multi_query_hit": m_hit,
+            "nq_hit": nq_hit,
+            "rrf_hit": rrf_hit,
             "generated_queries": queries,
             "llm_reasoning": llm_reasoning,
             "raw_llm": raw_llm,
             "plan_error": plan_error,
             "single_query_stems": _stems(s_docs),
-            "multi_query_stems": _stems(m_docs),
+            "nq_stems": _stems(nq_union_docs),
+            "rrf_stems": _stems(rrf_docs),
+            "combined_stems": _stems(combined_docs),
+            "combined_hit": combined_hit,
+            "combined_queries": combined_queries,
             "single_docs": [_doc_detail(d, s, "1q") for d, s in s_scored],
-            "multi_docs": [_doc_detail(d, s, "Nq") for d, s in m_scored],
+            "nq_docs": [_doc_detail(d, 0.0, "Nq") for d in nq_union_docs],
+            "rrf_docs": [_doc_detail(d, s, "RRF") for d, s in rrf_scored],
+            "combined_docs": [_doc_detail(d, s, "1q+Nq") for d, s in combined_scored],
             "single_latency_ms": single_ms,
             "multi_latency_ms": multi_ms,
             "k": k,
@@ -413,26 +514,44 @@ async def run(args: argparse.Namespace) -> int:
     summary.add_column(justify="right", width=8)
     summary.add_row(
         f"hit-rate@{k}",
-        "[dim]1-query[/dim]",
+        "[dim]1q[/dim]",
         f"[white]{single_hits}/{len(cases)}[/white]",
         f"[white]{single_hits / n:.0%}[/white]",
     )
     summary.add_row(
         "",
-        "[cyan]N-query[/cyan]",
-        f"[cyan]{multi_hits}/{len(cases)}[/cyan]",
-        f"[cyan]{multi_hits / n:.0%}[/cyan]",
+        "[yellow]Nq[/yellow]",
+        f"[yellow]{nq_hits}/{len(cases)}[/yellow]",
+        f"[yellow]{nq_hits / n:.0%}[/yellow]",
     )
-    delta = (multi_hits - single_hits) / n
-    delta_style = "green" if delta > 0 else ("red" if delta < 0 else "dim")
-    summary.add_row("delta (N − 1)", "", "", f"[{delta_style}]{delta:+.0%}[/{delta_style}]")
+    summary.add_row(
+        "",
+        "[cyan]RRF[/cyan]",
+        f"[cyan]{rrf_hits}/{len(cases)}[/cyan]",
+        f"[cyan]{rrf_hits / n:.0%}[/cyan]",
+    )
+    summary.add_row(
+        "",
+        "[green]1q+Nq[/green]",
+        f"[green]{combined_hits}/{len(cases)}[/green]",
+        f"[green]{combined_hits / n:.0%}[/green]",
+    )
+    delta_nq = (nq_hits - single_hits) / n
+    delta_rrf = (rrf_hits - single_hits) / n
+    delta_combined = (combined_hits - single_hits) / n
+    nq_style = "green" if delta_nq > 0 else ("red" if delta_nq < 0 else "dim")
+    rrf_style = "green" if delta_rrf > 0 else ("red" if delta_rrf < 0 else "dim")
+    combined_style = "green" if delta_combined > 0 else ("red" if delta_combined < 0 else "dim")
+    summary.add_row("delta Nq − 1q", "", "", f"[{nq_style}]{delta_nq:+.0%}[/{nq_style}]")
+    summary.add_row("delta RRF − 1q", "", "", f"[{rrf_style}]{delta_rrf:+.0%}[/{rrf_style}]")
+    summary.add_row("delta 1q+Nq − 1q", "", "", f"[{combined_style}]{delta_combined:+.0%}[/{combined_style}]")
     console.print(summary)
     console.print(f"[dim]Run salvo em:[/dim] {run_file}")
 
     return 0
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--eval-file", default=str(DEFAULT_EVAL_FILE), help="JSONL de perguntas curadas.")
     p.add_argument("--k", type=int, default=None, help="Top-k avaliado (default: rag_retrieve_final_k).")
@@ -448,7 +567,15 @@ def parse_args() -> argparse.Namespace:
         "--docs-single", nargs="?", const=6, default=None, type=int, metavar="N",
         help="Exibe top N chunks do caminho 1-query, por dist_score (sem valor → N=6).",
     )
-    return p.parse_args()
+    p.add_argument(
+        "--docs-nq", nargs="?", const=6, default=None, type=int, metavar="N",
+        help="Exibe top N chunks do caminho Nq (union das N queries, por dist_score, sem valor → N=6).",
+    )
+    p.add_argument(
+        "--docs-combined", nargs="?", const=6, default=None, type=int, metavar="N",
+        help="Exibe top N chunks do caminho 1q+Nq (pergunta + queries CoT via RRF, sem valor → N=6).",
+    )
+    return p.parse_args(argv)
 
 
 if __name__ == "__main__":

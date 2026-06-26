@@ -45,6 +45,7 @@ build-conitec-catalog = "pcdt_ingest.cli_conitec_catalog:main"
 build-vectorstore = "pcdt_ingest.cli_embed:main"
 view-pcdt-chunks = "pcdt_ingest.cli_view_pcdt_chunks:main"
 clean-pcdt-extracted = "pcdt_ingest.cli_clean:main"
+eval-rag = "pcdt_ingest.cli_rag_eval:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
