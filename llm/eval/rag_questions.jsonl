@@ -1,0 +1,20 @@
+{"question": "Qual o esquema de tratamento antirretroviral inicial para adultos com HIV?", "expected_source_stem": "PCDTManejodaInfecopeloHIVemAdultosMdulo1Tratamento"}
+{"question": "Como fazer profilaxia pós-exposição (PEP) ao HIV após acidente com material biológico?", "expected_source_stem": "PCDTPEP"}
+{"question": "Quais os critérios de diagnóstico e o tratamento da hanseníase?", "expected_source_stem": "20220818_pcdt_hanseniase"}
+{"question": "Quais critérios de inclusão para tratamento medicamentoso do lúpus eritematoso sistêmico?", "expected_source_stem": "20221109_pcdt_lupus"}
+{"question": "Qual o tratamento de primeira linha para psoríase moderada a grave?", "expected_source_stem": "20211021_portaria_conjunta_pcdt_psoriase"}
+{"question": "Como diagnosticar e tratar a artrite reativa?", "expected_source_stem": "20210428_pcdt_artrite_reativa"}
+{"question": "Quais os critérios diagnósticos da espondilite anquilosante?", "expected_source_stem": "20210428_pcdt-espondilite-ancilosante-1"}
+{"question": "Qual o manejo medicamentoso da fibrose cística?", "expected_source_stem": "20211230_portal-portaria-conjunta-no-25_pcdt_fibrose-cistica"}
+{"question": "Como conduzir o tratamento do hipotireoidismo congênito em recém-nascidos?", "expected_source_stem": "20210426_portaria_conjunta_pcdt_hipotireoidismo_congenito"}
+{"question": "Quais as opções de tratamento para sobrepeso e obesidade em adultos?", "expected_source_stem": "20201113_pcdt_sobrepeso_e_obesidade_em_adultos_29_10_2020_final"}
+{"question": "Qual o protocolo de tratamento do linfoma de Hodgkin?", "expected_source_stem": "20201230_pcdt_linfoma-de-hodgkin"}
+{"question": "Qual o tratamento de primeira linha da leucemia mieloide crônica em adultos?", "expected_source_stem": "20210318_portal_portaria_conjunta-pcdt_lmc_adulto"}
+{"question": "Como tratar a esclerose sistêmica?", "expected_source_stem": "20220926_pcdt_esclerose_sistemica"}
+{"question": "Qual o manejo da osteogênese imperfeita?", "expected_source_stem": "20220926_pcdt_osteogenese_imperfeita"}
+{"question": "Quais os critérios e o tratamento da síndrome de Guillain-Barré?", "expected_source_stem": "20201022_portaria_conjunta_pcdt_sgb-1"}
+{"question": "Qual o tratamento medicamentoso da atrofia muscular espinhal 5q tipos 1 e 2?", "expected_source_stem": "20230522_portariaconjuntano6atrofiamuscularespinhal5qtipos1e2"}
+{"question": "Como conduzir o tratamento da hepatite B crônica?", "expected_source_stem": "20230524_Relatrio_PCDTHepatiteB"}
+{"question": "Qual o tratamento da miastenia gravis?", "expected_source_stem": "copy_of_20220530_PORTAL_PCDT_Miastenia_Gravis"}
+{"question": "Qual o manejo da degeneração macular relacionada à idade (DMRI)?", "expected_source_stem": "20221216_pcdt-dmri"}
+{"question": "Como tratar a retinopatia diabética?", "expected_source_stem": "20211220_portal_retinopatia_diabetica"}

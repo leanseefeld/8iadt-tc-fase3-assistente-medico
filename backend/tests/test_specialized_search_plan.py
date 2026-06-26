@@ -18,21 +18,29 @@ class _FakeLLM:
 
 def test_parse_queries_extracts_and_dedups():
     raw = '{"reasoning":"x","queries":["a","b","a"]}'
-    assert _parse_queries(raw, max_n=4, fallback="q") == ["a", "b"]
+    queries, err = _parse_queries(raw, max_n=4, fallback="q")
+    assert queries == ["a", "b"]
+    assert err is None
 
 
 def test_parse_queries_caps_at_max():
     raw = '{"queries":["a","b","c","d","e"]}'
-    assert _parse_queries(raw, max_n=2, fallback="q") == ["a", "b"]
+    queries, err = _parse_queries(raw, max_n=2, fallback="q")
+    assert queries == ["a", "b"]
+    assert err is None
 
 
 def test_parse_queries_malformed_falls_back():
-    assert _parse_queries("not json at all", max_n=4, fallback="pergunta") == ["pergunta"]
+    queries, err = _parse_queries("not json at all", max_n=4, fallback="pergunta")
+    assert queries == ["pergunta"]
+    assert err is not None
 
 
 def test_parse_queries_handles_surrounding_text():
     raw = 'Claro!\n{"queries":["x","y"]}\nfim'
-    assert _parse_queries(raw, max_n=4, fallback="q") == ["x", "y"]
+    queries, err = _parse_queries(raw, max_n=4, fallback="q")
+    assert queries == ["x", "y"]
+    assert err is None
 
 
 @pytest.mark.asyncio

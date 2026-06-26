@@ -280,7 +280,7 @@ Quando esse argumento é informado, a última execução grava o `audit_trace` c
 
 ### RAG Eval (avaliação comparativa de retrieval)
 
-`scripts/rag_eval_multiquery.py` mede hit-rate@k sobre um conjunto curado de perguntas clínicas (`llm/data/eval/rag_questions.jsonl`) e compara quatro caminhos de busca:
+`scripts/rag_eval_multiquery.py` mede hit-rate@k sobre um conjunto curado de perguntas clínicas (`llm/eval/rag_questions.jsonl`) e compara quatro caminhos de busca:
 
 | Caminho | Descrição |
 |---------|-----------|
@@ -296,7 +296,19 @@ eval-rag                                      # avaliação completa, saída res
 eval-rag --docs                               # + tabela de chunks do caminho padrão (1q+Nq via RRF)
 eval-rag --docs-single --docs --docs-combined # todos os caminhos visíveis
 eval-rag --k 10 --docs 10                     # top-10
+eval-rag --with-history                        # usa o dataset de perguntas de acompanhamento
 ```
+
+#### Datasets de avaliação
+
+Dois datasets curados, ambos apontando para os mesmos 20 PCDTs (comparação direta):
+
+| Dataset | Arquivo | Flag | Descrição |
+|---------|---------|------|-----------|
+| **Sem histórico** (padrão) | `llm/eval/rag_questions.jsonl` | — | Perguntas autossuficientes que nomeiam a condição |
+| **Com histórico** | `llm/eval/rag_questions_history.jsonl` | `--with-history` | Perguntas de acompanhamento que **omitem** a condição (só recuperável via `chat_history`), testando a resolução de follow-up pelo planner |
+
+No dataset com histórico, o caminho **1q** (busca direta na pergunta) tende a falhar — a pergunta sozinha é ambígua —, evidenciando o ganho dos caminhos que passam o histórico ao planner (Nq / RRF / 1q+Nq).
 
 Alternativa sem instalar (backend como ambiente de execução):
 
@@ -313,9 +325,10 @@ Opções principais:
 | `--docs-single [N]` | — | Tabela de chunks do caminho 1q |
 | `--docs-nq [N]` | — | Tabela de chunks do caminho Nq (union) |
 | `--docs-combined [N]` | — | Tabela de chunks do caminho 1q+Nq |
-| `--eval-file PATH` | `llm/data/eval/rag_questions.jsonl` | JSONL de perguntas curadas |
+| `--with-history` | off | Usa `rag_questions_history.jsonl` (perguntas de acompanhamento) |
+| `--eval-file PATH` | dataset sem histórico | JSONL de perguntas curadas (sobrescreve `--with-history`) |
 | `--env-file PATH` | `backend/.env` | `.env` com credenciais/modelo |
-| `--runs-dir PATH` | `llm/data/eval/runs/` | Diretório de persistência dos runs |
+| `--runs-dir PATH` | `llm/eval/runs/` | Diretório de persistência dos runs |
 
 A saída no terminal usa Rich com hierarquia visual: CoT do planner em painel dim, queries em magenta, badge verde/vermelho por caminho e tabelas com stem/seção/score/campeão (query que levou ao doc no topo da sua busca individual).
 

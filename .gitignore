@@ -77,6 +77,9 @@ mlruns/
 # processed/, chunks/: extração e fragmentação (pipeline-rag); sft/samples/: amostras SFT.
 llm/data/
 
+# Runs do eval-rag gerados localmente (JSONLs por execução); datasets são versionados.
+llm/eval/runs/
+
 # Vector store local (Chroma na raiz do repo; não versionar artefactos pesados).
 vectorstore/
 

@@ -15,7 +15,9 @@ Como rodar (da raiz do repo, com o venv do backend ativo):
 
     Opções:
       --k 10                    top-k avaliado (default: rag_retrieve_final_k do .env)
-      --eval-file path/to.jsonl JSONL alternativo de perguntas
+      --with-history            usa o dataset com histórico de conversa (perguntas de
+                                acompanhamento que dependem do contexto anterior)
+      --eval-file path/to.jsonl JSONL alternativo de perguntas (sobrescreve --with-history)
       --env-file path/to/.env   .env alternativo (default: backend/.env)
       --docs [N]                exibe top N chunks do caminho RRF (default N=6)
       --docs-single [N]         exibe top N chunks do caminho 1-query (default N=6)
@@ -64,8 +66,9 @@ from pcdt_ingest.embed import (  # noqa: E402
 )
 from pcdt_ingest.paths import vectorstore_chroma_dir  # noqa: E402
 
-DEFAULT_EVAL_FILE = REPO_ROOT / "llm" / "data" / "eval" / "rag_questions.jsonl"
-DEFAULT_RUNS_DIR = REPO_ROOT / "llm" / "data" / "eval" / "runs"
+DEFAULT_EVAL_FILE = REPO_ROOT / "llm" / "eval" / "rag_questions.jsonl"
+DEFAULT_EVAL_FILE_HISTORY = REPO_ROOT / "llm" / "eval" / "rag_questions_history.jsonl"
+DEFAULT_RUNS_DIR = REPO_ROOT / "llm" / "eval" / "runs"
 
 console = Console(highlight=False)
 
@@ -154,30 +157,36 @@ def single_query_docs(store, question: str, k: int) -> tuple[list[Document], lis
 
 
 async def multi_query_docs(
-    store, settings: Settings, question: str, k: int
+    store, settings: Settings, question: str, k: int,
+    chat_history: list[dict] | None = None,
 ) -> tuple[
     list[Document],      # rrf_docs
     list[str],           # queries
     str,                 # llm_reasoning
     str,                 # raw_llm
     str | None,          # plan_error
+    str | None,          # llm_parse_error
     list[tuple[Document, float]],  # rrf_scored
     list[Document],      # nq_union_docs
     list[Document],      # combined_docs (1q+Nq)
     list[tuple[Document, float]],  # combined_scored
     list[str],           # combined_queries
 ]:
-    """Retorna rrf_docs, queries, reasoning, raw_llm, error, rrf_scored, nq_union_docs, combined_docs, combined_scored, combined_queries.
+    """Retorna rrf_docs, queries, reasoning, raw_llm, plan_error, llm_parse_error, rrf_scored, nq_union_docs, combined_docs, combined_scored, combined_queries.
 
     rrf_docs / rrf_scored — resultado da fusão RRF (caminho RRF).
     nq_union_docs         — union de todos os resultados individuais das N queries (caminho Nq).
     """
-    plan = await plan_queries_node({"query": question, "reasoning_steps": []}, settings)
+    plan_state: dict = {"query": question, "reasoning_steps": []}
+    if chat_history:
+        plan_state["chat_history"] = chat_history
+    plan = await plan_queries_node(plan_state, settings)
     debug = plan.get("multi_query_debug") or {}
     queries = plan.get("search_queries") or [question]
     llm_reasoning = debug.get("reasoning") or ""
     raw_llm = debug.get("raw") or ""
     plan_error = debug.get("error")
+    llm_parse_error = debug.get("parse_error")
 
     # Coleta resultados por-query para o caminho Nq (union, top-k cada).
     # Mantém a melhor dist_score de qualquer query para cada doc.
@@ -207,7 +216,7 @@ async def multi_query_docs(
     combined_docs: list[Document] = out_combined.get("retrieved_docs") or []
     combined_scored = [(doc, float((doc.metadata or {}).get("rrf_score", 0.0))) for doc in combined_docs]
 
-    return fused, queries, llm_reasoning, raw_llm, plan_error, rrf_scored, nq_union_docs, combined_docs, combined_scored, combined_queries
+    return fused, queries, llm_reasoning, raw_llm, plan_error, llm_parse_error, rrf_scored, nq_union_docs, combined_docs, combined_scored, combined_queries
 
 
 def _write_run_jsonl(path: Path, records: list[dict]) -> None:
@@ -346,7 +355,16 @@ async def run(args: argparse.Namespace) -> int:
     show_nq: int | None = args.docs_nq
     show_combined: int | None = args.docs_combined
     store = load_store()
-    cases = load_cases(Path(args.eval_file))
+
+    # Seleção do dataset: --eval-file (explícito) > --with-history > padrão sem histórico.
+    if args.eval_file is not None:
+        eval_file = Path(args.eval_file)
+    elif args.with_history:
+        eval_file = DEFAULT_EVAL_FILE_HISTORY
+    else:
+        eval_file = DEFAULT_EVAL_FILE
+    console.print(f"[dim]Dataset:[/dim] {eval_file.name}")
+    cases = load_cases(eval_file)
 
     run_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     runs_dir = Path(args.runs_dir)
@@ -356,6 +374,7 @@ async def run(args: argparse.Namespace) -> int:
     nq_hits = 0
     rrf_hits = 0
     combined_hits = 0
+    parse_errors = 0  # LLM respondeu mas o JSON não pôde ser parseado.
     records: list[dict] = []
 
     console.print()
@@ -365,6 +384,7 @@ async def run(args: argparse.Namespace) -> int:
     for idx, case in enumerate(cases, start=1):
         question = case["question"]
         expected = case.get("expected_source_stem", "")
+        chat_history = case.get("chat_history") or None
 
         t0 = time.perf_counter()
         s_docs, s_scored = single_query_docs(store, question, k)
@@ -372,10 +392,10 @@ async def run(args: argparse.Namespace) -> int:
 
         t1 = time.perf_counter()
         (
-            rrf_docs, queries, llm_reasoning, raw_llm, plan_error,
+            rrf_docs, queries, llm_reasoning, raw_llm, plan_error, llm_parse_error,
             rrf_scored, nq_union_docs,
             combined_docs, combined_scored, combined_queries,
-        ) = await multi_query_docs(store, settings, question, k)
+        ) = await multi_query_docs(store, settings, question, k, chat_history)
         multi_ms = round((time.perf_counter() - t1) * 1000, 1)
 
         s_hit = _hit(s_docs, expected)
@@ -392,6 +412,16 @@ async def run(args: argparse.Namespace) -> int:
         header.append(f"{idx:>2}. ", style="bold dim")
         header.append(question, style="bold white")
         console.print(header)
+
+        # ── histórico da conversa (quando presente no dataset) ──
+        if chat_history:
+            for turn in chat_history:
+                role = turn.get("role", "?")
+                speaker = "Médico" if role == "user" else "Assistente"
+                hist_line = Text("    ")
+                hist_line.append(f"{speaker}: ", style="dim cyan")
+                hist_line.append((turn.get("content") or "").strip(), style="dim")
+                console.print(hist_line)
 
         # ── expected / hit badges ──
         meta_line = Text("    ")
@@ -410,6 +440,9 @@ async def run(args: argparse.Namespace) -> int:
         console.print(meta_line)
 
         # ── CoT / raw fallback ──
+        parse_error = bool(raw_llm) and not llm_reasoning and not plan_error
+        if parse_error:
+            parse_errors += 1
         if llm_reasoning:
             console.print(_reasoning_panel(llm_reasoning), style="dim")
         elif raw_llm:
@@ -417,6 +450,8 @@ async def run(args: argparse.Namespace) -> int:
             raw_line = raw_llm.replace("\n", " ")
             truncated = raw_line[:available - 1] + "…" if len(raw_line) > available else raw_line
             console.print(f"  [red]{truncated}[/red]")
+            if llm_parse_error:
+                console.print(f"  [bold red]parse:[/bold red] [red]{llm_parse_error}[/red]")
 
         # ── generated queries ──
         console.print(_queries_text(queries))
@@ -478,6 +513,7 @@ async def run(args: argparse.Namespace) -> int:
             "run_ts": run_ts,
             "idx": idx,
             "question": question,
+            "chat_history": chat_history or [],
             "expected_source_stem": expected,
             "single_query_hit": s_hit,
             "nq_hit": nq_hit,
@@ -486,6 +522,8 @@ async def run(args: argparse.Namespace) -> int:
             "llm_reasoning": llm_reasoning,
             "raw_llm": raw_llm,
             "plan_error": plan_error,
+            "llm_parse_error": llm_parse_error,
+            "parse_error": parse_error,
             "single_query_stems": _stems(s_docs),
             "nq_stems": _stems(nq_union_docs),
             "rrf_stems": _stems(rrf_docs),
@@ -545,6 +583,13 @@ async def run(args: argparse.Namespace) -> int:
     summary.add_row("delta Nq − 1q", "", "", f"[{nq_style}]{delta_nq:+.0%}[/{nq_style}]")
     summary.add_row("delta RRF − 1q", "", "", f"[{rrf_style}]{delta_rrf:+.0%}[/{rrf_style}]")
     summary.add_row("delta 1q+Nq − 1q", "", "", f"[{combined_style}]{delta_combined:+.0%}[/{combined_style}]")
+    parse_err_style = "bold red" if parse_errors else "dim"
+    summary.add_row(
+        "erros de parse",
+        "",
+        f"[{parse_err_style}]{parse_errors}/{len(cases)}[/{parse_err_style}]",
+        f"[{parse_err_style}]{parse_errors / n:.0%}[/{parse_err_style}]",
+    )
     console.print(summary)
     console.print(f"[dim]Run salvo em:[/dim] {run_file}")
 
@@ -553,7 +598,14 @@ async def run(args: argparse.Namespace) -> int:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--eval-file", default=str(DEFAULT_EVAL_FILE), help="JSONL de perguntas curadas.")
+    p.add_argument(
+        "--eval-file", default=None,
+        help="JSONL de perguntas curadas (sobrescreve --with-history; default: dataset sem histórico).",
+    )
+    p.add_argument(
+        "--with-history", action="store_true",
+        help=f"Usa o dataset com histórico de conversa ({DEFAULT_EVAL_FILE_HISTORY.name}) em vez do padrão.",
+    )
     p.add_argument("--k", type=int, default=None, help="Top-k avaliado (default: rag_retrieve_final_k).")
     p.add_argument("--env-file", default=str(DEFAULT_ENV_FILE),
                    help=f"Arquivo .env a carregar (default: {DEFAULT_ENV_FILE}).")

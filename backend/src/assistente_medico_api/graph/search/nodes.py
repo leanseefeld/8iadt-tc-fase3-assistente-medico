@@ -76,42 +76,55 @@ def _history_transcript(state: ChatRAGState) -> str:
     return "\n".join(lines)
 
 
-def _parse_queries(raw: str, *, max_n: int, fallback: str) -> list[str]:
-    """Extrai a lista de consultas do JSON do LLM; em falha, usa a pergunta literal."""
+def _try_parse_json(raw: str) -> tuple[dict | None, str | None]:
+    """Tenta extrair e parsear o primeiro objeto JSON da string.
+
+    Retorna (data, None) em sucesso ou (None, mensagem_de_erro) em falha.
+    """
     text = (raw or "").strip()
     start = text.find("{")
     end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            data = json.loads(text[start : end + 1])
-            raw_queries = data.get("queries") if isinstance(data, dict) else None
-            queries: list[str] = []
-            seen: set[str] = set()
-            for item in raw_queries or []:
-                q = str(item).strip()
-                key = q.lower()
-                if q and key not in seen:
-                    seen.add(key)
-                    queries.append(q)
-            if queries:
-                return queries[:max_n]
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            pass
-    return [fallback] if fallback else []
+    if start == -1 or end == -1 or end <= start:
+        return None, "saída sem bloco JSON"
+    try:
+        data = json.loads(text[start : end + 1])
+        if not isinstance(data, dict):
+            return None, f"JSON parseado mas não é objeto (type={type(data).__name__})"
+        return data, None
+    except json.JSONDecodeError as exc:
+        return None, f"JSONDecodeError: {exc.msg} (pos {exc.pos})"
+
+
+def _parse_queries(raw: str, *, max_n: int, fallback: str) -> tuple[list[str], str | None]:
+    """Extrai a lista de consultas do JSON do LLM; em falha, usa a pergunta literal.
+
+    Retorna (queries, parse_error) onde parse_error é None em sucesso.
+    """
+    data, err = _try_parse_json(raw)
+    if err is not None:
+        return ([fallback] if fallback else []), err
+    raw_queries = data.get("queries")  # type: ignore[union-attr]
+    if not raw_queries:
+        return ([fallback] if fallback else []), "campo 'queries' ausente ou vazio"
+    queries: list[str] = []
+    seen: set[str] = set()
+    for item in raw_queries:
+        q = str(item).strip()
+        key = q.lower()
+        if q and key not in seen:
+            seen.add(key)
+            queries.append(q)
+    if not queries:
+        return ([fallback] if fallback else []), "lista de queries vazia após dedup"
+    return queries[:max_n], None
 
 
 def _extract_reasoning(raw: str) -> str:
     """Extrai o campo 'reasoning' do JSON do LLM; retorna '' se ausente ou inválido."""
-    text = (raw or "").strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            data = json.loads(text[start : end + 1])
-            return str(data.get("reasoning") or "") if isinstance(data, dict) else ""
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            pass
-    return ""
+    data, _ = _try_parse_json(raw)
+    if data is None:
+        return ""
+    return str(data.get("reasoning") or "")
 
 
 async def plan_queries_node(state: ChatRAGState, settings: Settings) -> dict:
@@ -132,6 +145,7 @@ async def plan_queries_node(state: ChatRAGState, settings: Settings) -> dict:
         if transcript else query
     )
     error: str | None = None
+    parse_error: str | None = None
     try:
         llm = build_llm(
             settings,
@@ -149,7 +163,7 @@ async def plan_queries_node(state: ChatRAGState, settings: Settings) -> dict:
         if isinstance(raw, list):
             raw = "".join(str(part) for part in raw)
         raw_str = str(raw)
-        queries = _parse_queries(raw_str, max_n=max_n, fallback=query)
+        queries, parse_error = _parse_queries(raw_str, max_n=max_n, fallback=query)
         llm_reasoning = _extract_reasoning(raw_str)
         # Garante que a pergunta original entra na fusão RRF (1q + N queries CoT).
         q_lower = query.lower()
@@ -181,7 +195,7 @@ async def plan_queries_node(state: ChatRAGState, settings: Settings) -> dict:
 
     return {
         "search_queries": queries,
-        "multi_query_debug": {"queries": queries, "reasoning": llm_reasoning, "raw": raw_str, "error": error},
+        "multi_query_debug": {"queries": queries, "reasoning": llm_reasoning, "raw": raw_str, "error": error, "parse_error": parse_error},
         "reasoning_steps": steps,
         "aux_llm_trace": trace,
     }
